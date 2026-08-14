@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "orders": [
+    {
+      "order_directory": "Orders/2026_07_19_Tarnwick_Laser_components",
+      "order": {
+        "schema_version": 1,
+        "package_root": "../..",
+        "order_id": "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
+        "title": "Laser components",
+        "date_ordered": "2026-07-19",
+        "status": "ordered",
+        "vendor_id": "e0990d31-06aa-42e9-97c8-088e3e894822",
+        "orderer": "Ada Lovelace",
+        "ordering_institution": "Northwind",
+        "currency": "USD",
+        "project": "Telescope",
+        "order_group": "Summer build",
+        "items": [
+          {
+            "description": "Mirror mount",
+            "quantity": 2.0,
+            "unit_price": 84.5,
+            "catalog_number": "TM-100"
+          }
+        ]
+      },
+      "readme": "User-authored Markdown text"
+    }
+  ],
+  "vendors": [
+    {
+      "vendor_id": "e0990d31-06aa-42e9-97c8-088e3e894822",
+      "name": "Tarnwick",
+      "phone": "+1 555 0123",
+      "email": "sales@example.com",
+      "website": "https://example.com",
+      "address": "100 Example Avenue\nAnytown, ST 00000",
+      "contacts": [
+        {
+          "name": "Grace Hopper",
+          "role": "Sales",
+          "phone": "+1 555 0100",
+          "email": "grace@example.com"
+        }
+      ],
+      "purchasing_notes": "Use institutional account."
+    }
+  ]
+}
+

@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://spielorders.app/schemas/v1/vendors.schema.json",
+  "title": "SpielOrders vendors.json schema version 1",
+  "$defs": {
+    "uuid_v4": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "nonblank": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "contact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "role": {
+          "type": "string"
+        },
+        "phone": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        }
+      }
+    },
+    "vendor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vendor_id", "name", "contacts"],
+      "properties": {
+        "vendor_id": {
+          "$ref": "#/$defs/uuid_v4"
+        },
+        "name": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "phone": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "website": {
+          "type": "string"
+        },
+        "address": {
+          "type": "string"
+        },
+        "contacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/contact"
+          }
+        },
+        "purchasing_notes": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "vendors"],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "vendors": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/vendor"
+      }
+    }
+  }
+}
+

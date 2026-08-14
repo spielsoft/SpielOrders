@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://spielorders.app/schemas/v1/version.schema.json",
+  "title": "SpielOrders version.json metadata version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["metadata_version"],
+  "properties": {
+    "metadata_version": {
+      "const": 1
+    }
+  }
+}
+

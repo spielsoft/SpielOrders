@@ -1,0 +1,21 @@
+[
+  {"name":"version missing metadata version","artifact":"version","file":"version-missing-metadata-version.json","keyword":"required"},
+  {"name":"version unknown field","artifact":"version","file":"version-unknown-field.json","keyword":"additionalProperties"},
+  {"name":"order wrong schema version","artifact":"order","file":"order-wrong-schema-version.json","keyword":"const"},
+  {"name":"order unknown field","artifact":"order","file":"order-unknown-field.json","keyword":"additionalProperties"},
+  {"name":"order wrong title type","artifact":"order","file":"order-wrong-title-type.json","keyword":"type"},
+  {"name":"order invalid status","artifact":"order","file":"order-invalid-status.json","keyword":"enum"},
+  {"name":"order malformed identity","artifact":"order","file":"order-malformed-identity.json","keyword":"pattern"},
+  {"name":"order missing items","artifact":"order","file":"order-missing-items.json","keyword":"required"},
+  {"name":"order package root has only one parent segment","artifact":"order","file":"order-package-root-one-parent.json","keyword":"pattern"},
+  {"name":"order invalid nested item","artifact":"order","file":"order-invalid-item.json","keyword":"required"},
+  {"name":"order invalid currency","artifact":"order","file":"order-invalid-currency.json","keyword":"pattern"},
+  {"name":"vendors wrong collection type","artifact":"vendors","file":"vendors-wrong-collection-type.json","keyword":"type"},
+  {"name":"vendor missing contacts","artifact":"vendors","file":"vendor-missing-contacts.json","keyword":"required"},
+  {"name":"vendor invalid nested contact","artifact":"vendors","file":"vendor-invalid-contact.json","keyword":"required"},
+  {"name":"index missing embedded package root","artifact":"index","file":"index-missing-package-root.json","keyword":"required"},
+  {"name":"index package root has only one parent segment","artifact":"index","file":"index-package-root-one-parent.json","keyword":"pattern"},
+  {"name":"index Windows absolute order directory","artifact":"index","file":"index-windows-absolute-order-directory.json","keyword":"pattern"},
+  {"name":"index Windows drive-relative order directory","artifact":"index","file":"index-windows-drive-relative-order-directory.json","keyword":"pattern"},
+  {"name":"index missing vendors collection","artifact":"index","file":"index-missing-vendors.json","keyword":"required"}
+]

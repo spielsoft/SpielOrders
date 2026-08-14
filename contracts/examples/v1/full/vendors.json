@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "vendors": [
+    {
+      "vendor_id": "e0990d31-06aa-42e9-97c8-088e3e894822",
+      "name": "Tarnwick",
+      "phone": "+1 555 0123",
+      "email": "sales@example.com",
+      "website": "https://example.com",
+      "address": "100 Example Avenue\nAnytown, ST 00000",
+      "contacts": [
+        {
+          "name": "Grace Hopper",
+          "role": "Sales",
+          "phone": "+1 555 0100",
+          "email": "grace@example.com"
+        }
+      ],
+      "purchasing_notes": "Use institutional account."
+    }
+  ]
+}
+

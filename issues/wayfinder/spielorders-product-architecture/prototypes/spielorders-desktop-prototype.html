@@ -1,0 +1,1611 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src 'unsafe-inline' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Spielorders Spreadsheet Items</title>
+<style>:root{color-scheme:light dark;background:light-dark(rgb(255 255 255), rgb(24 24 24))}html,body{margin:0}body{box-sizing:border-box;padding:1rem;background:inherit}iframe{display:block;width:100%;max-width:736px;height:calc(100vh - 2rem);margin:0 auto;border:0}</style>
+</head>
+<body>
+<iframe sandbox="allow-scripts" referrerpolicy="no-referrer" title="Spielorders Spreadsheet Items" srcdoc="&lt;!doctype html&gt;
+&lt;html lang=&quot;en&quot;&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot;&gt;
+&lt;meta name=&quot;referrer&quot; content=&quot;no-referrer&quot;&gt;
+&lt;meta http-equiv=&quot;Content-Security-Policy&quot; content=&quot;default-src &#x27;none&#x27;; script-src &#x27;unsafe-inline&#x27; &#x27;unsafe-eval&#x27; &#x27;wasm-unsafe-eval&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src &#x27;unsafe-inline&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src &#x27;none&#x27;; object-src &#x27;none&#x27;; base-uri &#x27;none&#x27;; form-action &#x27;none&#x27;&quot;&gt;
+&lt;title&gt;Spielorders Spreadsheet Items&lt;/title&gt;
+&lt;style&gt;:root {
+  color-scheme: light dark;
+  background-color: var(--background) !important;
+
+  /* Agent-facing contract; keep in sync with SKILL.md. */
+  --background: light-dark(rgb(255 255 255), rgb(24 24 24));
+  --foreground: light-dark(rgb(26 28 31), rgb(255 255 255));
+  --card: color-mix(in oklab, var(--foreground) 5%, transparent);
+  --card-foreground: var(--foreground);
+  --popover: light-dark(rgb(255 255 255), rgb(45 45 45));
+  --popover-foreground: var(--foreground);
+  --primary: light-dark(rgb(51 156 255), rgb(131 195 255));
+  --primary-foreground: light-dark(rgb(255 255 255), rgb(13 13 13));
+  --secondary: light-dark(rgb(255 255 255 / 96%), rgb(54 54 54 / 96%));
+  --secondary-foreground: var(--foreground);
+  --muted: color-mix(in srgb, var(--foreground) 10%, transparent);
+  --muted-foreground: light-dark(
+    rgb(26 28 31 / 49.4%),
+    rgb(255 255 255 / 49.8%)
+  );
+  --accent: light-dark(rgb(229 242 255), rgb(13 39 63));
+  --accent-foreground: var(--primary);
+  --destructive: light-dark(rgb(226 85 7), rgb(255 133 73));
+  --border: light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%));
+  --input: light-dark(
+    rgb(26 28 31 / 11.8%),
+    color-mix(in oklab, rgb(0 0 0) 10%, transparent)
+  );
+  --ring: light-dark(rgb(51 156 255), rgb(131 195 255 / 76%));
+  --font-size-base: 14px;
+  --viz-series-1: var(--primary);
+  --viz-series-2: light-dark(rgb(243 136 59), rgb(245 154 86));
+  --viz-series-3: light-dark(rgb(93 201 119), rgb(116 213 139));
+  --viz-series-4: light-dark(rgb(235 119 177), rgb(240 143 192));
+  --viz-series-5: light-dark(rgb(155 121 236), rgb(170 145 239));
+  --viz-series-6: light-dark(rgb(58 185 177), rgb(90 203 194));
+
+  /* Internal implementation variables; not part of the agent contract. */
+  --font-sans: -apple-system, system-ui, &quot;Segoe UI&quot;, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, &quot;SF Mono&quot;, Menlo, Consolas, &quot;Liberation Mono&quot;,
+    monospace;
+  --font-size-normal: max(11px, var(--font-size-base));
+  --font-size-tooltip: calc(var(--font-size-base) - 1px);
+  --font-size-small: max(11px, calc(var(--font-size-base) - 2px));
+  --font-size-h1: calc(var(--font-size-normal) * 1.7142857143);
+  --font-size-h2: calc(var(--font-size-normal) * 1.4285714286);
+  --font-size-h3: calc(var(--font-size-normal) * 1.2857142857);
+  --font-weight-normal: 430;
+  --font-weight-medium: 500;
+  --line-height-normal: calc(var(--font-size-normal) * 1.5);
+  --line-height-tooltip: calc(var(--font-size-tooltip) * 1.4285714286);
+  --line-height-small: calc(var(--font-size-small) + 4px);
+  --radius: 12.5px;
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-2xl: calc(var(--radius) * 1.6);
+  --radius-full: 9999px;
+  --shadow-sm: 0 1px 2px -1px rgb(0 0 0 / 8%);
+  --checkmark-image: url(&quot;data:image/svg+xml,%3Csvg xmlns=&#x27;http://www.w3.org/2000/svg&#x27; viewBox=&#x27;0 0 17 17&#x27;%3E%3Cpath d=&#x27;M12.8961 3.64101C13.1297 3.41418 13.4984 3.37523 13.7779 3.56581C14.0571 3.75635 14.1554 4.11331 14.0299 4.41347L13.9615 4.53847L7.71151 13.7045C7.59411 13.8767 7.4063 13.9877 7.19881 14.0072C6.99136 14.0267 6.78564 13.9533 6.63826 13.806L2.88826 10.056L2.79842 9.9457C2.6192 9.67407 2.64927 9.30496 2.88826 9.06581C3.12738 8.82669 3.49647 8.79676 3.76815 8.97597L3.8785 9.06581L7.03084 12.2182L12.8053 3.74941L12.8961 3.64101Z&#x27;/%3E%3C/svg%3E&quot;);
+
+  /* Legacy aliases; not part of the current agent contract. */
+  --viz-bg: transparent;
+  --viz-panel: var(--card);
+  --viz-border: var(--border);
+  --viz-text: var(--foreground);
+  --viz-muted: var(--muted-foreground);
+  --viz-accent: var(--primary);
+  --viz-accent-text: var(--primary-foreground);
+  --viz-accent-bg: var(--accent);
+  --viz-font-size: var(--font-size-base);
+  --viz-warning: var(--destructive);
+  --color-background-primary: var(--background);
+  --color-text-primary: var(--foreground);
+  --color-border-secondary: var(--border);
+}
+
+:root[data-theme=&quot;light&quot;] {
+  color-scheme: light;
+}
+
+:root[data-theme=&quot;dark&quot;] {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html &gt; body {
+  margin: 0;
+  padding: 5px;
+  color: var(--foreground);
+  background: transparent !important;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-normal);
+  font-weight: var(--font-weight-normal);
+  line-height: var(--line-height-normal);
+}
+
+a {
+  color: color-mix(in srgb, var(--viz-accent) 80%, var(--viz-text) 20%);
+  cursor: pointer;
+  font-weight: var(--viz-font-weight-medium);
+  text-decoration: none;
+  text-underline-offset: 2px;
+}
+
+a:is(:hover, :focus-visible) {
+  text-decoration-line: underline;
+  text-decoration-style: dashed;
+  text-decoration-thickness: 0.5px;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p {
+  margin-block: 0;
+}
+
+h1 {
+  font-size: var(--font-size-h1);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h2 {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h3,
+h4,
+h5,
+h6 {
+  font-size: var(--font-size-h3);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.3;
+}
+
+b,
+strong,
+th {
+  font-weight: var(--font-weight-medium);
+}
+
+code:not(pre code) {
+  display: inline;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  corner-shape: superellipse(1.5);
+  background: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  word-break: break-word;
+}
+
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--foreground);
+  font: inherit;
+  text-align: start;
+}
+
+.table :is(th, td) {
+  padding-block: 10px;
+  padding-inline: 0 24px;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--border);
+  text-align: start;
+  vertical-align: top;
+}
+
+.table-responsive &gt; .table :is(th, td) {
+  overflow-wrap: break-word;
+}
+
+.table :is(th, td):last-child {
+  padding-inline-end: 0;
+}
+
+.table :is(caption, thead th) {
+  font-weight: 600;
+}
+
+.table thead th {
+  padding-block: 8px;
+  border-bottom-color: color-mix(in srgb, var(--foreground) 16%, transparent);
+}
+
+.table tbody tr:last-child :is(th, td) {
+  border-bottom: 0;
+}
+
+.table.table-sm :is(th, td) {
+  padding-block: 6px;
+}
+
+.table.table-sm :is(th, td):not(:last-child) {
+  padding-inline-end: 16px;
+}
+
+.table :is(.text-end, [align=&quot;right&quot;]) {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.table :is(.text-center, [align=&quot;center&quot;]) {
+  text-align: center;
+}
+
+.table .text-nowrap {
+  white-space: nowrap;
+}
+
+#widget {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  padding: 0;
+  background: transparent !important;
+}
+
+.card {
+  min-width: 0;
+  padding: 12px;
+  overflow: hidden;
+  overflow-wrap: break-word;
+  border-radius: var(--radius-2xl);
+  corner-shape: superellipse(1.5);
+  color: var(--card-foreground);
+  background: var(--card);
+}
+
+#widget &gt; :not(.card) {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.tooltip {
+  position: fixed;
+  z-index: 50;
+  top: 0;
+  left: 0;
+  width: max-content;
+  max-width: min(
+    20rem,
+    var(--tooltip-available-width, calc(100vw - 10px)),
+    calc(100vw - 10px)
+  );
+  max-height: min(
+    var(--tooltip-available-height, calc(100vh - 10px)),
+    calc(100vh - 10px)
+  );
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--popover-foreground);
+  background: var(--popover);
+  box-shadow: none;
+  font-size: var(--font-size-tooltip);
+  line-height: var(--line-height-tooltip);
+  overflow-wrap: break-word;
+  white-space: normal;
+  pointer-events: none;
+  user-select: none;
+}
+
+.viz-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(max(180px, 24%), 1fr));
+  gap: 10px;
+}
+
+.viz-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.viz-stat-value {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+.viz-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.viz-badge {
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  color: var(--accent-foreground);
+  background: var(--accent);
+  font-weight: var(--font-weight-medium);
+}
+
+small,
+.text-small,
+.viz-badge {
+  font-size: var(--font-size-small);
+  line-height: var(--line-height-small);
+}
+
+.text-muted {
+  color: var(--muted-foreground);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.viz-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.viz-controls &gt; .form-label {
+  display: grid;
+  min-width: min(100%, 260px);
+  flex: 1 1 280px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 2px 12px;
+  margin-bottom: 0;
+}
+
+.viz-controls &gt; .form-label &gt; :is(.form-control, .form-range, .form-select) {
+  grid-column: 1 / -1;
+}
+
+.btn,
+.form-check-input,
+.form-control,
+.form-range,
+.form-select {
+  font: inherit;
+}
+
+.btn {
+  appearance: button;
+  display: inline-flex;
+  inline-size: fit-content;
+  max-inline-size: 100%;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0 8px;
+  -webkit-app-region: no-drag;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: var(--cursor-interaction, pointer);
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.btn:is(.btn-block, .viz-tile) {
+  inline-size: 100%;
+}
+
+.btn.viz-tile {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+a.btn {
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.btn-primary {
+  border-color: transparent;
+  color: var(--primary-foreground);
+  background: var(--foreground);
+  background-clip: padding-box;
+}
+
+.btn-primary .text-muted {
+  color: color-mix(in srgb, var(--primary-foreground) 50%, transparent);
+}
+
+.btn-primary:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 80%, transparent);
+  background-clip: padding-box;
+}
+
+.btn-ghost {
+  border-color: transparent;
+  color: var(--muted-foreground);
+  background: transparent;
+}
+
+.btn-ghost:not(:disabled):hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+[data-lucide] {
+  stroke-width: 1.6;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--foreground);
+}
+
+.form-control {
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--foreground);
+  background: var(--secondary);
+}
+
+.form-control::placeholder {
+  color: var(--muted-foreground);
+}
+
+.form-control[type=&quot;file&quot;] {
+  padding: 0;
+  overflow: hidden;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control[type=&quot;file&quot;]::file-selector-button {
+  min-height: 26px;
+  margin-right: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-right: 1px solid var(--input);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: inherit;
+  font: inherit;
+}
+
+.form-control[type=&quot;file&quot;]:not(:disabled):hover::file-selector-button {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-control-color[type=&quot;color&quot;] {
+  width: 40px;
+  height: 28px;
+  padding: 3px;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch {
+  border: 0;
+  border-radius: calc(var(--radius-lg) - 4px);
+  corner-shape: superellipse(1.5);
+}
+
+textarea.form-control {
+  height: auto;
+  min-height: 72px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+.form-control:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-control:disabled,
+.form-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.form-select {
+  appearance: none;
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  margin: 0;
+  padding: 0 32px 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--foreground);
+  background-color: var(--secondary);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted-foreground) 50%),
+    linear-gradient(135deg, var(--muted-foreground) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) 50%,
+    calc(100% - 10px) 50%;
+  background-repeat: no-repeat;
+  background-size: 4px 4px;
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-select:not(:disabled):hover {
+  background-color: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-select:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-check {
+  display: flex;
+  min-height: 20px;
+  align-items: center;
+  gap: 6px;
+}
+
+.form-check-input {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin: 0;
+  border: 1px solid var(--input);
+  color: var(--primary-foreground);
+  background-color: transparent;
+  cursor: var(--cursor-interaction, default);
+  transition:
+    background-color 150ms,
+    border-color 150ms,
+    box-shadow 150ms;
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;] {
+  border-color: var(--input);
+  border-radius: var(--radius-sm);
+  corner-shape: superellipse(1.5);
+  background-color: var(--secondary);
+  box-shadow: var(--shadow-sm);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input:not(:disabled):not(:checked):hover {
+  background-color: var(--card);
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;]:checked {
+  border-color: var(--primary);
+  background-color: var(--primary);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input[type=&quot;checkbox&quot;]:checked::before {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--primary-foreground);
+  content: &quot;&quot;;
+  mask: var(--checkmark-image) center / 12px 12px no-repeat;
+}
+
+.form-check-input[type=&quot;radio&quot;] {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+}
+
+.form-check-input[type=&quot;radio&quot;]:checked {
+  border: 2px solid var(--primary);
+  background:
+    radial-gradient(circle, var(--primary-foreground) 0 2.5px, transparent 3px),
+    var(--primary);
+}
+
+.form-check:not(.form-switch) .form-check-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled {
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+}
+
+.form-switch .form-check-input:disabled,
+.form-switch .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.form-check-label {
+  color: var(--foreground);
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-switch .form-check-input {
+  position: relative;
+  width: 32px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+  box-shadow: none;
+  transition: background-color 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 1px solid light-dark(var(--primary-foreground), var(--foreground));
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+  box-shadow: var(--shadow-sm);
+  content: &quot;&quot;;
+  transform: translate(2px, -50%);
+  transition: transform 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input:checked {
+  background: var(--primary);
+}
+
+.form-switch .form-check-input:checked::before {
+  transform: translate(14px, -50%);
+}
+
+.form-switch .form-check-input:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.form-range {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 28px;
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  outline: none;
+  border: 0;
+  accent-color: var(--primary);
+  background: linear-gradient(
+      color-mix(in srgb, var(--foreground) 7%, transparent),
+      color-mix(in srgb, var(--foreground) 7%, transparent)
+    )
+    center / 100% 2px no-repeat;
+}
+
+.form-range::-webkit-slider-runnable-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-webkit-slider-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range::-moz-range-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-moz-range-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.btn:not(.btn-primary, .viz-tile):is(
+    [aria-pressed=&quot;true&quot;],
+    [aria-selected=&quot;true&quot;],
+    .is-selected
+  ) {
+  border-color: var(--primary);
+  color: var(--primary-foreground);
+  background: var(--primary);
+}
+
+.btn.viz-tile:is([aria-pressed=&quot;true&quot;], [aria-selected=&quot;true&quot;], .is-selected) {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+#widget &gt; svg {
+  width: 100%;
+}
+
+.text-warning,
+.text-destructive {
+  color: var(--destructive);
+}
+
+html&gt;body{padding:0}&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;div id=&quot;spielorders-final&quot; aria-label=&quot;Interactive SpielOrders desktop prototype&quot;&gt;
+  &lt;style&gt;
+    #spielorders-final {
+      display: grid;
+      gap: 10px;
+      color: var(--foreground);
+    }
+    #spielorders-final .so-toolbar,
+    #spielorders-final .so-nav,
+    #spielorders-final .so-actions,
+    #spielorders-final .so-search,
+    #spielorders-final .so-editor-head,
+    #spielorders-final .so-inline-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    #spielorders-final .so-toolbar,
+    #spielorders-final .so-editor-head {
+      justify-content: space-between;
+    }
+    #spielorders-final .so-nav {
+      justify-content: flex-start;
+    }
+    #spielorders-final .so-screen,
+    #spielorders-final .so-editor,
+    #spielorders-final .so-diagnostic,
+    #spielorders-final .so-package-menu,
+    #spielorders-final .so-column-menu,
+    #spielorders-final .so-row-menu {
+      display: none;
+    }
+    #spielorders-final[data-screen=&quot;orders&quot;] .so-screen[data-screen=&quot;orders&quot;],
+    #spielorders-final[data-screen=&quot;vendors&quot;] .so-screen[data-screen=&quot;vendors&quot;],
+    #spielorders-final[data-screen=&quot;readme&quot;] .so-screen[data-screen=&quot;readme&quot;],
+    #spielorders-final[data-screen=&quot;editor&quot;] .so-editor,
+    #spielorders-final[data-screen=&quot;diagnostic&quot;] .so-diagnostic {
+      display: block;
+    }
+    #spielorders-final[data-screen=&quot;editor&quot;] .so-toolbar,
+    #spielorders-final[data-screen=&quot;diagnostic&quot;] .so-toolbar {
+      display: none;
+    }
+    #spielorders-final .so-shell {
+      display: grid;
+      grid-template-columns: minmax(430px, 2.15fr) minmax(300px, 1fr);
+      gap: 10px;
+      height: 620px;
+      align-items: stretch;
+    }
+    #spielorders-final[data-inspector=&quot;closed&quot;] .so-shell {
+      grid-template-columns: 1fr;
+    }
+    #spielorders-final[data-inspector=&quot;closed&quot;] .so-inspector {
+      display: none;
+    }
+    #spielorders-final .so-main {
+      display: flex;
+      min-width: 0;
+      min-height: 0;
+      flex-direction: column;
+    }
+    #spielorders-final .so-inspector {
+      min-width: 0;
+      overflow-y: auto;
+    }
+    #spielorders-final .so-search {
+      margin-bottom: 6px;
+    }
+    #spielorders-final .so-search label {
+      flex: 1 1 260px;
+      margin: 0;
+    }
+    #spielorders-final .so-search input {
+      width: 100%;
+    }
+    #spielorders-final .so-count {
+      margin: 0 0 6px;
+    }
+    #spielorders-final .so-table-region {
+      position: relative;
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: auto;
+    }
+    #spielorders-final .so-table-region thead {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: var(--background);
+    }
+    #spielorders-final tbody tr[data-selected=&quot;true&quot;] {
+      background: color-mix(in srgb, var(--accent) 76%, transparent);
+    }
+    #spielorders-final .so-row-title {
+      appearance: none;
+      border: 0;
+      padding: 0;
+      color: inherit;
+      background: transparent;
+      font: inherit;
+      font-weight: 500;
+      text-align: left;
+    }
+    #spielorders-final .so-error {
+      color: var(--destructive);
+      font-weight: 500;
+    }
+    #spielorders-final .so-meta {
+      display: grid;
+      grid-template-columns: minmax(0, .9fr) minmax(0, 1.4fr);
+      gap: 7px 10px;
+      margin: 12px 0;
+    }
+    #spielorders-final .so-meta dt,
+    #spielorders-final .so-meta dd {
+      margin: 0;
+      overflow-wrap: anywhere;
+    }
+    #spielorders-final .so-meta dt {
+      color: var(--muted-foreground);
+    }
+    #spielorders-final .so-preview-section {
+      margin-top: 14px;
+    }
+    #spielorders-final .so-preview-section h3 {
+      margin-bottom: 6px;
+    }
+    #spielorders-final .so-readme-preview {
+      margin: 0;
+      white-space: pre-wrap;
+    }
+    #spielorders-final .so-popover {
+      position: absolute;
+      z-index: 8;
+      gap: 3px;
+      padding: 7px;
+    }
+    #spielorders-final .so-package-wrap,
+    #spielorders-final .so-column-wrap {
+      position: relative;
+    }
+    #spielorders-final .so-package-menu {
+      top: 38px;
+      left: 0;
+      min-width: 220px;
+    }
+    #spielorders-final .so-column-menu {
+      top: 30px;
+      right: 6px;
+      grid-template-columns: repeat(2, minmax(130px, 1fr));
+      min-width: 310px;
+    }
+    #spielorders-final .so-row-menu {
+      position: fixed;
+      min-width: 190px;
+    }
+    #spielorders-final .so-package-menu[data-open=&quot;true&quot;],
+    #spielorders-final .so-column-menu[data-open=&quot;true&quot;],
+    #spielorders-final .so-row-menu[data-open=&quot;true&quot;] {
+      display: grid;
+    }
+    #spielorders-final .so-popover .btn {
+      justify-content: flex-start;
+    }
+    #spielorders-final .so-separator {
+      border-top: 1px solid var(--border);
+      margin: 3px 0;
+    }
+    #spielorders-final .so-spotlight {
+      display: none;
+    }
+    #spielorders-final[data-search=&quot;spotlight&quot;] .so-orders-table,
+    #spielorders-final[data-search=&quot;spotlight&quot;] #so-case,
+    #spielorders-final[data-search=&quot;spotlight&quot;] .so-inspector,
+    #spielorders-final[data-search=&quot;spotlight&quot;] .so-count {
+      display: none;
+    }
+    #spielorders-final[data-search=&quot;spotlight&quot;] .so-shell {
+      grid-template-columns: 1fr;
+    }
+    #spielorders-final[data-search=&quot;spotlight&quot;] .so-spotlight {
+      display: block;
+    }
+    #spielorders-final .so-editor,
+    #spielorders-final .so-diagnostic {
+      min-width: 0;
+    }
+    #spielorders-final .so-editor-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin: 12px 0;
+    }
+    #spielorders-final .so-editor-grid .form-label {
+      margin: 0;
+    }
+    #spielorders-final .so-wide {
+      grid-column: span 2;
+    }
+    #spielorders-final .so-full {
+      grid-column: 1 / -1;
+    }
+    #spielorders-final .so-directory {
+      display: flex;
+      align-items: end;
+      gap: 8px;
+    }
+    #spielorders-final .so-directory label {
+      flex: 1 1 auto;
+    }
+    #spielorders-final .so-vendor-control {
+      position: relative;
+    }
+    #spielorders-final .so-vendor-options {
+      position: absolute;
+      z-index: 6;
+      top: 100%;
+      left: 0;
+      right: 0;
+      display: none;
+      gap: 2px;
+      padding: 6px;
+    }
+    #spielorders-final .so-vendor-control:focus-within .so-vendor-options {
+      display: grid;
+    }
+    #spielorders-final .so-vendor-options .btn {
+      justify-content: flex-start;
+    }
+    #spielorders-final .so-validation {
+      min-height: 1.4em;
+      margin: 0;
+    }
+    #spielorders-final .so-item-actions {
+      display: flex;
+      gap: 4px;
+      margin-top: 5px;
+    }
+    #spielorders-final .so-items-table {
+      width: 100%;
+      table-layout: fixed;
+    }
+    #spielorders-final .so-items-table .so-col-catalog {
+      width: 18%;
+    }
+    #spielorders-final .so-items-table .so-col-description {
+      width: auto;
+    }
+    #spielorders-final .so-items-table .so-col-quantity {
+      width: 9%;
+    }
+    #spielorders-final .so-items-table .so-col-price {
+      width: 12%;
+    }
+    #spielorders-final .so-items-table .so-col-total {
+      width: 13%;
+    }
+    #spielorders-final .so-sheet-cell {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #spielorders-final .so-raw-json {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    #spielorders-final .so-diagnostic-grid {
+      display: grid;
+      grid-template-columns: minmax(230px, .8fr) minmax(340px, 1.4fr);
+      gap: 12px;
+      margin-top: 12px;
+    }
+    #spielorders-final .so-readme-editor {
+      min-height: 560px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    @media (max-width: 700px) {
+      #spielorders-final .so-shell,
+      #spielorders-final .so-diagnostic-grid {
+        grid-template-columns: 1fr;
+        height: auto;
+      }
+      #spielorders-final .so-editor-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+    @media (max-width: 430px) {
+      #spielorders-final .so-editor-grid {
+        grid-template-columns: 1fr;
+      }
+      #spielorders-final .so-wide,
+      #spielorders-final .so-full {
+        grid-column: auto;
+      }
+    }
+  &lt;/style&gt;
+
+  &lt;header class=&quot;so-toolbar&quot;&gt;
+    &lt;div class=&quot;so-package-wrap&quot;&gt;
+      &lt;button class=&quot;btn&quot; id=&quot;so-package-button&quot; type=&quot;button&quot; aria-expanded=&quot;false&quot;&gt;Optics Lab Orders ▾&lt;/button&gt;
+      &lt;div class=&quot;card so-popover so-package-menu&quot; id=&quot;so-package-menu&quot; data-open=&quot;false&quot;&gt;
+        &lt;button class=&quot;btn btn-ghost&quot; type=&quot;button&quot;&gt;Open Package…&lt;/button&gt;
+        &lt;button class=&quot;btn btn-ghost&quot; type=&quot;button&quot;&gt;Open Recent ▸&lt;/button&gt;
+        &lt;button class=&quot;btn btn-ghost&quot; type=&quot;button&quot;&gt;Initialize Package…&lt;/button&gt;
+      &lt;/div&gt;
+    &lt;/div&gt;
+    &lt;nav class=&quot;so-nav&quot; aria-label=&quot;Package destinations&quot;&gt;
+      &lt;button class=&quot;btn is-selected&quot; data-nav=&quot;orders&quot; aria-pressed=&quot;true&quot; type=&quot;button&quot;&gt;Orders&lt;/button&gt;
+      &lt;button class=&quot;btn btn-ghost&quot; data-nav=&quot;vendors&quot; aria-pressed=&quot;false&quot; type=&quot;button&quot;&gt;Vendors&lt;/button&gt;
+      &lt;button class=&quot;btn btn-ghost&quot; data-nav=&quot;readme&quot; aria-pressed=&quot;false&quot; type=&quot;button&quot;&gt;README.md&lt;/button&gt;
+    &lt;/nav&gt;
+    &lt;div class=&quot;so-actions&quot;&gt;
+      &lt;button class=&quot;btn btn-primary&quot; id=&quot;so-new-order&quot; type=&quot;button&quot;&gt;New Order&lt;/button&gt;
+      &lt;button class=&quot;btn&quot; id=&quot;so-inspector-toggle&quot; type=&quot;button&quot; aria-label=&quot;Hide inspector&quot; aria-pressed=&quot;true&quot; data-tooltip=&quot;Toggle inspector&quot;&gt;&lt;i data-lucide=&quot;panel-right&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
+    &lt;/div&gt;
+  &lt;/header&gt;
+
+  &lt;section class=&quot;so-screen&quot; data-screen=&quot;orders&quot;&gt;
+    &lt;div class=&quot;so-shell&quot;&gt;
+      &lt;main class=&quot;so-main&quot;&gt;
+        &lt;div class=&quot;so-search&quot;&gt;
+          &lt;label class=&quot;form-label&quot; for=&quot;so-query&quot;&gt;&lt;span class=&quot;sr-only&quot;&gt;Search Orders&lt;/span&gt;&lt;input class=&quot;form-control&quot; id=&quot;so-query&quot; type=&quot;search&quot; placeholder=&quot;Search Orders&quot; autocomplete=&quot;off&quot;&gt;&lt;/label&gt;
+          &lt;button class=&quot;btn&quot; id=&quot;so-case&quot; type=&quot;button&quot; aria-pressed=&quot;false&quot; data-tooltip=&quot;Match letter case&quot;&gt;Aa&lt;/button&gt;
+          &lt;button class=&quot;btn&quot; id=&quot;so-spotlight-button&quot; type=&quot;button&quot; aria-pressed=&quot;false&quot;&gt;Spotlight&lt;/button&gt;
+        &lt;/div&gt;
+        &lt;p class=&quot;so-count text-small text-muted&quot; id=&quot;so-count&quot; aria-live=&quot;polite&quot;&gt;&lt;/p&gt;
+        &lt;section class=&quot;so-orders-table so-table-region so-column-wrap&quot; aria-label=&quot;Orders&quot;&gt;
+          &lt;table class=&quot;table table-sm&quot; aria-label=&quot;Orders table&quot;&gt;
+            &lt;thead id=&quot;so-orders-head&quot;&gt;&lt;tr&gt;
+              &lt;th&gt;&lt;span class=&quot;sr-only&quot;&gt;Diagnostic&lt;/span&gt;&lt;/th&gt;
+              &lt;th data-col=&quot;date&quot;&gt;Date&lt;/th&gt;&lt;th data-col=&quot;status&quot;&gt;Status&lt;/th&gt;&lt;th data-col=&quot;title&quot;&gt;Order title&lt;/th&gt;&lt;th data-col=&quot;vendor&quot;&gt;Vendor&lt;/th&gt;&lt;th data-col=&quot;orderer&quot;&gt;Orderer&lt;/th&gt;
+              &lt;th data-col=&quot;institution&quot; hidden&gt;Institution&lt;/th&gt;&lt;th data-col=&quot;project&quot; hidden&gt;Project&lt;/th&gt;&lt;th data-col=&quot;group&quot; hidden&gt;Order group&lt;/th&gt;&lt;th data-col=&quot;directory&quot; hidden&gt;Directory name&lt;/th&gt;&lt;th data-col=&quot;currency&quot; hidden&gt;Currency&lt;/th&gt;&lt;th data-col=&quot;id&quot; hidden&gt;Order ID&lt;/th&gt;&lt;th data-col=&quot;total&quot; class=&quot;text-end&quot; hidden&gt;Total&lt;/th&gt;
+            &lt;/tr&gt;&lt;/thead&gt;
+            &lt;tbody id=&quot;so-orders-body&quot;&gt;&lt;/tbody&gt;
+          &lt;/table&gt;
+          &lt;div class=&quot;card so-popover so-column-menu&quot; id=&quot;so-column-menu&quot; data-open=&quot;false&quot; aria-label=&quot;Visible columns&quot;&gt;
+            &lt;label class=&quot;form-check&quot;&gt;&lt;input class=&quot;form-check-input&quot; data-column=&quot;date&quot; type=&quot;checkbox&quot; checked&gt;&lt;span class=&quot;form-check-label&quot;&gt;Date&lt;/span&gt;&lt;/label&gt;
+            &lt;label class=&quot;form-check&quot;&gt;&lt;input class=&quot;form-check-input&quot; data-column=&quot;status&quot; type=&quot;checkbox&quot; checked&gt;&lt;span class=&quot;form-check-label&quot;&gt;Status&lt;/span&gt;&lt;/label&gt;
+            &lt;label class=&quot;form-check&quot;&gt;&lt;input class=&quot;form-check-input&quot; data-column=&quot;title&quot; type=&quot;checkbox&quot; checked&gt;&lt;span class=&quot;form-check-label&quot;&gt;Order title&lt;/span&gt;&lt;/label&gt;
+            &lt;label class=&quot;form-check&quot;&gt;&lt;input class=&quot;form-check-input&quot; data-column=&quot;vendor&quot; type=&quot;checkbox&quot; checked&gt;&lt;span class=&quot;form-check-label&quot;&gt;Vendor&lt;/span&gt;&lt;/label&gt;
+            &lt;label class=&quot;form-check&quot;&gt;&lt;input class=&quot;form-check-input&quot; data-column=&quot;orderer&quot; type=&quot;checkbox&quot; checked&gt;&lt;span class=&quot;form-check-label&quot;&gt;Orderer&lt;/span&gt;&lt;/label&gt;
+            &lt;label class=&quot;form-check&quot;&gt;&lt;input class=&quot;form-check-input&quot; data-column=&quot;institution&quot; type=&quot;checkbox&quot;&gt;&lt;span class=&quot;form-check-label&quot;&gt;Institution&lt;/span&gt;&lt;/label&gt;
+            &lt;label class=&quot;form-check&quot;&gt;&lt;input class=&quot;form-check-input&quot; data-column=&quot;project&quot; type=&quot;checkbox&quot;&gt;&lt;span class=&quot;form-check-label&quot;&gt;Project&lt;/span&gt;&lt;/label&gt;
+            &lt;label class=&quot;form-check&quot;&gt;&lt;input class=&quot;form-check-input&quot; data-column=&quot;group&quot; type=&quot;checkbox&quot;&gt;&lt;span class=&quot;form-check-label&quot;&gt;Order group&lt;/span&gt;&lt;/label&gt;
+            &lt;label class=&quot;form-check&quot;&gt;&lt;input class=&quot;form-check-input&quot; data-column=&quot;directory&quot; type=&quot;checkbox&quot;&gt;&lt;span class=&quot;form-check-label&quot;&gt;Directory name&lt;/span&gt;&lt;/label&gt;
+            &lt;label class=&quot;form-check&quot;&gt;&lt;input class=&quot;form-check-input&quot; data-column=&quot;currency&quot; type=&quot;checkbox&quot;&gt;&lt;span class=&quot;form-check-label&quot;&gt;Currency&lt;/span&gt;&lt;/label&gt;
+            &lt;label class=&quot;form-check&quot;&gt;&lt;input class=&quot;form-check-input&quot; data-column=&quot;id&quot; type=&quot;checkbox&quot;&gt;&lt;span class=&quot;form-check-label&quot;&gt;Order ID&lt;/span&gt;&lt;/label&gt;
+            &lt;label class=&quot;form-check&quot;&gt;&lt;input class=&quot;form-check-input&quot; data-column=&quot;total&quot; type=&quot;checkbox&quot;&gt;&lt;span class=&quot;form-check-label&quot;&gt;Total&lt;/span&gt;&lt;/label&gt;
+          &lt;/div&gt;
+        &lt;/section&gt;
+        &lt;section class=&quot;so-spotlight so-table-region&quot; aria-label=&quot;Spotlight results&quot;&gt;
+          &lt;p class=&quot;text-small text-muted&quot; id=&quot;so-spotlight-state&quot;&gt;&lt;/p&gt;
+          &lt;table class=&quot;table table-sm&quot;&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;Order&lt;/th&gt;&lt;th&gt;Matching file&lt;/th&gt;&lt;th&gt;Kind&lt;/th&gt;&lt;th&gt;Modified&lt;/th&gt;&lt;th&gt;&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody id=&quot;so-spotlight-body&quot;&gt;&lt;/tbody&gt;&lt;/table&gt;
+        &lt;/section&gt;
+      &lt;/main&gt;
+      &lt;aside class=&quot;card so-inspector&quot; aria-label=&quot;Selected Order compact preview&quot;&gt;
+        &lt;h2 id=&quot;so-preview-title&quot;&gt;&lt;/h2&gt;
+        &lt;p class=&quot;so-error&quot; id=&quot;so-preview-error&quot; hidden&gt;&lt;/p&gt;
+        &lt;dl class=&quot;so-meta text-small&quot;&gt;
+          &lt;dt&gt;Status&lt;/dt&gt;&lt;dd id=&quot;so-preview-status&quot;&gt;&lt;/dd&gt;&lt;dt&gt;Date ordered&lt;/dt&gt;&lt;dd id=&quot;so-preview-date&quot;&gt;&lt;/dd&gt;&lt;dt&gt;Vendor&lt;/dt&gt;&lt;dd id=&quot;so-preview-vendor&quot;&gt;&lt;/dd&gt;&lt;dt&gt;Orderer&lt;/dt&gt;&lt;dd id=&quot;so-preview-orderer&quot;&gt;&lt;/dd&gt;&lt;dt&gt;Project&lt;/dt&gt;&lt;dd id=&quot;so-preview-project&quot;&gt;&lt;/dd&gt;&lt;dt&gt;Directory name&lt;/dt&gt;&lt;dd&gt;&lt;code id=&quot;so-preview-directory&quot;&gt;&lt;/code&gt;&lt;/dd&gt;
+        &lt;/dl&gt;
+        &lt;section class=&quot;so-preview-section&quot;&gt;&lt;h3&gt;Order items&lt;/h3&gt;&lt;table class=&quot;table table-sm&quot;&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;Item&lt;/th&gt;&lt;th class=&quot;text-end&quot;&gt;Qty&lt;/th&gt;&lt;th class=&quot;text-end&quot;&gt;Total&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody id=&quot;so-preview-items&quot;&gt;&lt;/tbody&gt;&lt;tfoot&gt;&lt;tr&gt;&lt;th colspan=&quot;2&quot;&gt;Total&lt;/th&gt;&lt;td class=&quot;text-end&quot; id=&quot;so-preview-total&quot;&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/tfoot&gt;&lt;/table&gt;&lt;/section&gt;
+        &lt;section class=&quot;so-preview-section&quot;&gt;&lt;h3&gt;README.md&lt;/h3&gt;&lt;pre class=&quot;so-readme-preview text-small&quot; id=&quot;so-preview-readme&quot;&gt;&lt;/pre&gt;&lt;/section&gt;
+        &lt;section class=&quot;so-preview-section&quot;&gt;&lt;button class=&quot;btn&quot; type=&quot;button&quot;&gt;Reveal in Finder&lt;/button&gt;&lt;/section&gt;
+      &lt;/aside&gt;
+    &lt;/div&gt;
+  &lt;/section&gt;
+
+  &lt;section class=&quot;so-screen&quot; data-screen=&quot;vendors&quot;&gt;
+    &lt;div class=&quot;so-shell&quot;&gt;
+      &lt;main class=&quot;so-main&quot;&gt;
+        &lt;div class=&quot;so-search&quot;&gt;&lt;label class=&quot;form-label&quot; for=&quot;so-vendor-query&quot;&gt;&lt;span class=&quot;sr-only&quot;&gt;Search Vendors&lt;/span&gt;&lt;input class=&quot;form-control&quot; id=&quot;so-vendor-query&quot; type=&quot;search&quot; placeholder=&quot;Search Vendors&quot;&gt;&lt;/label&gt;&lt;button class=&quot;btn btn-primary&quot; type=&quot;button&quot;&gt;New Vendor&lt;/button&gt;&lt;/div&gt;
+        &lt;p class=&quot;so-count text-small text-muted&quot;&gt;4 of 4 vendors shown&lt;/p&gt;
+        &lt;div class=&quot;so-table-region&quot;&gt;&lt;table class=&quot;table table-sm&quot;&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;Name&lt;/th&gt;&lt;th&gt;Contact&lt;/th&gt;&lt;th&gt;Email&lt;/th&gt;&lt;th class=&quot;text-end&quot;&gt;Orders&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;&lt;tr data-selected=&quot;true&quot;&gt;&lt;td&gt;Tarnwick&lt;/td&gt;&lt;td&gt;Sales&lt;/td&gt;&lt;td&gt;sales@tarnwick.example&lt;/td&gt;&lt;td class=&quot;text-end&quot;&gt;84&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;Nethermoor&lt;/td&gt;&lt;td&gt;Quotes&lt;/td&gt;&lt;td&gt;quotes@nethermoor.example&lt;/td&gt;&lt;td class=&quot;text-end&quot;&gt;31&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;Elderglass Optics&lt;/td&gt;&lt;td&gt;Customer service&lt;/td&gt;&lt;td&gt;service@elderglass.example&lt;/td&gt;&lt;td class=&quot;text-end&quot;&gt;22&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;Fernhill Scientific&lt;/td&gt;&lt;td&gt;Accounts&lt;/td&gt;&lt;td&gt;accounts@fernhill.example&lt;/td&gt;&lt;td class=&quot;text-end&quot;&gt;18&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;&lt;/div&gt;
+      &lt;/main&gt;
+      &lt;aside class=&quot;card so-inspector&quot;&gt;&lt;h2&gt;Tarnwick&lt;/h2&gt;&lt;dl class=&quot;so-meta&quot;&gt;&lt;dt&gt;Contact&lt;/dt&gt;&lt;dd&gt;Sales&lt;/dd&gt;&lt;dt&gt;Email&lt;/dt&gt;&lt;dd&gt;sales@tarnwick.example&lt;/dd&gt;&lt;dt&gt;Phone&lt;/dt&gt;&lt;dd&gt;—&lt;/dd&gt;&lt;dt&gt;Referenced by&lt;/dt&gt;&lt;dd&gt;84 Orders&lt;/dd&gt;&lt;/dl&gt;&lt;div class=&quot;so-inline-actions&quot;&gt;&lt;button class=&quot;btn&quot; type=&quot;button&quot;&gt;Edit Vendor&lt;/button&gt;&lt;/div&gt;&lt;/aside&gt;
+    &lt;/div&gt;
+  &lt;/section&gt;
+
+  &lt;section class=&quot;so-screen&quot; data-screen=&quot;readme&quot;&gt;
+    &lt;div class=&quot;so-editor-head&quot;&gt;&lt;span&gt;&lt;/span&gt;&lt;button class=&quot;btn btn-primary&quot; type=&quot;button&quot;&gt;Save changes&lt;/button&gt;&lt;/div&gt;
+    &lt;label class=&quot;form-label&quot; for=&quot;so-package-readme&quot;&gt;README.md&lt;textarea class=&quot;form-control so-readme-editor&quot; id=&quot;so-package-readme&quot;&gt;# Optics Lab Orders
+
+Package notes, purchasing conventions, and local instructions.&lt;/textarea&gt;&lt;/label&gt;
+  &lt;/section&gt;
+
+  &lt;div class=&quot;card so-popover so-row-menu&quot; id=&quot;so-row-menu&quot; data-open=&quot;false&quot; role=&quot;menu&quot;&gt;
+    &lt;button class=&quot;btn btn-ghost&quot; id=&quot;so-context-open&quot; type=&quot;button&quot;&gt;Open&lt;/button&gt;&lt;button class=&quot;btn btn-ghost&quot; type=&quot;button&quot;&gt;Reveal in Finder&lt;/button&gt;&lt;button class=&quot;btn btn-ghost&quot; id=&quot;so-context-align&quot; type=&quot;button&quot;&gt;Align Directory Name&lt;/button&gt;&lt;button class=&quot;btn btn-ghost&quot; id=&quot;so-context-remove&quot; type=&quot;button&quot;&gt;Remove Order…&lt;/button&gt;&lt;div class=&quot;so-separator&quot;&gt;&lt;/div&gt;&lt;button class=&quot;btn btn-ghost&quot; id=&quot;so-context-trash&quot; type=&quot;button&quot;&gt;Move to Trash…&lt;/button&gt;
+  &lt;/div&gt;
+
+  &lt;section class=&quot;so-editor&quot; aria-label=&quot;Order editor&quot;&gt;
+    &lt;div class=&quot;so-editor-head&quot;&gt;&lt;div class=&quot;so-actions&quot;&gt;&lt;button class=&quot;btn&quot; id=&quot;so-editor-back&quot; type=&quot;button&quot;&gt;&lt;i data-lucide=&quot;arrow-left&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;Orders&lt;/button&gt;&lt;h2 id=&quot;so-editor-heading&quot;&gt;&lt;/h2&gt;&lt;/div&gt;&lt;div class=&quot;so-actions&quot;&gt;&lt;button class=&quot;btn&quot; type=&quot;button&quot;&gt;Reveal in Finder&lt;/button&gt;&lt;button class=&quot;btn btn-primary&quot; id=&quot;so-save&quot; type=&quot;button&quot;&gt;Save changes&lt;/button&gt;&lt;/div&gt;&lt;/div&gt;
+    &lt;p class=&quot;so-validation so-error&quot; id=&quot;so-validation&quot; aria-live=&quot;polite&quot;&gt;&lt;/p&gt;
+    &lt;div class=&quot;so-editor-grid&quot;&gt;
+      &lt;label class=&quot;form-label so-wide&quot; for=&quot;so-edit-title&quot;&gt;Order title&lt;input class=&quot;form-control&quot; id=&quot;so-edit-title&quot; type=&quot;text&quot; required&gt;&lt;/label&gt;
+      &lt;label class=&quot;form-label&quot; for=&quot;so-edit-status&quot;&gt;Status&lt;select class=&quot;form-select&quot; id=&quot;so-edit-status&quot;&gt;&lt;option&gt;In Preparation&lt;/option&gt;&lt;option&gt;Hold&lt;/option&gt;&lt;option&gt;Ordered&lt;/option&gt;&lt;option&gt;Received&lt;/option&gt;&lt;option&gt;Complete&lt;/option&gt;&lt;/select&gt;&lt;/label&gt;
+      &lt;label class=&quot;form-label&quot; for=&quot;so-edit-date&quot;&gt;Date ordered&lt;input class=&quot;form-control&quot; id=&quot;so-edit-date&quot; type=&quot;date&quot;&gt;&lt;/label&gt;
+      &lt;div class=&quot;so-vendor-control&quot;&gt;&lt;label class=&quot;form-label&quot; for=&quot;so-edit-vendor&quot;&gt;Vendor&lt;input class=&quot;form-control&quot; id=&quot;so-edit-vendor&quot; type=&quot;search&quot; autocomplete=&quot;off&quot;&gt;&lt;/label&gt;&lt;div class=&quot;card so-vendor-options&quot; id=&quot;so-vendor-options&quot;&gt;&lt;button class=&quot;btn btn-ghost&quot; data-vendor-action=&quot;new&quot; type=&quot;button&quot;&gt;New Vendor…&lt;/button&gt;&lt;button class=&quot;btn btn-ghost&quot; data-vendor=&quot;No Vendor&quot; type=&quot;button&quot;&gt;No Vendor&lt;/button&gt;&lt;button class=&quot;btn btn-ghost&quot; data-vendor=&quot;Tarnwick&quot; type=&quot;button&quot;&gt;Tarnwick&lt;/button&gt;&lt;button class=&quot;btn btn-ghost&quot; data-vendor=&quot;Nethermoor&quot; type=&quot;button&quot;&gt;Nethermoor&lt;/button&gt;&lt;button class=&quot;btn btn-ghost&quot; data-vendor=&quot;Elderglass Optics&quot; type=&quot;button&quot;&gt;Elderglass Optics&lt;/button&gt;&lt;button class=&quot;btn btn-ghost&quot; data-vendor=&quot;Fernhill Scientific&quot; type=&quot;button&quot;&gt;Fernhill Scientific&lt;/button&gt;&lt;/div&gt;&lt;/div&gt;
+      &lt;label class=&quot;form-label&quot; for=&quot;so-edit-orderer&quot;&gt;Orderer&lt;input class=&quot;form-control&quot; id=&quot;so-edit-orderer&quot; type=&quot;text&quot;&gt;&lt;/label&gt;
+      &lt;label class=&quot;form-label&quot; for=&quot;so-edit-project&quot;&gt;Project&lt;input class=&quot;form-control&quot; id=&quot;so-edit-project&quot; type=&quot;text&quot;&gt;&lt;/label&gt;
+      &lt;div class=&quot;so-directory so-full&quot;&gt;&lt;label class=&quot;form-label&quot; for=&quot;so-edit-directory&quot;&gt;Directory name&lt;input class=&quot;form-control&quot; id=&quot;so-edit-directory&quot; type=&quot;text&quot; readonly&gt;&lt;/label&gt;&lt;button class=&quot;btn&quot; id=&quot;so-editor-align&quot; type=&quot;button&quot;&gt;Align Directory Name&lt;/button&gt;&lt;/div&gt;
+      &lt;label class=&quot;form-label so-full&quot; for=&quot;so-edit-readme&quot;&gt;README.md&lt;textarea class=&quot;form-control so-raw-json&quot; id=&quot;so-edit-readme&quot; rows=&quot;6&quot;&gt;&lt;/textarea&gt;&lt;/label&gt;
+    &lt;/div&gt;
+    &lt;div class=&quot;so-table-region&quot;&gt;&lt;table class=&quot;table table-sm so-items-table&quot; aria-label=&quot;Editable Order Items spreadsheet&quot;&gt;&lt;colgroup&gt;&lt;col class=&quot;so-col-catalog&quot;&gt;&lt;col class=&quot;so-col-description&quot;&gt;&lt;col class=&quot;so-col-quantity&quot;&gt;&lt;col class=&quot;so-col-price&quot;&gt;&lt;col class=&quot;so-col-total&quot;&gt;&lt;/colgroup&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;Catalog number&lt;/th&gt;&lt;th&gt;Description&lt;/th&gt;&lt;th class=&quot;text-end&quot;&gt;Quantity&lt;/th&gt;&lt;th class=&quot;text-end&quot;&gt;Unit price&lt;/th&gt;&lt;th class=&quot;text-end&quot;&gt;Item total&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody id=&quot;so-editor-items&quot;&gt;&lt;/tbody&gt;&lt;tfoot&gt;&lt;tr&gt;&lt;th colspan=&quot;4&quot;&gt;Total&lt;/th&gt;&lt;td class=&quot;text-end&quot; id=&quot;so-editor-total&quot;&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/tfoot&gt;&lt;/table&gt;&lt;/div&gt;
+    &lt;div class=&quot;so-item-actions&quot;&gt;&lt;button class=&quot;btn&quot; id=&quot;so-item-add&quot; type=&quot;button&quot; aria-label=&quot;Add Order Item&quot;&gt;+&lt;/button&gt;&lt;button class=&quot;btn&quot; id=&quot;so-item-remove&quot; type=&quot;button&quot; aria-label=&quot;Remove selected Order Item&quot;&gt;−&lt;/button&gt;&lt;/div&gt;
+  &lt;/section&gt;
+
+  &lt;section class=&quot;so-diagnostic&quot; aria-label=&quot;Damaged Order diagnostic workspace&quot;&gt;
+    &lt;div class=&quot;so-editor-head&quot;&gt;&lt;div class=&quot;so-actions&quot;&gt;&lt;button class=&quot;btn&quot; id=&quot;so-diagnostic-back&quot; type=&quot;button&quot;&gt;&lt;i data-lucide=&quot;arrow-left&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;Orders&lt;/button&gt;&lt;h2&gt;Diagnose damaged Order&lt;/h2&gt;&lt;/div&gt;&lt;button class=&quot;btn&quot; type=&quot;button&quot;&gt;Reveal in Finder&lt;/button&gt;&lt;/div&gt;
+    &lt;div class=&quot;so-diagnostic-grid&quot;&gt;
+      &lt;div&gt;&lt;p class=&quot;so-error&quot;&gt;order.json is malformed&lt;/p&gt;&lt;p class=&quot;text-small&quot;&gt;Evidence: JSON parsing stopped at line 8, column 19. Only the containing directory name is trusted.&lt;/p&gt;&lt;fieldset&gt;&lt;legend&gt;Repair action&lt;/legend&gt;&lt;label class=&quot;form-check&quot;&gt;&lt;input class=&quot;form-check-input&quot; name=&quot;repair&quot; type=&quot;radio&quot; checked&gt;&lt;span class=&quot;form-check-label&quot;&gt;Replace with validated metadata&lt;/span&gt;&lt;/label&gt;&lt;label class=&quot;form-check&quot;&gt;&lt;input class=&quot;form-check-input&quot; name=&quot;repair&quot; type=&quot;radio&quot;&gt;&lt;span class=&quot;form-check-label&quot;&gt;Promote validated staging candidate&lt;/span&gt;&lt;/label&gt;&lt;label class=&quot;form-check&quot;&gt;&lt;input class=&quot;form-check-input&quot; name=&quot;repair&quot; type=&quot;radio&quot;&gt;&lt;span class=&quot;form-check-label&quot;&gt;Edit raw JSON directly&lt;/span&gt;&lt;/label&gt;&lt;/fieldset&gt;&lt;/div&gt;
+      &lt;div&gt;&lt;label class=&quot;form-label&quot; for=&quot;so-raw-json&quot;&gt;order.json&lt;textarea class=&quot;form-control so-raw-json&quot; id=&quot;so-raw-json&quot; rows=&quot;18&quot;&gt;{
+  &quot;version&quot;: 1,
+  &quot;id&quot;: &quot;damaged&quot;,
+  &quot;title&quot;: &quot;Old objective lenses&quot;,
+  &quot;status&quot;: &quot;received&quot;
+  &quot;date_ordered&quot;: &quot;2026-06-25&quot;
+}&lt;/textarea&gt;&lt;/label&gt;&lt;p class=&quot;text-small text-muted&quot;&gt;Raw JSON editing is a GUI-only escape hatch. It writes this text directly, then asks the Rust core to revalidate. Invalid JSON remains a Damaged Order.&lt;/p&gt;&lt;div class=&quot;so-inline-actions&quot;&gt;&lt;button class=&quot;btn btn-primary&quot; type=&quot;button&quot;&gt;Apply Repair&lt;/button&gt;&lt;button class=&quot;btn&quot; type=&quot;button&quot;&gt;Revalidate&lt;/button&gt;&lt;/div&gt;&lt;/div&gt;
+    &lt;/div&gt;
+  &lt;/section&gt;
+
+  &lt;script&gt;
+    (() =&gt; {
+      const root = document.getElementById(&#x27;spielorders-final&#x27;);
+      const rows = [
+        { id:&#x27;8b6e3f0a&#x27;, date:&#x27;2026-07-18&#x27;, status:&#x27;Ordered&#x27;, title:&#x27;Laser components&#x27;, vendor:&#x27;Tarnwick&#x27;, orderer:&#x27;A. Morgan&#x27;, institution:&#x27;Northwind&#x27;, project:&#x27;Telescope&#x27;, group:&#x27;Summer build&#x27;, currency:&#x27;USD&#x27;, readme:&#x27;Verify diode wavelengths against the quote.\nStore serial numbers in Supporting Material.&#x27;, items:[[&#x27;Laser diode, 638 nm&#x27;,&#x27;LD638&#x27;,2,129],[&#x27;Fiber coupler&#x27;,&#x27;FC/APC&#x27;,1,199],[&#x27;TEC controller&#x27;,&#x27;TEC-200&#x27;,1,185]] },
+        { id:&#x27;b2c16521&#x27;, date:&#x27;2026-07-17&#x27;, status:&#x27;In Preparation&#x27;, title:&#x27;Optical mounts and posts&#x27;, vendor:&#x27;Nethermoor&#x27;, orderer:&#x27;J. Patel&#x27;, institution:&#x27;Northwind&#x27;, project:&#x27;Imaging&#x27;, group:&#x27;Summer build&#x27;, currency:&#x27;USD&#x27;, readme:&#x27;Waiting for revised institutional quote.&#x27;, items:[[&#x27;Mirror mount&#x27;,&#x27;90820&#x27;,4,84.5],[&#x27;Post holder&#x27;,&#x27;90860&#x27;,8,36.2]] },
+        { id:&#x27;8a50cb93&#x27;, date:&#x27;2026-07-16&#x27;, status:&#x27;Hold&#x27;, title:&#x27;Dichroic mirrors (488/561/647)&#x27;, vendor:&#x27;Elderglass Optics&#x27;, orderer:&#x27;A. Morgan&#x27;, institution:&#x27;Uplands&#x27;, project:&#x27;Microscopy&#x27;, group:&#x27;&#x27;, currency:&#x27;USD&#x27;, readme:&#x27;Confirm coating specification before ordering.&#x27;, items:[[&#x27;Dichroic mirror set&#x27;,&#x27;DMS-3&#x27;,2,1209]] },
+        { id:&#x27;79663578&#x27;, date:&#x27;2026-07-14&#x27;, status:&#x27;Received&#x27;, title:&#x27;Imaging lenses and tubes&#x27;, vendor:&#x27;Elderglass Optics&#x27;, orderer:&#x27;A. Morgan&#x27;, institution:&#x27;Northwind&#x27;, project:&#x27;Imaging&#x27;, group:&#x27;&#x27;, currency:&#x27;USD&#x27;, readme:&#x27;Packing slip scanned into Supporting Material.&#x27;, items:[[&#x27;Achromatic lens&#x27;,&#x27;AC254&#x27;,6,128],[&#x27;Lens tube&#x27;,&#x27;LT30&#x27;,5,77.254]] },
+        { id:&#x27;ae4319d2&#x27;, date:&#x27;2026-07-11&#x27;, status:&#x27;Complete&#x27;, title:&#x27;Lab supplies and consumables&#x27;, vendor:&#x27;Fernhill Scientific&#x27;, orderer:&#x27;S. Rivera&#x27;, institution:&#x27;Northwind&#x27;, project:&#x27;General lab&#x27;, group:&#x27;Stockroom&#x27;, currency:&#x27;USD&#x27;, readme:&#x27;Closed after inventory check.&#x27;, items:[[&#x27;Nitrile gloves&#x27;,&#x27;NG-M&#x27;,10,19.5],[&#x27;Lens tissue&#x27;,&#x27;LT-100&#x27;,6,19.5933]] },
+        { id:&#x27;f0a46d09&#x27;, date:&#x27;2026-07-10&#x27;, status:&#x27;Ordered&#x27;, title:&#x27;High-speed camera&#x27;, vendor:&#x27;No Vendor&#x27;, orderer:&#x27;J. Patel&#x27;, institution:&#x27;Uplands&#x27;, project:&#x27;Imaging&#x27;, group:&#x27;&#x27;, currency:&#x27;EUR&#x27;, readme:&#x27;Vendor association still needs correction.&#x27;, items:[[&#x27;High-speed camera&#x27;,&#x27;CAM-HS&#x27;,1,8950]] },
+        { id:&#x27;damaged&#x27;, date:&#x27;2026-06-25&#x27;, status:&#x27;&#x27;, title:&#x27;2026_06_25_Old_objective_lenses&#x27;, directory:&#x27;2026_06_25_Old_objective_lenses&#x27;, vendor:&#x27;&#x27;, orderer:&#x27;&#x27;, institution:&#x27;&#x27;, project:&#x27;&#x27;, group:&#x27;&#x27;, currency:&#x27;USD&#x27;, readme:&#x27;&#x27;, items:[], damaged:true, diagnostic:&#x27;Damaged Order: order.json is malformed. Canonical facts cannot be trusted.&#x27; }
+      ];
+      const spotlight = [{order:&#x27;Laser components&#x27;,file:&#x27;quotes/Tarnwick-revised-quote.pdf&#x27;,kind:&#x27;PDF&#x27;,modified:&#x27;2026-07-18&#x27;},{order:&#x27;Laser components&#x27;,file:&#x27;correspondence/approval.eml&#x27;,kind:&#x27;Mail&#x27;,modified:&#x27;2026-07-17&#x27;},{order:&#x27;Optical mounts and posts&#x27;,file:&#x27;drawings/mount-layout.dwg&#x27;,kind:&#x27;Drawing&#x27;,modified:&#x27;2026-07-15&#x27;}];
+      let selectedId = rows[0].id;
+      let caseSensitive = false;
+      let totalOrders = 1247;
+      let newDraft = false;
+      const query = root.querySelector(&#x27;#so-query&#x27;);
+      const orderBody = root.querySelector(&#x27;#so-orders-body&#x27;);
+      const rowMenu = root.querySelector(&#x27;#so-row-menu&#x27;);
+      const columnMenu = root.querySelector(&#x27;#so-column-menu&#x27;);
+      const packageMenu = root.querySelector(&#x27;#so-package-menu&#x27;);
+      const selected = () =&gt; rows.find(row =&gt; row.id === selectedId) || rows[0];
+      const directoryName = row =&gt; {
+        if (row.directory) return row.directory;
+        const normalize = value =&gt; value.trim().replace(/[^A-Za-z0-9_]+/g,&#x27;_&#x27;).replace(/_+/g,&#x27;_&#x27;).replace(/^_+|_+$/g,&#x27;&#x27;);
+        const parts = [row.date.replaceAll(&#x27;-&#x27;,&#x27;_&#x27;)];
+        if (row.vendor &amp;&amp; row.vendor !== &#x27;No Vendor&#x27;) parts.push(normalize(row.vendor));
+        parts.push(normalize(row.title));
+        if (row.orderer) parts.push(normalize(row.orderer));
+        return parts.filter(Boolean).join(&#x27;_&#x27;);
+      };
+      const total = row =&gt; row.items.reduce((sum, item) =&gt; sum + Number(item[2]) * Number(item[3]), 0);
+      const money = (value, currency=&#x27;USD&#x27;) =&gt; new Intl.NumberFormat(&#x27;en-US&#x27;,{style:&#x27;currency&#x27;,currency:currency || &#x27;USD&#x27;}).format(value || 0);
+      const visibleRows = () =&gt; {
+        const raw = query.value.trim();
+        if (!raw) return rows;
+        const needle = caseSensitive ? raw : raw.toLocaleLowerCase();
+        return rows.filter(row =&gt; {
+          if (row.damaged) return false;
+          const source = [row.id,row.date,row.status,row.title,row.vendor,row.orderer,row.institution,row.project,row.group,row.currency,row.readme,...row.items.flat()].join(&#x27; &#x27;);
+          return (caseSensitive ? source : source.toLocaleLowerCase()).includes(needle);
+        });
+      };
+      const syncColumns = () =&gt; root.querySelectorAll(&#x27;[data-column]&#x27;).forEach(box =&gt; root.querySelectorAll(`[data-col=&quot;${box.dataset.column}&quot;]`).forEach(cell =&gt; { cell.hidden = !box.checked; }));
+      function renderRows() {
+        const visible = visibleRows();
+        orderBody.replaceChildren();
+        visible.forEach(row =&gt; {
+          const tr = document.createElement(&#x27;tr&#x27;);
+          tr.dataset.id = row.id;
+          tr.dataset.selected = String(row.id === selectedId);
+          tr.innerHTML = `&lt;td class=&quot;text-center&quot;&gt;${row.damaged ? &#x27;&lt;span class=&quot;so-error&quot; aria-label=&quot;Damaged Order&quot;&gt;!&lt;/span&gt;&#x27; : &#x27;&#x27;}&lt;/td&gt;&lt;td data-col=&quot;date&quot; class=&quot;text-nowrap&quot;&gt;${row.date}&lt;/td&gt;&lt;td data-col=&quot;status&quot;&gt;${row.status || &#x27;—&#x27;}&lt;/td&gt;&lt;td data-col=&quot;title&quot;&gt;&lt;button class=&quot;so-row-title&quot; type=&quot;button&quot;&gt;${row.title}&lt;/button&gt;&lt;/td&gt;&lt;td data-col=&quot;vendor&quot;&gt;${row.vendor || &#x27;—&#x27;}&lt;/td&gt;&lt;td data-col=&quot;orderer&quot;&gt;${row.orderer || &#x27;—&#x27;}&lt;/td&gt;&lt;td data-col=&quot;institution&quot;&gt;${row.institution || &#x27;—&#x27;}&lt;/td&gt;&lt;td data-col=&quot;project&quot;&gt;${row.project || &#x27;—&#x27;}&lt;/td&gt;&lt;td data-col=&quot;group&quot;&gt;${row.group || &#x27;—&#x27;}&lt;/td&gt;&lt;td data-col=&quot;directory&quot;&gt;&lt;code&gt;${directoryName(row)}&lt;/code&gt;&lt;/td&gt;&lt;td data-col=&quot;currency&quot;&gt;${row.currency}&lt;/td&gt;&lt;td data-col=&quot;id&quot;&gt;&lt;code&gt;${row.id}&lt;/code&gt;&lt;/td&gt;&lt;td data-col=&quot;total&quot; class=&quot;text-end&quot;&gt;${row.damaged ? &#x27;—&#x27; : money(total(row),row.currency)}&lt;/td&gt;`;
+          tr.addEventListener(&#x27;click&#x27;, () =&gt; { selectedId = row.id; renderRows(); renderPreview(); });
+          tr.addEventListener(&#x27;dblclick&#x27;, () =&gt; openOrder(row));
+          tr.addEventListener(&#x27;contextmenu&#x27;, event =&gt; { event.preventDefault(); selectedId = row.id; renderRows(); renderPreview(); rowMenu.style.left = `${Math.min(event.clientX,window.innerWidth-210)}px`; rowMenu.style.top = `${Math.min(event.clientY,window.innerHeight-220)}px`; rowMenu.dataset.open=&#x27;true&#x27;; });
+          tr.querySelector(&#x27;button&#x27;).addEventListener(&#x27;keydown&#x27;, event =&gt; { if (event.key === &#x27;Enter&#x27;) openOrder(row); });
+          orderBody.appendChild(tr);
+        });
+        syncColumns();
+        root.querySelector(&#x27;#so-count&#x27;).textContent = `${visible.length.toLocaleString()} of ${totalOrders.toLocaleString()} orders shown`;
+      }
+      function renderPreview() {
+        const row = selected();
+        root.querySelector(&#x27;#so-preview-title&#x27;).textContent = row.title;
+        root.querySelector(&#x27;#so-preview-status&#x27;).textContent = row.status || &#x27;Unavailable&#x27;;
+        root.querySelector(&#x27;#so-preview-date&#x27;).textContent = row.date;
+        root.querySelector(&#x27;#so-preview-vendor&#x27;).textContent = row.vendor || &#x27;Unavailable&#x27;;
+        root.querySelector(&#x27;#so-preview-orderer&#x27;).textContent = row.orderer || &#x27;Unavailable&#x27;;
+        root.querySelector(&#x27;#so-preview-project&#x27;).textContent = row.project || &#x27;Unavailable&#x27;;
+        root.querySelector(&#x27;#so-preview-directory&#x27;).textContent = directoryName(row);
+        root.querySelector(&#x27;#so-preview-readme&#x27;).textContent = row.readme || &#x27;No readable README.md.&#x27;;
+        const error = root.querySelector(&#x27;#so-preview-error&#x27;); error.hidden = !row.damaged; error.textContent = row.diagnostic || &#x27;&#x27;;
+        const body = root.querySelector(&#x27;#so-preview-items&#x27;); body.replaceChildren();
+        row.items.slice(0,3).forEach(item =&gt; { const tr=document.createElement(&#x27;tr&#x27;); tr.innerHTML=`&lt;td&gt;${item[0]}&lt;/td&gt;&lt;td class=&quot;text-end&quot;&gt;${item[2]}&lt;/td&gt;&lt;td class=&quot;text-end&quot;&gt;${money(item[2]*item[3],row.currency)}&lt;/td&gt;`; body.appendChild(tr); });
+        if (!row.items.length) { const tr=document.createElement(&#x27;tr&#x27;); tr.innerHTML=&#x27;&lt;td colspan=&quot;3&quot; class=&quot;text-muted&quot;&gt;No trusted item data&lt;/td&gt;&#x27;; body.appendChild(tr); }
+        root.querySelector(&#x27;#so-preview-total&#x27;).textContent = row.damaged ? &#x27;—&#x27; : money(total(row),row.currency);
+      }
+      function renderSpotlight() {
+        const raw = query.value.trim().toLocaleLowerCase();
+        const matches = raw ? spotlight.filter(file =&gt; `${file.order} ${file.file} ${file.kind}`.toLocaleLowerCase().includes(raw)) : [];
+        const body = root.querySelector(&#x27;#so-spotlight-body&#x27;); body.replaceChildren();
+        matches.forEach(file =&gt; { const tr=document.createElement(&#x27;tr&#x27;); tr.innerHTML=`&lt;td&gt;${file.order}&lt;/td&gt;&lt;td&gt;${file.file}&lt;/td&gt;&lt;td&gt;${file.kind}&lt;/td&gt;&lt;td&gt;${file.modified}&lt;/td&gt;&lt;td&gt;&lt;button class=&quot;btn btn-ghost&quot; type=&quot;button&quot;&gt;Reveal in Finder&lt;/button&gt;&lt;/td&gt;`; body.appendChild(tr); });
+        root.querySelector(&#x27;#so-spotlight-state&#x27;).textContent = raw ? `${matches.length} matching files grouped by Order` : &#x27;Enter a query to search Supporting Material with Spotlight.&#x27;;
+      }
+      function renderEditorItems(row) {
+        const body=root.querySelector(&#x27;#so-editor-items&#x27;); body.replaceChildren();
+        row.items.forEach((item,index) =&gt; { const tr=document.createElement(&#x27;tr&#x27;); tr.dataset.item=String(index); tr.innerHTML=`&lt;td class=&quot;so-sheet-cell&quot; contenteditable=&quot;true&quot; spellcheck=&quot;false&quot;&gt;${item[1]}&lt;/td&gt;&lt;td class=&quot;so-sheet-cell&quot; contenteditable=&quot;true&quot;&gt;${item[0]}&lt;/td&gt;&lt;td class=&quot;so-sheet-cell text-end&quot; contenteditable=&quot;true&quot; inputmode=&quot;decimal&quot;&gt;${item[2]}&lt;/td&gt;&lt;td class=&quot;so-sheet-cell text-end&quot; contenteditable=&quot;true&quot; inputmode=&quot;decimal&quot;&gt;${item[3]}&lt;/td&gt;&lt;td class=&quot;text-end&quot;&gt;${money(item[2]*item[3],row.currency)}&lt;/td&gt;`; body.appendChild(tr); });
+        root.querySelector(&#x27;#so-editor-total&#x27;).textContent = money(total(row),row.currency);
+      }
+      function openOrder(row) {
+        if (row.damaged) { root.dataset.screen=&#x27;diagnostic&#x27;; return; }
+        newDraft=false; selectedId=row.id; root.dataset.screen=&#x27;editor&#x27;;
+        root.querySelector(&#x27;#so-editor-heading&#x27;).textContent=row.title;
+        root.querySelector(&#x27;#so-edit-title&#x27;).value=row.title; root.querySelector(&#x27;#so-edit-status&#x27;).value=row.status; root.querySelector(&#x27;#so-edit-date&#x27;).value=row.date; root.querySelector(&#x27;#so-edit-vendor&#x27;).value=row.vendor; root.querySelector(&#x27;#so-edit-orderer&#x27;).value=row.orderer; root.querySelector(&#x27;#so-edit-project&#x27;).value=row.project; root.querySelector(&#x27;#so-edit-directory&#x27;).value=directoryName(row); root.querySelector(&#x27;#so-edit-readme&#x27;).value=row.readme; root.querySelector(&#x27;#so-validation&#x27;).textContent=&#x27;&#x27;; root.querySelector(&#x27;#so-save&#x27;).disabled=false; renderEditorItems(row);
+      }
+      function removeSelected(trash=false) {
+        const row=selected(); const label=trash?&#x27;move to Trash&#x27;:&#x27;move to Removed&#x27;;
+        if (!window.confirm(`Are you sure you want to ${label} “${row.title}”?`)) return;
+        const index=rows.findIndex(item=&gt;item.id===row.id); rows.splice(index,1); totalOrders-=1; selectedId=rows[Math.min(index,rows.length-1)].id; rowMenu.dataset.open=&#x27;false&#x27;; renderRows(); renderPreview();
+      }
+      root.querySelectorAll(&#x27;[data-nav]&#x27;).forEach(button =&gt; button.addEventListener(&#x27;click&#x27;, () =&gt; { root.dataset.screen=button.dataset.nav; root.querySelectorAll(&#x27;[data-nav]&#x27;).forEach(peer =&gt; { const active=peer===button; peer.setAttribute(&#x27;aria-pressed&#x27;,String(active)); peer.classList.toggle(&#x27;is-selected&#x27;,active); peer.classList.toggle(&#x27;btn-ghost&#x27;,!active); }); root.querySelector(&#x27;#so-new-order&#x27;).hidden=button.dataset.nav!==&#x27;orders&#x27;; }));
+      root.querySelector(&#x27;#so-package-button&#x27;).addEventListener(&#x27;click&#x27;, event =&gt; { const open=packageMenu.dataset.open!==&#x27;true&#x27;; packageMenu.dataset.open=String(open); event.currentTarget.setAttribute(&#x27;aria-expanded&#x27;,String(open)); });
+      root.querySelector(&#x27;#so-inspector-toggle&#x27;).addEventListener(&#x27;click&#x27;, event =&gt; { const open=root.dataset.inspector!==&#x27;open&#x27;; root.dataset.inspector=open?&#x27;open&#x27;:&#x27;closed&#x27;; event.currentTarget.setAttribute(&#x27;aria-pressed&#x27;,String(open)); event.currentTarget.setAttribute(&#x27;aria-label&#x27;,open?&#x27;Hide inspector&#x27;:&#x27;Show inspector&#x27;); });
+      root.querySelector(&#x27;#so-orders-head&#x27;).addEventListener(&#x27;contextmenu&#x27;, event =&gt; { event.preventDefault(); columnMenu.dataset.open=&#x27;true&#x27;; });
+      root.querySelectorAll(&#x27;[data-column]&#x27;).forEach(box =&gt; box.addEventListener(&#x27;change&#x27;,syncColumns));
+      query.addEventListener(&#x27;input&#x27;, () =&gt; root.dataset.search===&#x27;spotlight&#x27;?renderSpotlight():renderRows());
+      root.querySelector(&#x27;#so-case&#x27;).addEventListener(&#x27;click&#x27;, event =&gt; { caseSensitive=!caseSensitive; event.currentTarget.setAttribute(&#x27;aria-pressed&#x27;,String(caseSensitive)); event.currentTarget.classList.toggle(&#x27;is-selected&#x27;,caseSensitive); renderRows(); });
+      root.querySelector(&#x27;#so-spotlight-button&#x27;).addEventListener(&#x27;click&#x27;, event =&gt; { const active=root.dataset.search!==&#x27;spotlight&#x27;; root.dataset.search=active?&#x27;spotlight&#x27;:&#x27;native&#x27;; event.currentTarget.setAttribute(&#x27;aria-pressed&#x27;,String(active)); event.currentTarget.classList.toggle(&#x27;is-selected&#x27;,active); query.placeholder=active?&#x27;Search Supporting Material with Spotlight&#x27;:&#x27;Search Orders&#x27;; active?renderSpotlight():renderRows(); query.focus(); });
+      root.querySelector(&#x27;#so-new-order&#x27;).addEventListener(&#x27;click&#x27;, () =&gt; { newDraft=true; root.dataset.screen=&#x27;editor&#x27;; root.querySelector(&#x27;#so-editor-heading&#x27;).textContent=&#x27;New Order&#x27;; root.querySelector(&#x27;#so-edit-title&#x27;).value=&#x27;&#x27;; root.querySelector(&#x27;#so-edit-status&#x27;).value=&#x27;In Preparation&#x27;; root.querySelector(&#x27;#so-edit-date&#x27;).value=&#x27;2026-07-21&#x27;; root.querySelector(&#x27;#so-edit-vendor&#x27;).value=&#x27;No Vendor&#x27;; root.querySelector(&#x27;#so-edit-orderer&#x27;).value=&#x27;&#x27;; root.querySelector(&#x27;#so-edit-project&#x27;).value=&#x27;&#x27;; root.querySelector(&#x27;#so-edit-directory&#x27;).value=&#x27;Created when saved&#x27;; root.querySelector(&#x27;#so-edit-readme&#x27;).value=&#x27;&#x27;; root.querySelector(&#x27;#so-validation&#x27;).textContent=&#x27;&#x27;; root.querySelector(&#x27;#so-save&#x27;).disabled=true; renderEditorItems({items:[],currency:&#x27;USD&#x27;}); root.querySelector(&#x27;#so-edit-title&#x27;).focus(); });
+      root.querySelector(&#x27;#so-edit-title&#x27;).addEventListener(&#x27;input&#x27;, event =&gt; { if (newDraft) root.querySelector(&#x27;#so-save&#x27;).disabled=!event.currentTarget.value.trim(); });
+      root.querySelector(&#x27;#so-edit-status&#x27;).addEventListener(&#x27;change&#x27;, event =&gt; { if (event.currentTarget.value===&#x27;Ordered&#x27; &amp;&amp; !root.querySelector(&#x27;#so-edit-date&#x27;).value) root.querySelector(&#x27;#so-edit-date&#x27;).value=&#x27;2026-07-21&#x27;; });
+      root.querySelectorAll(&#x27;[data-vendor]&#x27;).forEach(button =&gt; button.addEventListener(&#x27;click&#x27;, () =&gt; { root.querySelector(&#x27;#so-edit-vendor&#x27;).value=button.dataset.vendor; root.querySelector(&#x27;#so-edit-orderer&#x27;).focus(); }));
+      root.querySelector(&#x27;[data-vendor-action=&quot;new&quot;]&#x27;).addEventListener(&#x27;click&#x27;, () =&gt; window.alert(&#x27;New Vendor sheet opens without discarding this Order draft.&#x27;));
+      root.querySelector(&#x27;#so-edit-vendor&#x27;).addEventListener(&#x27;input&#x27;, event =&gt; { const needle=event.currentTarget.value.toLocaleLowerCase(); root.querySelectorAll(&#x27;[data-vendor]&#x27;).forEach(button =&gt; { button.hidden=needle &amp;&amp; !button.textContent.toLocaleLowerCase().includes(needle); }); });
+      root.querySelector(&#x27;#so-editor-align&#x27;).addEventListener(&#x27;click&#x27;, () =&gt; { const row=selected(); row.directory=directoryName({...row,title:root.querySelector(&#x27;#so-edit-title&#x27;).value,date:root.querySelector(&#x27;#so-edit-date&#x27;).value}); root.querySelector(&#x27;#so-edit-directory&#x27;).value=row.directory; });
+      root.querySelector(&#x27;#so-context-open&#x27;).addEventListener(&#x27;click&#x27;, () =&gt; openOrder(selected()));
+      root.querySelector(&#x27;#so-context-align&#x27;).addEventListener(&#x27;click&#x27;, () =&gt; { const row=selected(); row.directory=directoryName(row); rowMenu.dataset.open=&#x27;false&#x27;; renderPreview(); });
+      root.querySelector(&#x27;#so-context-remove&#x27;).addEventListener(&#x27;click&#x27;, () =&gt; removeSelected(false)); root.querySelector(&#x27;#so-context-trash&#x27;).addEventListener(&#x27;click&#x27;, () =&gt; removeSelected(true));
+      root.querySelector(&#x27;#so-editor-back&#x27;).addEventListener(&#x27;click&#x27;, () =&gt; { root.dataset.screen=&#x27;orders&#x27;; renderRows(); renderPreview(); }); root.querySelector(&#x27;#so-diagnostic-back&#x27;).addEventListener(&#x27;click&#x27;, () =&gt; { root.dataset.screen=&#x27;orders&#x27;; });
+      root.querySelector(&#x27;#so-save&#x27;).addEventListener(&#x27;click&#x27;, () =&gt; { const title=root.querySelector(&#x27;#so-edit-title&#x27;).value.trim(); if (!title) { root.querySelector(&#x27;#so-validation&#x27;).textContent=&#x27;Couldn’t save: Order title is required.&#x27;; root.querySelector(&#x27;#so-edit-title&#x27;).focus(); return; } if (newDraft) { const row={id:&#x27;new-order&#x27;,date:root.querySelector(&#x27;#so-edit-date&#x27;).value,status:root.querySelector(&#x27;#so-edit-status&#x27;).value,title,vendor:root.querySelector(&#x27;#so-edit-vendor&#x27;).value,orderer:root.querySelector(&#x27;#so-edit-orderer&#x27;).value,project:root.querySelector(&#x27;#so-edit-project&#x27;).value,institution:&#x27;&#x27;,group:&#x27;&#x27;,currency:&#x27;USD&#x27;,readme:root.querySelector(&#x27;#so-edit-readme&#x27;).value,items:[]}; rows.unshift(row); totalOrders+=1; selectedId=row.id; newDraft=false; } else { const row=selected(); row.title=title; row.status=root.querySelector(&#x27;#so-edit-status&#x27;).value; row.date=root.querySelector(&#x27;#so-edit-date&#x27;).value; row.vendor=root.querySelector(&#x27;#so-edit-vendor&#x27;).value; row.orderer=root.querySelector(&#x27;#so-edit-orderer&#x27;).value; row.project=root.querySelector(&#x27;#so-edit-project&#x27;).value; row.readme=root.querySelector(&#x27;#so-edit-readme&#x27;).value; } root.dataset.screen=&#x27;orders&#x27;; renderRows(); renderPreview(); });
+      root.querySelector(&#x27;#so-item-add&#x27;).addEventListener(&#x27;click&#x27;, () =&gt; { const row=newDraft?{items:[],currency:&#x27;USD&#x27;}:selected(); row.items.push([&#x27;New item&#x27;,&#x27;&#x27;,1,0]); renderEditorItems(row); });
+      root.querySelector(&#x27;#so-item-remove&#x27;).addEventListener(&#x27;click&#x27;, () =&gt; { if (newDraft) return; const row=selected(); if (row.items.length) row.items.pop(); renderEditorItems(row); });
+      document.addEventListener(&#x27;click&#x27;, event =&gt; { if (!packageMenu.contains(event.target) &amp;&amp; event.target!==root.querySelector(&#x27;#so-package-button&#x27;)) packageMenu.dataset.open=&#x27;false&#x27;; if (!columnMenu.contains(event.target)) columnMenu.dataset.open=&#x27;false&#x27;; if (!rowMenu.contains(event.target)) rowMenu.dataset.open=&#x27;false&#x27;; });
+      document.addEventListener(&#x27;keydown&#x27;, event =&gt; { const tag=event.target instanceof HTMLElement?event.target.tagName:&#x27;&#x27;; if (event.key===&#x27;Delete&#x27; &amp;&amp; root.dataset.screen===&#x27;orders&#x27; &amp;&amp; ![&#x27;INPUT&#x27;,&#x27;TEXTAREA&#x27;,&#x27;SELECT&#x27;].includes(tag)) { event.preventDefault(); removeSelected(false); } });
+      root.dataset.screen=&#x27;orders&#x27;; root.dataset.inspector=&#x27;open&#x27;; root.dataset.search=&#x27;native&#x27;; renderRows(); renderPreview(); renderSpotlight();
+    })();
+  &lt;/script&gt;
+&lt;/div&gt;
+
+&lt;script src=&quot;https://unpkg.com/@floating-ui/core@1.7.3/dist/floating-ui.core.uplands.min.js&quot;&gt;&lt;/script&gt;
+&lt;script src=&quot;https://unpkg.com/@floating-ui/dom@1.7.4/dist/floating-ui.dom.uplands.min.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  if (window.FloatingUIDOM == null) {
+    return;
+  }
+  const { autoUpdate, computePosition, flip, offset, shift, size } =
+    window.FloatingUIDOM;
+  const tooltipPlacements = new Set([&quot;top&quot;, &quot;right&quot;, &quot;bottom&quot;, &quot;left&quot;]);
+  const tooltipId = `codex-visualization-tooltip-${
+    window.crypto?.randomUUID?.() ?? Date.now().toString(36)
+  }`;
+  const tooltipGap = 5;
+  const hoverDelay = 700;
+  const skipDelay = 300;
+  let activeTrigger = null;
+  let pendingTrigger = null;
+  let tooltip = null;
+  let openTimeout = null;
+  let autoUpdateCleanup = null;
+  let positionRequest = 0;
+  let skipDelayUntil = 0;
+
+  const getTrigger = (target) =&gt;
+    target?.nodeType === Node.ELEMENT_NODE
+      ? target.closest(&quot;[data-tooltip]&quot;)
+      : null;
+  const containsTarget = (trigger, target) =&gt;
+    target?.nodeType != null &amp;&amp; trigger.contains(target);
+  const getContent = (trigger) =&gt;
+    trigger.getAttribute(&quot;data-tooltip&quot;)?.trim() ?? &quot;&quot;;
+  const getPlacement = (trigger) =&gt; {
+    const placement = trigger.getAttribute(&quot;data-tooltip-placement&quot;);
+    return tooltipPlacements.has(placement) ? placement : &quot;top&quot;;
+  };
+  const getTooltip = () =&gt; {
+    if (tooltip == null) {
+      tooltip = document.createElement(&quot;div&quot;);
+      tooltip.id = tooltipId;
+      tooltip.className = &quot;tooltip&quot;;
+      tooltip.setAttribute(&quot;role&quot;, &quot;tooltip&quot;);
+    }
+    return tooltip;
+  };
+  const setDescribedBy = (trigger, described) =&gt; {
+    const ids = new Set(
+      (trigger.getAttribute(&quot;aria-describedby&quot;) ?? &quot;&quot;)
+        .split(/\s+/)
+        .filter(Boolean),
+    );
+    if (described) {
+      ids.add(tooltipId);
+    } else {
+      ids.delete(tooltipId);
+    }
+    if (ids.size === 0) {
+      trigger.removeAttribute(&quot;aria-describedby&quot;);
+    } else {
+      trigger.setAttribute(&quot;aria-describedby&quot;, [...ids].join(&quot; &quot;));
+    }
+  };
+  const clearOpenTimeout = () =&gt; {
+    if (openTimeout != null) {
+      window.clearTimeout(openTimeout);
+      openTimeout = null;
+    }
+    pendingTrigger = null;
+  };
+  const closeTooltip = (activateSkipDelay = true) =&gt; {
+    clearOpenTimeout();
+    positionRequest += 1;
+    autoUpdateCleanup?.();
+    autoUpdateCleanup = null;
+    if (activeTrigger == null) {
+      return;
+    }
+    setDescribedBy(activeTrigger, false);
+    activeTrigger = null;
+    tooltip?.remove();
+    if (activateSkipDelay) {
+      skipDelayUntil = Date.now() + skipDelay;
+    }
+  };
+  const updatePosition = (trigger, floating) =&gt; {
+    const request = ++positionRequest;
+    void computePosition(trigger, floating, {
+      middleware: [
+        offset(tooltipGap),
+        flip({ padding: tooltipGap }),
+        shift({ padding: tooltipGap }),
+        size({
+          padding: tooltipGap,
+          apply({ availableHeight, availableWidth, elements }) {
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-width&quot;,
+              `${Math.max(0, availableWidth)}px`,
+            );
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-height&quot;,
+              `${Math.max(0, availableHeight)}px`,
+            );
+          },
+        }),
+      ],
+      placement: getPlacement(trigger),
+      strategy: &quot;fixed&quot;,
+    })
+      .then(({ x, y }) =&gt; {
+        if (activeTrigger !== trigger || request !== positionRequest) {
+          return;
+        }
+        const scale = window.devicePixelRatio || 1;
+        floating.style.transform = `translate(${Math.round(x * scale) / scale}px, ${Math.round(y * scale) / scale}px)`;
+        floating.style.visibility = &quot;visible&quot;;
+      })
+      .catch(() =&gt; {
+        if (activeTrigger === trigger &amp;&amp; request === positionRequest) {
+          closeTooltip(false);
+        }
+      });
+  };
+  const openTooltip = (trigger) =&gt; {
+    const content = getContent(trigger);
+    if (!trigger.isConnected || content.length === 0) {
+      return;
+    }
+    clearOpenTimeout();
+    if (activeTrigger === trigger) {
+      return;
+    }
+    closeTooltip();
+    const floating = getTooltip();
+    floating.textContent = content;
+    floating.style.visibility = &quot;hidden&quot;;
+    floating.style.transform = &quot;translate(0, 0)&quot;;
+    document.body.appendChild(floating);
+    activeTrigger = trigger;
+    setDescribedBy(trigger, true);
+    autoUpdateCleanup = autoUpdate(trigger, floating, () =&gt; {
+      updatePosition(trigger, floating);
+    });
+  };
+  const requestOpen = (trigger, immediate = false) =&gt; {
+    if (
+      getContent(trigger).length === 0 ||
+      activeTrigger === trigger ||
+      pendingTrigger === trigger
+    ) {
+      return;
+    }
+    clearOpenTimeout();
+    pendingTrigger = trigger;
+    const delay =
+      immediate || activeTrigger != null || Date.now() &lt; skipDelayUntil
+        ? 0
+        : hoverDelay;
+    if (delay === 0) {
+      openTooltip(trigger);
+      return;
+    }
+    openTimeout = window.setTimeout(() =&gt; {
+      openTimeout = null;
+      pendingTrigger = null;
+      openTooltip(trigger);
+    }, delay);
+  };
+  const handlePointerOpen = (event) =&gt; {
+    if (event.pointerType === &quot;touch&quot;) {
+      return;
+    }
+    const trigger = getTrigger(event.target);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    requestOpen(trigger);
+  };
+  const handleLeave = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const handleFocusIn = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (trigger?.matches(&quot;:focus-visible&quot;)) {
+      requestOpen(trigger, true);
+    }
+  };
+  const handleKeyDown = (event) =&gt; {
+    if (event.key === &quot;Escape&quot;) {
+      closeTooltip();
+    }
+  };
+  const handleContextMenu = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const destroy = () =&gt; {
+    closeTooltip(false);
+    document.removeEventListener(&quot;pointerover&quot;, handlePointerOpen);
+    document.removeEventListener(&quot;pointerout&quot;, handleLeave);
+    document.removeEventListener(&quot;focusin&quot;, handleFocusIn);
+    document.removeEventListener(&quot;focusout&quot;, handleLeave);
+    document.removeEventListener(&quot;keydown&quot;, handleKeyDown);
+    document.removeEventListener(&quot;contextmenu&quot;, handleContextMenu);
+    tooltip = null;
+  };
+
+  document.addEventListener(&quot;pointerover&quot;, handlePointerOpen);
+  document.addEventListener(&quot;pointerout&quot;, handleLeave);
+  document.addEventListener(&quot;focusin&quot;, handleFocusIn);
+  document.addEventListener(&quot;focusout&quot;, handleLeave);
+  document.addEventListener(&quot;keydown&quot;, handleKeyDown);
+  document.addEventListener(&quot;contextmenu&quot;, handleContextMenu);
+  window.addEventListener(&quot;pagehide&quot;, destroy, { once: true });
+})();
+&lt;/script&gt;
+&lt;script id=&quot;codex-visualization-lucide&quot; async src=&quot;https://unpkg.com/lucide@1.17.0/dist/uplands/lucide.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  const initialize = () =&gt; {
+    globalThis.lucide?.createIcons({ attrs: { width: 16, height: 16 } });
+  };
+  if (globalThis.lucide != null) {
+    initialize();
+    return;
+  }
+  document
+    .getElementById(&quot;codex-visualization-lucide&quot;)
+    ?.addEventListener(&quot;load&quot;, initialize, { once: true });
+})();
+&lt;/script&gt;
+
+&lt;/body&gt;
+&lt;/html&gt;
+"></iframe>
+</body>
+</html>

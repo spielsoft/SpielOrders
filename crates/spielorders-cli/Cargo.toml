@@ -1,0 +1,15 @@
+[package]
+name = "spielorders-cli"
+description = "Command-line adapter for SpielOrders"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "spielorders"
+path = "src/main.rs"
+
+[dependencies]
+spielorders-core.workspace = true
+

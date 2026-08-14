@@ -1,0 +1,22 @@
+[package]
+name = "spielorders-desktop"
+description = "Tauri desktop adapter for SpielOrders"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+name = "spielorders_desktop_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "spielorders-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+spielorders-core.workspace = true
+tauri = { version = "2.11.5", features = [] }

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "vendors": [
+    {
+      "vendor_id": "e0990d31-06aa-42e9-97c8-088e3e894822",
+      "name": "Tarnwick",
+      "contacts": [
+        {
+          "email": "contact@example.test"
+        }
+      ]
+    }
+  ]
+}
+

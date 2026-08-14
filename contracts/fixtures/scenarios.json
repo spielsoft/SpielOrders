@@ -1,0 +1,302 @@
+{
+  "decision_sources": [
+    {"name":"Define the SpielOrders package topology","path":"../issues/wayfinder/spielorders-product-architecture/tickets/002-package-topology.md"},
+    {"name":"Define the Order record and lifecycle contract","path":"../issues/wayfinder/spielorders-product-architecture/tickets/003-order-record-lifecycle.md"},
+    {"name":"Define Vendor identity and historical semantics","path":"../issues/wayfinder/spielorders-product-architecture/tickets/004-vendor-identity-history.md"},
+    {"name":"Define integrity, validation, and repair boundaries","path":"../issues/wayfinder/spielorders-product-architecture/tickets/008-integrity-repair.md"},
+    {"name":"Define legacy Order adoption and metadata bootstrapping","path":"../issues/wayfinder/spielorders-product-architecture/tickets/009-legacy-adoption.md"},
+    {"name":"Define durable metadata schemas and version evolution","path":"../issues/wayfinder/spielorders-product-architecture/tickets/010-metadata-schemas.md"}
+  ],
+  "scenarios": [
+    {
+      "name": "unmanaged root",
+      "sources": ["Define the SpielOrders package topology", "Define integrity, validation, and repair boundaries"],
+      "condition": "The root has no .spielorders directory.",
+      "tree": [{"path":"README.md","kind":"file","contents":"ordinary user content"}],
+      "schema_validity": "not_applicable",
+      "semantic_validity": "not_applicable",
+      "integrity_scope": "unmanaged",
+      "warning_state": "none",
+      "upgrade_state": "not_applicable",
+      "preservation": ["README.md"]
+    },
+    {
+      "name": "healthy package and healthy order",
+      "sources": ["Define the SpielOrders package topology", "Define durable metadata schemas and version evolution"],
+      "condition": "All required version-1 artifacts are present and the Order has opaque Supporting Material.",
+      "tree": [
+        {"path":".spielorders/config.toml","kind":"file","contents":"orders_path = \"Orders\"\nremoved_path = \"Removed\"\n"},
+        {"path":".spielorders/version.json","kind":"copy","source":"examples/v1/minimal/version.json"},
+        {"path":".spielorders/vendors.json","kind":"copy","source":"examples/v1/minimal/vendors.json"},
+        {"path":".spielorders/index.json","kind":"copy","source":"examples/v1/minimal/index.json"},
+        {"path":"Orders/2026_07_19_Laser_components/.spielorders/order.json","kind":"copy","source":"examples/v1/minimal/order.json"},
+        {"path":"Orders/2026_07_19_Laser_components/quote.bin","kind":"copy","source":"fixtures/assets/supporting-a.bin"}
+      ],
+      "schema_validity": "valid",
+      "semantic_validity": "valid",
+      "integrity_scope": "healthy",
+      "warning_state": "none",
+      "upgrade_state": "current_no_op",
+      "preservation": ["Orders/2026_07_19_Laser_components/quote.bin"]
+    },
+    {
+      "name": "damaged package missing canonical root artifact",
+      "sources": ["Define the SpielOrders package topology", "Define integrity, validation, and repair boundaries"],
+      "condition": "vendors.json is absent while .spielorders exists.",
+      "tree": [
+        {"path":".spielorders/config.toml","kind":"file","contents":""},
+        {"path":".spielorders/version.json","kind":"copy","source":"examples/v1/minimal/version.json"}
+      ],
+      "schema_validity": "not_examined_missing_artifact",
+      "semantic_validity": "unknown",
+      "integrity_scope": "package",
+      "warning_state": "none",
+      "upgrade_state": "blocked",
+      "preservation": []
+    },
+    {
+      "name": "damaged order malformed canonical record",
+      "sources": ["Define the SpielOrders package topology", "Define integrity, validation, and repair boundaries"],
+      "condition": "One Order has malformed JSON while the Package root remains healthy.",
+      "tree": [{"path":"Orders/Damaged/.spielorders/order.json","kind":"file","contents":"{ malformed"}],
+      "schema_validity": "invalid_syntax",
+      "semantic_validity": "unknown",
+      "integrity_scope": "order",
+      "warning_state": "none",
+      "upgrade_state": "blocked_by_order",
+      "preservation": ["other healthy Orders"]
+    },
+    {
+      "name": "ignored hidden direct children",
+      "sources": ["Define the SpielOrders package topology"],
+      "condition": "Hidden file, directory, and link entries occur directly under the Orders Directory.",
+      "tree": [
+        {"path":"Orders/.DS_Store","kind":"file","contents":"finder metadata"},
+        {"path":"Orders/.hidden","kind":"directory"},
+        {"path":"Orders/._alias","kind":"symlink","target":"outside"}
+      ],
+      "schema_validity": "not_applicable",
+      "semantic_validity": "valid",
+      "integrity_scope": "healthy",
+      "warning_state": "ignored",
+      "upgrade_state": "current_no_op",
+      "preservation": ["all hidden entries"]
+    },
+    {
+      "name": "warned direct-child file and link",
+      "sources": ["Define the SpielOrders package topology", "Define integrity, validation, and repair boundaries"],
+      "condition": "Visible non-directory entries occur directly under the Orders Directory.",
+      "tree": [
+        {"path":"Orders/loose.txt","kind":"file","contents":"user file"},
+        {"path":"Orders/VisibleAlias","kind":"symlink","target":"outside"}
+      ],
+      "schema_validity": "not_applicable",
+      "semantic_validity": "valid",
+      "integrity_scope": "package_warning",
+      "warning_state": "direct_child_entry",
+      "upgrade_state": "current_no_op",
+      "preservation": ["Orders/loose.txt", "Orders/VisibleAlias"]
+    },
+    {
+      "name": "unexpected reserved Order content",
+      "sources": ["Define the SpielOrders package topology", "Define integrity, validation, and repair boundaries"],
+      "condition": "An unrecognized file appears in an Order's reserved .spielorders directory.",
+      "tree": [{"path":"Orders/Order/.spielorders/unexpected.txt","kind":"file","contents":"unexpected"}],
+      "schema_validity": "valid_order_elsewhere",
+      "semantic_validity": "valid",
+      "integrity_scope": "order_diagnostic",
+      "warning_state": "reserved_content",
+      "upgrade_state": "current_no_op",
+      "preservation": ["unexpected content pending explicit handling"]
+    },
+    {
+      "name": "README absence",
+      "sources": ["Define the SpielOrders package topology"],
+      "condition": "Package and Order README files are absent.",
+      "tree": [],
+      "schema_validity": "valid",
+      "semantic_validity": "valid",
+      "integrity_scope": "healthy",
+      "warning_state": "none_absence_loads_empty",
+      "upgrade_state": "current_no_op",
+      "preservation": []
+    },
+    {
+      "name": "README unreadable",
+      "sources": ["Define the SpielOrders package topology", "Define integrity, validation, and repair boundaries"],
+      "condition": "An Order README exists but cannot be read as UTF-8.",
+      "tree": [{"path":"Orders/Order/README.md","kind":"file","source":"fixtures/assets/supporting-b.bin","readability":"non_utf8_recipe"}],
+      "schema_validity": "valid",
+      "semantic_validity": "valid",
+      "integrity_scope": "document_warning",
+      "warning_state": "readme_unreadable",
+      "upgrade_state": "current_no_op",
+      "preservation": ["Orders/Order/README.md"]
+    },
+    {
+      "name": "stale derived index",
+      "sources": ["Define durable metadata schemas and version evolution", "Define integrity, validation, and repair boundaries"],
+      "condition": "The valid index projection does not match current canonical facts.",
+      "tree": [{"path":".spielorders/index.json","kind":"copy","source":"examples/v1/minimal/index.json"}],
+      "schema_validity": "valid",
+      "semantic_validity": "stale_derived_data",
+      "integrity_scope": "derived_index",
+      "warning_state": "index_stale",
+      "upgrade_state": "current_no_op",
+      "preservation": ["canonical metadata"]
+    },
+    {
+      "name": "invalid derived index",
+      "sources": ["Define durable metadata schemas and version evolution", "Define integrity, validation, and repair boundaries"],
+      "condition": "index.json fails its schema while canonical artifacts remain valid.",
+      "tree": [{"path":".spielorders/index.json","kind":"copy","source":"fixtures/schema-invalid/index-missing-vendors.json"}],
+      "schema_validity": "invalid_index",
+      "semantic_validity": "valid_canonical_state",
+      "integrity_scope": "derived_index",
+      "warning_state": "index_invalid_rebuildable",
+      "upgrade_state": "current_no_op",
+      "preservation": ["canonical metadata"]
+    },
+    {
+      "name": "duplicate Order IDs",
+      "sources": ["Define the Order record and lifecycle contract", "Define durable metadata schemas and version evolution", "Define integrity, validation, and repair boundaries"],
+      "condition": "Two schema-valid Order records contain the same Order ID.",
+      "tree": [
+        {"path":"Orders/One/.spielorders/order.json","kind":"copy","source":"examples/v1/minimal/order.json"},
+        {"path":"Orders/Two/.spielorders/order.json","kind":"copy","source":"examples/v1/minimal/order.json"}
+      ],
+      "schema_validity": "valid",
+      "semantic_validity": "invalid_duplicate_order_id",
+      "integrity_scope": "both_orders",
+      "warning_state": "none",
+      "upgrade_state": "blocked",
+      "preservation": ["both Order Directories and Supporting Material"]
+    },
+    {
+      "name": "duplicate Vendor IDs",
+      "sources": ["Define Vendor identity and historical semantics", "Define durable metadata schemas and version evolution"],
+      "condition": "Two individually schema-valid Vendors share one Vendor ID.",
+      "tree": [{"path":".spielorders/vendors.json","kind":"generated","recipe":"duplicate_vendor_id"}],
+      "schema_validity": "valid",
+      "semantic_validity": "invalid_duplicate_vendor_id",
+      "integrity_scope": "package",
+      "warning_state": "none",
+      "upgrade_state": "blocked",
+      "preservation": []
+    },
+    {
+      "name": "duplicate Vendor Names",
+      "sources": ["Define Vendor identity and historical semantics", "Define durable metadata schemas and version evolution"],
+      "condition": "Vendor Names differ only by surrounding whitespace and case.",
+      "tree": [{"path":".spielorders/vendors.json","kind":"generated","recipe":"duplicate_vendor_name"}],
+      "schema_validity": "valid",
+      "semantic_validity": "invalid_duplicate_vendor_name",
+      "integrity_scope": "package",
+      "warning_state": "none",
+      "upgrade_state": "blocked",
+      "preservation": []
+    },
+    {
+      "name": "unresolved Vendor Reference",
+      "sources": ["Define Vendor identity and historical semantics", "Define integrity, validation, and repair boundaries"],
+      "condition": "A schema-valid Order references a UUID absent from vendors.json.",
+      "tree": [{"path":"Orders/Order/.spielorders/order.json","kind":"generated","recipe":"unresolved_vendor_reference"}],
+      "schema_validity": "valid",
+      "semantic_validity": "invalid_unresolved_vendor_reference",
+      "integrity_scope": "order",
+      "warning_state": "none",
+      "upgrade_state": "blocked_by_order",
+      "preservation": ["Order Directory and Supporting Material"]
+    },
+    {
+      "name": "directory-name drift",
+      "sources": ["Define the SpielOrders package topology", "Define the Order record and lifecycle contract"],
+      "condition": "The Order Directory basename differs from the current projection.",
+      "tree": [{"path":"Orders/Old_Name/.spielorders/order.json","kind":"copy","source":"examples/v1/minimal/order.json"}],
+      "schema_validity": "valid",
+      "semantic_validity": "valid",
+      "integrity_scope": "healthy",
+      "warning_state": "none_drift_is_ordinary",
+      "upgrade_state": "current_no_op",
+      "preservation": ["directory basename until explicit alignment"]
+    },
+    {
+      "name": "unusual valid numeric Item values",
+      "sources": ["Define the Order record and lifecycle contract", "Define durable metadata schemas and version evolution"],
+      "condition": "An Item uses negative quantity and fractional negative unit price.",
+      "tree": [{"path":"Orders/Order/.spielorders/order.json","kind":"generated","recipe":"negative_finite_item_values"}],
+      "schema_validity": "valid",
+      "semantic_validity": "valid",
+      "integrity_scope": "healthy",
+      "warning_state": "none",
+      "upgrade_state": "current_no_op",
+      "preservation": []
+    },
+    {
+      "name": "staging artifact",
+      "sources": ["Define integrity, validation, and repair boundaries", "Define durable metadata schemas and version evolution"],
+      "condition": "A beside-destination staging artifact remains after interruption.",
+      "tree": [{"path":".spielorders/.vendors.json.spielorders-stage","kind":"file","contents":"staged bytes"}],
+      "schema_validity": "valid_canonical_state",
+      "semantic_validity": "valid",
+      "integrity_scope": "staging_diagnostic",
+      "warning_state": "staging_artifact",
+      "upgrade_state": "current_no_op",
+      "preservation": ["canonical destination and staging evidence"]
+    },
+    {
+      "name": "unsupported newer metadata",
+      "sources": ["Define durable metadata schemas and version evolution"],
+      "condition": "The Package marker declares a newer unsupported metadata version.",
+      "tree": [{"path":".spielorders/version.json","kind":"file","contents":"{\"metadata_version\":999}\n"}],
+      "schema_validity": "unsupported_version",
+      "semantic_validity": "not_interpreted",
+      "integrity_scope": "package",
+      "warning_state": "unsupported_newer",
+      "upgrade_state": "unsupported_future",
+      "preservation": ["entire Package unchanged"]
+    },
+    {
+      "name": "interrupted upgrade version combination",
+      "sources": ["Define durable metadata schemas and version evolution"],
+      "condition": "The marker remains at a supported source while canonical files are a permitted mix of source and the one recognized target.",
+      "tree": [{"path":"symbolic-version-state.json","kind":"symbolic","contents":"No version-0 or speculative version-2 schema is invented."}],
+      "schema_validity": "valid_under_each_declared_supported_schema",
+      "semantic_validity": "valid_upgrade_intermediate",
+      "integrity_scope": "upgrade_blocked_ordinary_use",
+      "warning_state": "none",
+      "upgrade_state": "resumable_interrupted",
+      "preservation": ["already upgraded artifacts and source-version remainder"]
+    },
+    {
+      "name": "legacy adoption candidate with ambiguous evidence",
+      "sources": ["Define legacy Order adoption and metadata bootstrapping", "Define the SpielOrders package topology"],
+      "condition": "An eligible ordinary Order Directory has an ambiguous legacy basename, an existing README, and opaque Supporting Material but no managed metadata.",
+      "tree": [
+        {"path":"Orders/2018_02_20_Francisco_KurtJLesker/README.md","kind":"file","contents":"existing user-authored notes"},
+        {"path":"Orders/2018_02_20_Francisco_KurtJLesker/quote.bin","kind":"copy","source":"fixtures/assets/supporting-b.bin"}
+      ],
+      "schema_validity": "not_yet_managed",
+      "semantic_validity": "requires_explicit_adoption_facts",
+      "integrity_scope": "eligible_adoption_candidate",
+      "warning_state": "ambiguous_name_is_evidence_only",
+      "upgrade_state": "not_applicable",
+      "preservation": ["existing README bytes", "opaque Supporting Material bytes"]
+    },
+    {
+      "name": "current version no-op upgrade",
+      "sources": ["Define durable metadata schemas and version evolution"],
+      "condition": "All markers and artifacts are metadata version 1, the newest recognized version.",
+      "tree": [
+        {"path":".spielorders/version.json","kind":"copy","source":"examples/v1/minimal/version.json"},
+        {"path":".spielorders/vendors.json","kind":"copy","source":"examples/v1/minimal/vendors.json"}
+      ],
+      "schema_validity": "valid",
+      "semantic_validity": "valid",
+      "integrity_scope": "healthy",
+      "warning_state": "none",
+      "upgrade_state": "current_no_op",
+      "preservation": ["all bytes unchanged"]
+    }
+  ]
+}

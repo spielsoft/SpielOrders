@@ -1,0 +1,184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://spielorders.app/schemas/v1/index.schema.json",
+  "title": "SpielOrders index.json schema version 1",
+  "$defs": {
+    "uuid_v4": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "nonblank": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["description", "quantity", "unit_price"],
+      "properties": {
+        "description": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "quantity": {
+          "type": "number"
+        },
+        "unit_price": {
+          "type": "number"
+        },
+        "catalog_number": {
+          "type": "string"
+        }
+      }
+    },
+    "order": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "package_root",
+        "order_id",
+        "title",
+        "date_ordered",
+        "status",
+        "items"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "package_root": {
+          "type": "string",
+          "pattern": "^(?:\\.\\./)+\\.\\.$"
+        },
+        "order_id": {
+          "$ref": "#/$defs/uuid_v4"
+        },
+        "title": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "date_ordered": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])$"
+        },
+        "status": {
+          "enum": ["in_preparation", "hold", "ordered", "received", "complete"]
+        },
+        "vendor_id": {
+          "$ref": "#/$defs/uuid_v4"
+        },
+        "orderer": {
+          "type": "string"
+        },
+        "ordering_institution": {
+          "type": "string"
+        },
+        "currency": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}$"
+        },
+        "project": {
+          "type": "string"
+        },
+        "order_group": {
+          "type": "string"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/item"
+          }
+        }
+      }
+    },
+    "contact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "role": {
+          "type": "string"
+        },
+        "phone": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        }
+      }
+    },
+    "vendor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vendor_id", "name", "contacts"],
+      "properties": {
+        "vendor_id": {
+          "$ref": "#/$defs/uuid_v4"
+        },
+        "name": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "phone": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "website": {
+          "type": "string"
+        },
+        "address": {
+          "type": "string"
+        },
+        "contacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/contact"
+          }
+        },
+        "purchasing_notes": {
+          "type": "string"
+        }
+      }
+    },
+    "order_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["order_directory", "order", "readme"],
+      "properties": {
+        "order_directory": {
+          "type": "string",
+          "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*//)(?!.*\\\\)[^/]+(?:/[^/]+)*$"
+        },
+        "order": {
+          "$ref": "#/$defs/order"
+        },
+        "readme": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "orders", "vendors"],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "orders": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/order_entry"
+      }
+    },
+    "vendors": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/vendor"
+      }
+    }
+  }
+}
