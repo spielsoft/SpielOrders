@@ -157,12 +157,33 @@ pub fn inspect_package_layout<F: FileSystem>(
     config: &Config,
     filesystem: &F,
 ) -> Result<PackageLayout, PackagePathError<F::Error>> {
+    let layout = resolve_package_layout(root, config, filesystem)?;
+    discover_order_direct_children(layout, filesystem).map_err(PackagePathError::FileSystem)
+}
+
+/// Establishes confined managed Package paths without enumerating Order membership.
+pub fn resolve_package_layout<F: FileSystem>(
+    root: &Path,
+    config: &Config,
+    filesystem: &F,
+) -> Result<PackageLayout, PackagePathError<F::Error>> {
     let resolved = resolve_managed_paths(root, config, filesystem)?;
-    let mut entries = filesystem
-        .read_directory(&resolved.orders_directory)
-        .map_err(PackagePathError::FileSystem)?;
+    Ok(PackageLayout {
+        root: resolved.root,
+        orders_directory: resolved.orders_directory,
+        removed_orders_directory: resolved.removed_orders_directory,
+        direct_children: Vec::new(),
+    })
+}
+
+/// Lists and classifies exactly the established Orders Directory's direct children.
+pub fn discover_order_direct_children<F: FileSystem>(
+    mut layout: PackageLayout,
+    filesystem: &F,
+) -> Result<PackageLayout, F::Error> {
+    let mut entries = filesystem.read_directory(&layout.orders_directory)?;
     entries.sort_by(|left, right| left.name().cmp(right.name()));
-    let direct_children = entries
+    layout.direct_children = entries
         .into_iter()
         .map(|entry| {
             let classification = if entry.name().as_encoded_bytes().starts_with(b".") {
@@ -173,18 +194,13 @@ pub fn inspect_package_layout<F: FileSystem>(
                 DirectChildClassification::Disallowed(entry.kind())
             };
             DirectChildObservation {
-                path: resolved.orders_directory.join(entry.name()),
+                path: layout.orders_directory.join(entry.name()),
                 classification,
             }
         })
         .collect();
 
-    Ok(PackageLayout {
-        root: resolved.root,
-        orders_directory: resolved.orders_directory,
-        removed_orders_directory: resolved.removed_orders_directory,
-        direct_children,
-    })
+    Ok(layout)
 }
 
 pub fn validate_order_package_locator<F: FileSystem>(

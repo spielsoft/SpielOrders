@@ -1,7 +1,7 @@
 ---
 title: M2 — Package loading, diagnostics, and Package Index
-status: open
-progress: 0/6 tickets closed
+status: closed; awaiting fresh external validation
+progress: 6/6 tickets closed
 parent: SpielOrders implementation roadmap
 labels:
   - implementation:milestone
@@ -36,12 +36,12 @@ absent. No ticket may restore either superseded statement.
 
 | Order | Ticket | Status | Blocked by |
 | --- | --- | --- | --- |
-| 1 | [Read one exact conventional README through the shared core](tickets/001-read-exact-conventional-readme.md) | Open; unclaimed | None |
-| 2 | [Classify and project canonical Package state](tickets/002-classify-project-canonical-package.md) | Open; unclaimed | Ticket 001 |
-| 3 | [Rebuild the Package Index and preserve replacement-failure evidence](tickets/003-rebuild-package-index.md) | Open; unclaimed | Ticket 002 |
-| 4 | [Load a current Package Index without canonical record rereads](tickets/004-load-current-index-fast-path.md) | Open; unclaimed | Ticket 003 |
-| 5 | [Validate exhaustive managed evidence without inspecting Supporting Material](tickets/005-validate-exhaustive-managed-evidence.md) | Open; unclaimed | Ticket 004 |
-| 6 | [Integrate M2 acceptance and refresh the complete selected-major toolchain](tickets/006-integrate-m2-acceptance-and-refresh.md) | Open; unclaimed | Ticket 005 |
+| 1 | [Read one exact conventional README through the shared core](tickets/001-read-exact-conventional-readme.md) | Closed 2026-08-14 | None |
+| 2 | [Classify and project canonical Package state](tickets/002-classify-project-canonical-package.md) | Closed 2026-08-15 | None; Ticket 001 closed |
+| 3 | [Rebuild the Package Index and preserve replacement-failure evidence](tickets/003-rebuild-package-index.md) | Closed 2026-08-15 | None; Ticket 002 closed |
+| 4 | [Load a current Package Index without canonical record rereads](tickets/004-load-current-index-fast-path.md) | Closed 2026-08-20 | None; Ticket 003 closed |
+| 5 | [Validate exhaustive managed evidence without inspecting Supporting Material](tickets/005-validate-exhaustive-managed-evidence.md) | Closed 2026-08-21 | [Load a current Package Index without canonical record rereads](tickets/004-load-current-index-fast-path.md) closed |
+| 6 | [Integrate M2 acceptance and refresh the complete selected-major toolchain](tickets/006-integrate-m2-acceptance-and-refresh.md) | Closed 2026-08-21 | [Validate exhaustive managed evidence without inspecting Supporting Material](tickets/005-validate-exhaustive-managed-evidence.md) closed |
 
 ```text
 001 Exact README read
@@ -67,6 +67,16 @@ core behavior and filesystem-port evidence needed by the next slice, and each ca
 be reviewed from its own exact fixed point without concurrent ownership of shared
 load, diagnostic, or test-double seams.
 
+Fresh external validation of completed target
+`f9ff9ad901438dc88c88e26136cebd3fabe418ce` passed every executable and
+preservation gate but found one Spec evidence defect in
+[Integrate M2 acceptance and refresh the complete selected-major toolchain](tickets/006-integrate-m2-acceptance-and-refresh.md)'s
+exact prior-slice review inventory. At reopen, that capability was the first and only
+open, unblocked, unclaimed ticket. Its prior closure remains historical. The
+reopened worker claimed it from the exact clean post-reopen fixed point, corrected
+and revalidated only that ticket, and reclosed it after the complete gate and
+review passed. M3 and earlier behavior slices remained out of scope.
+
 ## Shared operating contract
 
 - Select only the first milestone-order ticket that is open, has every blocker
@@ -75,9 +85,10 @@ load, diagnostic, or test-double seams.
 - Each worker claims and implements exactly one ticket. It must not begin, partly
   implement, or claim the following ticket.
 - Each worker updates only its own ticket and the milestone index entries directly
-  affected by that ticket's claim, blockers, status, result, and progress. Tickets
-  001 through 005 never close the milestone; only Ticket 006 may do so after its
-  complete refreshed gate passes.
+  affected by that ticket's claim, blockers, status, result, and progress. The
+  first five named capability slices never close the milestone; only
+  [Integrate M2 acceptance and refresh the complete selected-major toolchain](tickets/006-integrate-m2-acceptance-and-refresh.md)
+  may do so after its complete refreshed gate passes.
 - Before any edit, require an empty
   `git status --porcelain=v1 --untracked-files=all`, resolve the exact
   `git rev-parse HEAD`, and verify every blocker is closed. Record that pre-claim
@@ -166,8 +177,10 @@ the first observable capability that needs them and extended only by the ticket
 owning the next observable condition; no two tickets independently implement the
 same behavior. The linear graph has no cycle. No ticket is a types-only layer,
 generic repository/framework, speculative adapter slice, schema/version change, or
-M3 behavior. Ticket 006 owns the one complete closeout refresh, so it is neither
-omitted nor duplicated.
+M3 behavior. The
+[integrated M2 acceptance and selected-major refresh](tickets/006-integrate-m2-acceptance-and-refresh.md)
+capability owns the one complete closeout refresh, so it is neither omitted nor
+duplicated.
 
 ## Handoff chain
 
@@ -180,22 +193,24 @@ permission to update/close only that worker's ticket and the milestone status as
 appropriate, and this same handoff requirement. If no ticket is eligible, report
 the exact blocker or current claim instead of selecting later work.
 
-When Ticket 006 closes, stop the implementation chain. M2 is complete only after
-fresh external validation reproduces the completed target. The Ticket 006 handoff
-must therefore be a validation-only prompt that prohibits fixes, dependency
-changes, and M3 work.
+When
+[Integrate M2 acceptance and refresh the complete selected-major toolchain](tickets/006-integrate-m2-acceptance-and-refresh.md)
+closes, stop the implementation chain. M2 is complete only after fresh external
+validation reproduces the completed target. Its handoff must therefore be a
+validation-only prompt that prohibits fixes, dependency changes, and M3 work.
 
 ## Milestone acceptance and closeout refresh
 
-Ticket 006 is the final integrated M2 acceptance ticket. It must begin from the
-frozen M1-upgrade release-drift inventory:
+[Integrate M2 acceptance and refresh the complete selected-major toolchain](tickets/006-integrate-m2-acceptance-and-refresh.md)
+is the final integrated M2 acceptance capability. It must begin from the frozen
+M1-upgrade release-drift inventory:
 
 - `@types/react` 19.2.17 -> 19.2.18;
 - `@types/react-dom` 19.2.3 -> 19.2.4;
 - `fast-uri` 3.1.4 -> 3.1.5; and
 - optional `@napi-rs/wasm-runtime` 1.2.1 -> 1.2.2.
 
-That inventory is a starting point, not a ceiling. At Ticket 006 start, refresh
+That inventory is a starting point, not a ceiling. At that capability's start, refresh
 authoritative release data for Rust, Cargo, Node, npm, TypeScript, every direct
 dependency, and every compatible locked transitive. Adopt the newest available
 minor and patch within every selected major automatically under
@@ -212,7 +227,19 @@ deterministic healthy-only rebuild, every load-result family, exhaustive evidenc
 boundary, blocking replacement failure with healthy canonical state preserved,
 portable filesystem-port fault injection, and byte-identical opaque sentinels.
 
-Only after the fixed-point Standards and Spec review is resolved may Ticket 006
+Only after the fixed-point Standards and Spec review is resolved may
+[Integrate M2 acceptance and refresh the complete selected-major toolchain](tickets/006-integrate-m2-acceptance-and-refresh.md)
 close the milestone and update the roadmap to completed M2 awaiting external
-validation. A fresh worker must then externally validate the exact completed target
-before any M3 work begins.
+validation. A fresh worker must then externally validate the exact completed
+target before any M3 work begins.
+
+## Result
+
+All six vertical slices are closed. The complete selected-major refresh and
+[integrated acceptance](ACCEPTANCE.md) passed from fresh no-hardlink target copies,
+the fixed-point Standards and Spec review has no unresolved finding, and M2 is
+complete at the implementation layer. Fresh external validation of the exact
+completed target is required before M3 may begin. The milestone closure transition
+for the first lifecycle was `3edd745c002805a668cd33d8a5d89ea6a46009f3`;
+the reopened closure transition is
+`e280145ae8eff2b03a856562aa2338b0cebd263f`.

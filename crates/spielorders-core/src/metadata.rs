@@ -17,7 +17,7 @@ impl Serialize for Version1 {
 
 macro_rules! uuid_v4_id {
     ($name:ident) => {
-        #[derive(Clone, Debug, Eq, PartialEq)]
+        #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
         pub struct $name(String);
 
         impl $name {
@@ -213,6 +213,18 @@ impl<'de> Deserialize<'de> for Currency {
 pub struct IndexOrderDirectory(String);
 
 impl IndexOrderDirectory {
+    pub fn new(text: impl Into<String>) -> Result<Self, MetadataError> {
+        let text = text.into();
+        if is_valid_index_order_directory(&text) {
+            Ok(Self(text))
+        } else {
+            Err(MetadataError {
+                kind: MetadataErrorKind::Shape,
+                message: "expected a normalized relative slash-separated path".into(),
+            })
+        }
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -233,14 +245,7 @@ impl<'de> Deserialize<'de> for IndexOrderDirectory {
         D: serde::Deserializer<'de>,
     {
         let text = String::deserialize(deserializer)?;
-        let valid = !text.is_empty()
-            && !text.starts_with('/')
-            && !matches!(text.as_bytes(), [drive, b':', ..] if drive.is_ascii_alphabetic())
-            && !text.contains('\\')
-            && text
-                .split('/')
-                .all(|segment| !segment.is_empty() && segment != "." && segment != "..");
-        if valid {
+        if is_valid_index_order_directory(&text) {
             Ok(Self(text))
         } else {
             Err(serde::de::Error::custom(
@@ -486,6 +491,20 @@ impl MetadataError {
     pub fn kind(&self) -> MetadataErrorKind {
         self.kind
     }
+
+    pub(crate) fn non_deterministic() -> Self {
+        Self {
+            kind: MetadataErrorKind::Serialization,
+            message: "managed JSON is not deterministically serialized".into(),
+        }
+    }
+
+    pub(crate) fn invalid_semantics() -> Self {
+        Self {
+            kind: MetadataErrorKind::Shape,
+            message: "managed JSON has invalid embedded semantics".into(),
+        }
+    }
 }
 
 impl std::fmt::Display for MetadataError {
@@ -542,6 +561,268 @@ fn default_removed_path() -> String {
     "Removed".into()
 }
 
+pub(crate) fn config_shape_field(bytes: &[u8]) -> Option<String> {
+    let table = std::str::from_utf8(bytes)
+        .ok()?
+        .parse::<toml::Table>()
+        .ok()?;
+    for key in table.keys() {
+        if key != "orders_path" && key != "removed_path" {
+            return Some(key.clone());
+        }
+    }
+    for key in ["orders_path", "removed_path"] {
+        if table.get(key).is_some_and(|value| !value.is_str()) {
+            return Some(key.into());
+        }
+    }
+    None
+}
+
+pub(crate) fn version_shape_field(bytes: &[u8]) -> Option<String> {
+    let value = serde_json::from_slice::<serde_json::Value>(bytes).ok()?;
+    let object = value.as_object()?;
+    if !object.contains_key("metadata_version") {
+        return Some("metadata_version".into());
+    }
+    object
+        .keys()
+        .find(|key| key.as_str() != "metadata_version")
+        .cloned()
+        .or_else(|| (!object["metadata_version"].is_u64()).then(|| "metadata_version".into()))
+}
+
+pub(crate) fn order_shape_field(bytes: &[u8]) -> Option<String> {
+    let value = serde_json::from_slice::<serde_json::Value>(bytes).ok()?;
+    let object = value.as_object()?;
+    let required = [
+        "schema_version",
+        "package_root",
+        "order_id",
+        "title",
+        "date_ordered",
+        "status",
+        "items",
+    ];
+    let known = [
+        "schema_version",
+        "package_root",
+        "order_id",
+        "title",
+        "date_ordered",
+        "status",
+        "vendor_id",
+        "orderer",
+        "ordering_institution",
+        "currency",
+        "project",
+        "order_group",
+        "items",
+    ];
+    if let Some(field) = required.iter().find(|field| !object.contains_key(**field)) {
+        return Some((*field).into());
+    }
+    if let Some(field) = object.keys().find(|field| !known.contains(&field.as_str())) {
+        return Some(field.clone());
+    }
+    for (field, valid) in [
+        ("schema_version", object["schema_version"].is_u64()),
+        ("package_root", object["package_root"].is_string()),
+        ("order_id", object["order_id"].is_string()),
+        ("title", object["title"].is_string()),
+        ("date_ordered", object["date_ordered"].is_string()),
+        ("status", object["status"].is_string()),
+    ] {
+        if !valid {
+            return Some(field.into());
+        }
+    }
+    for field in [
+        "vendor_id",
+        "orderer",
+        "ordering_institution",
+        "currency",
+        "project",
+        "order_group",
+    ] {
+        if object.get(field).is_some_and(|value| !value.is_string()) {
+            return Some(field.into());
+        }
+    }
+    let Some(items) = object["items"].as_array() else {
+        return Some("items".into());
+    };
+    for (index, item) in items.iter().enumerate() {
+        let Some(item) = item.as_object() else {
+            return Some(format!("items[{index}]"));
+        };
+        for field in ["description", "quantity", "unit_price"] {
+            if !item.contains_key(field) {
+                return Some(format!("items[{index}].{field}"));
+            }
+        }
+        let known_item = ["description", "quantity", "unit_price", "catalog_number"];
+        if let Some(field) = item
+            .keys()
+            .find(|field| !known_item.contains(&field.as_str()))
+        {
+            return Some(format!("items[{index}].{field}"));
+        }
+        for (field, valid) in [
+            (
+                "description",
+                serde_json::from_value::<NonBlankString>(item["description"].clone()).is_ok(),
+            ),
+            (
+                "quantity",
+                serde_json::from_value::<FiniteNumber>(item["quantity"].clone()).is_ok(),
+            ),
+            (
+                "unit_price",
+                serde_json::from_value::<FiniteNumber>(item["unit_price"].clone()).is_ok(),
+            ),
+        ] {
+            if !valid {
+                return Some(format!("items[{index}].{field}"));
+            }
+        }
+        if item
+            .get("catalog_number")
+            .is_some_and(|value| !value.is_string())
+        {
+            return Some(format!("items[{index}].catalog_number"));
+        }
+    }
+    for (field, valid) in [
+        (
+            "package_root",
+            serde_json::from_value::<PackageRoot>(object["package_root"].clone()).is_ok(),
+        ),
+        (
+            "order_id",
+            serde_json::from_value::<OrderId>(object["order_id"].clone()).is_ok(),
+        ),
+        (
+            "title",
+            serde_json::from_value::<NonBlankString>(object["title"].clone()).is_ok(),
+        ),
+        (
+            "date_ordered",
+            serde_json::from_value::<DateOrdered>(object["date_ordered"].clone()).is_ok(),
+        ),
+        (
+            "status",
+            serde_json::from_value::<OrderStatus>(object["status"].clone()).is_ok(),
+        ),
+    ] {
+        if !valid {
+            return Some(field.into());
+        }
+    }
+    if object
+        .get("currency")
+        .is_some_and(|value| serde_json::from_value::<Currency>(value.clone()).is_err())
+    {
+        return Some("currency".into());
+    }
+    None
+}
+
+pub(crate) fn vendors_shape_field(bytes: &[u8]) -> Option<String> {
+    let value = serde_json::from_slice::<serde_json::Value>(bytes).ok()?;
+    let object = value.as_object()?;
+    for field in ["schema_version", "vendors"] {
+        if !object.contains_key(field) {
+            return Some(field.into());
+        }
+    }
+    if let Some(field) = object
+        .keys()
+        .find(|field| field.as_str() != "schema_version" && field.as_str() != "vendors")
+    {
+        return Some(field.clone());
+    }
+    if !object["schema_version"].is_u64() {
+        return Some("schema_version".into());
+    }
+    let Some(vendors) = object["vendors"].as_array() else {
+        return Some("vendors".into());
+    };
+    for (vendor_index, vendor) in vendors.iter().enumerate() {
+        let Some(vendor) = vendor.as_object() else {
+            return Some(format!("vendors[{vendor_index}]"));
+        };
+        for field in ["vendor_id", "name", "contacts"] {
+            if !vendor.contains_key(field) {
+                return Some(format!("vendors[{vendor_index}].{field}"));
+            }
+        }
+        let known_vendor = [
+            "vendor_id",
+            "name",
+            "phone",
+            "email",
+            "website",
+            "address",
+            "contacts",
+            "purchasing_notes",
+        ];
+        if let Some(field) = vendor
+            .keys()
+            .find(|field| !known_vendor.contains(&field.as_str()))
+        {
+            return Some(format!("vendors[{vendor_index}].{field}"));
+        }
+        for (field, valid) in [
+            (
+                "vendor_id",
+                serde_json::from_value::<VendorId>(vendor["vendor_id"].clone()).is_ok(),
+            ),
+            (
+                "name",
+                serde_json::from_value::<NonBlankString>(vendor["name"].clone()).is_ok(),
+            ),
+        ] {
+            if !valid {
+                return Some(format!("vendors[{vendor_index}].{field}"));
+            }
+        }
+        for field in ["phone", "email", "website", "address", "purchasing_notes"] {
+            if vendor.get(field).is_some_and(|value| !value.is_string()) {
+                return Some(format!("vendors[{vendor_index}].{field}"));
+            }
+        }
+        let Some(contacts) = vendor["contacts"].as_array() else {
+            return Some(format!("vendors[{vendor_index}].contacts"));
+        };
+        for (contact_index, contact) in contacts.iter().enumerate() {
+            let prefix = format!("vendors[{vendor_index}].contacts[{contact_index}]");
+            let Some(contact) = contact.as_object() else {
+                return Some(prefix);
+            };
+            if !contact.contains_key("name") {
+                return Some(format!("{prefix}.name"));
+            }
+            let known_contact = ["name", "role", "phone", "email"];
+            if let Some(field) = contact
+                .keys()
+                .find(|field| !known_contact.contains(&field.as_str()))
+            {
+                return Some(format!("{prefix}.{field}"));
+            }
+            if serde_json::from_value::<NonBlankString>(contact["name"].clone()).is_err() {
+                return Some(format!("{prefix}.name"));
+            }
+            for field in ["role", "phone", "email"] {
+                if contact.get(field).is_some_and(|value| !value.is_string()) {
+                    return Some(format!("{prefix}.{field}"));
+                }
+            }
+        }
+    }
+    None
+}
+
 fn deserialize_present_optional<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     T: Deserialize<'de>,
@@ -564,6 +845,16 @@ fn is_lowercase_uuid_v4(text: &str) -> bool {
                 || byte.is_ascii_digit()
                 || matches!(byte, b'a'..=b'f')
         })
+}
+
+fn is_valid_index_order_directory(text: &str) -> bool {
+    !text.is_empty()
+        && !text.starts_with('/')
+        && !matches!(text.as_bytes(), [drive, b':', ..] if drive.is_ascii_alphabetic())
+        && !text.contains('\\')
+        && text
+            .split('/')
+            .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
 }
 
 fn is_date_shape(text: &str) -> bool {

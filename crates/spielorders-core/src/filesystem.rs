@@ -300,7 +300,7 @@ fn with_cleanup<F: FileSystem, V>(
     }
 }
 
-fn staging_path(destination: &Path) -> Option<PathBuf> {
+pub(crate) fn staging_path(destination: &Path) -> Option<PathBuf> {
     let mut staging_name = OsString::from(".");
     staging_name.push(destination.file_name()?);
     staging_name.push(".spielorders-stage");

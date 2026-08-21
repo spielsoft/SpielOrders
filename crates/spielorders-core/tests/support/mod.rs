@@ -1,10 +1,16 @@
-use spielorders_core::ports::{DirectoryEntry, FileSystem, FileSystemEntryKind};
+#![allow(dead_code)]
+
+use spielorders_core::ports::{
+    DirectoryEntry, FileChangeEvidence, FileChangeObservation, FileSystem, FileSystemEntryKind,
+};
 use std::{
     fs::OpenOptions,
     io::{self, Write},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
+
+pub mod package_index;
 
 pub struct RealFileSystem;
 
@@ -44,6 +50,30 @@ impl FileSystem for RealFileSystem {
         match std::fs::symlink_metadata(path) {
             Ok(metadata) => Ok(Some(entry_kind(&metadata.file_type()))),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn observe_file_change(&self, path: &Path) -> Result<FileChangeObservation, Self::Error> {
+        match std::fs::symlink_metadata(path) {
+            Ok(metadata) => {
+                let evidence = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+                    .map(|duration| FileChangeEvidence::Comparable {
+                        comparison_domain: 0,
+                        sequence: duration.as_nanos(),
+                    })
+                    .unwrap_or(FileChangeEvidence::Uncertain);
+                Ok(FileChangeObservation::new(
+                    Some(entry_kind(&metadata.file_type())),
+                    evidence,
+                ))
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(
+                FileChangeObservation::new(None, FileChangeEvidence::Uncertain),
+            ),
             Err(error) => Err(error),
         }
     }

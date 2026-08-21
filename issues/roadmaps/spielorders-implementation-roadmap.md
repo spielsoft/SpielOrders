@@ -1,6 +1,6 @@
 # SpielOrders implementation roadmap
 
-Status: M0 complete; M1 externally validated; M1-upgrade externally validated; M2 decision-complete; M2 implementation decomposition next; M2 implementation not started
+Status: M0 complete; M1 externally validated; M1-upgrade externally validated; M2 externally validated; M3 blocked
 
 Source: [Chart the SpielOrders product and architecture](../wayfinder/spielorders-product-architecture/MAP.md)
 
@@ -181,16 +181,26 @@ Acceptance gate:
 
 Create the read model that every adapter shares.
 
-**Status: decision-complete; implementation decomposition next; implementation not
-started.** M1 and the approved pre-M2 M1-upgrade modernization are externally
-validated. The closed
+**Status: externally validated 2026-08-21. M3 remains blocked.** M1 and the
+approved pre-M2 M1-upgrade
+modernization are externally validated. The closed
 [M2 Package read-model map](../wayfinder/m2-package-read-model/MAP.md) records the
 authoritative index freshness, stable diagnostic, and complete Package
 projection/load-state contracts. Its final
 [decision-completeness audit](../wayfinder/m2-package-read-model/tickets/004-audit-m2-decision-completeness.md)
-found no live contradiction or missing product decision and handed off one bounded
-vertical implementation-ticket decomposition slice. No M2 implementation work has
-begun.
+found no live contradiction or missing product decision. The first closure of the
+six-slice [M2 implementation milestone](../implementation/m2-package-read-model/README.md)
+delivered exact README reads, canonical projection, deterministic Package Index
+assessment/rebuild, current-index fast loading, exhaustive managed validation, and
+the complete selected-major refresh; all passed the first integrated acceptance
+and fixed-point review. Fresh external reproduction passed every
+executable, currentness, preservation, architecture, and scope gate but found that
+the lifecycle table for [Integrate M2 acceptance and refresh the complete selected-major toolchain](../implementation/m2-package-read-model/tickets/006-integrate-m2-acceptance-and-refresh.md)
+did not record the exact review-disposition commit for
+[Load a current Package Index without canonical record rereads](../implementation/m2-package-read-model/tickets/004-load-current-index-fast-path.md).
+The integrated acceptance capability corrected that evidence, passed a complete
+refreshed gate and resolved fixed-point review, and reclosed M2 for fresh external
+validation.
 
 Deliverables:
 
@@ -340,12 +350,13 @@ Each implementation issue should be independently reviewable and include:
 
 Do not create speculative shared crates, frontend packages, generic repair frameworks, a recursive Supporting Material indexer, a browser deployment, a legacy import wizard, or post-MVP filters as incidental implementation work. Proven low-level duplication may be marked for later evaluation without blocking MVP.
 
-## Recommended first execution slice
+## Recommended next execution slice
 
-Run exactly one bounded planning slice: **Decompose the decision-complete M2 read
-side into vertical implementation tickets**. Create the ordered implementation
-ticket chain and final integrated acceptance/refresh gate from all three closed M2
-contracts without implementing any ticket. Preserve metadata version 1, opaque
-Supporting Material, the Rust core/filesystem-port and adapter boundaries, and the
-mandatory complete M2-closeout refresh recorded by the externally validated
-[M1-upgrade — Toolchain and dependency modernization](../implementation/m1-upgrade-toolchain-dependencies/README.md).
+Run only fresh external validation of
+[Integrate M2 acceptance and refresh the complete selected-major toolchain](../implementation/m2-package-read-model/tickets/006-integrate-m2-acceptance-and-refresh.md)
+at the exact completed target supplied by its handoff. Reproduce the complete M2
+gate in a target-pinned no-hardlink copy and run the project-local Standards and
+Spec reviews independently. Do not fix failures, change dependencies, reinterpret
+evidence, or begin M3. Only after every gate and review passes may the validation
+worker create or update M2 external-validation evidence and mark only M2's roadmap
+status externally validated.

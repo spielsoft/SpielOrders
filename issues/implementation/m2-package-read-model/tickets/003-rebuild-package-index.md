@@ -1,6 +1,10 @@
 ---
 title: Rebuild the Package Index and preserve replacement-failure evidence
-status: open
+status: closed
+ticket_start_fixed_point: d66e9b0bf46b5c303c1944368258ea978cf2043e
+assignee: /root
+claimed_at: 2026-08-15T16:55:52Z
+closed_at: 2026-08-15T17:35:28Z
 parent: M2 — Package loading, diagnostics, and Package Index
 labels:
   - implementation:m2
@@ -179,6 +183,151 @@ Repository gates:
 
 Use the pinned Node version. Do not update dependencies, schemas, fixtures except
 narrow scenario recipes, or lockfiles.
+
+## Implementation evidence (pre-review)
+
+- Exact pre-claim fixed point:
+  `d66e9b0bf46b5c303c1944368258ea978cf2043e`.
+- Claim commit: `f488e67` (`Claim M2 Ticket 003 package index rebuild`).
+- Implementation commit: `c28258b` (`Implement M2 Package Index assessment and
+  rebuild`).
+- Public RED-to-GREEN tracer bullets began with a missing-index ordinary open and
+  advanced through every derived-index state and ordered reason, exact successful
+  current/rebuilt semantics, deterministic healthy-only Order/Vendor/README bytes,
+  damaged-Order exclusion, Package-wide damage suppression, every atomic
+  replacement/cleanup phase, retained original assessment and old bytes, exact
+  effect budgets, enumeration-order independence, and Supporting Material
+  preservation. The existing filesystem port and validated atomic-replacement
+  seam were the only fakes/effect boundaries.
+- `cargo test -p spielorders-core --test package_index_rebuild --locked`: pass,
+  `26` tests, including repeated byte-identical rebuilds from opposite directory
+  enumerations and unchanged old-index bytes for `write_stage`, `read_stage`,
+  `candidate_validation`, `sync_stage`, `replace`, and related `remove_stage`
+  cleanup failure.
+- Affected `atomic_replacement`, `metadata_v1`, `package_metadata`,
+  `order_validation`, `readme_read`, `canonical_package_load`, and `package_paths`
+  integration suites: pass (`89` tests total).
+- `cargo test -p spielorders-core --locked`: pass.
+- `cargo test --workspace --locked`: pass.
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`: pass.
+- Under `.nvmrc` Node `v26.5.1` and npm `12.0.2`, `npm run test:schemas`:
+  pass (`4` schemas, `8` accepted examples, `19` rejected fixtures, `22`
+  scenarios, and `2` preservation sentinels), and
+  `npm run check:traceability`: pass.
+- `git diff --check d66e9b0bf46b5c303c1944368258ea978cf2043e...HEAD`:
+  pass.
+- Core dependency and prohibited-scope audit retains only `focaccia`, `serde`,
+  `serde_json`, and `toml`; the changed files are core, one core integration suite,
+  and Ticket 003 claim/evidence only. There is no CLI, Tauri, React, retry, repair,
+  schema, dependency, lockfile, toolchain, M3, Ticket 004 fast-path, or Supporting
+  Material inspection change. The sole new mutation call is the existing
+  `replace_validated_file` boundary for `.spielorders/index.json`.
+- Independent sentinel hashes before review remain exactly:
+  `supporting-a.bin` =
+  `a78997f8accf7ad0fcb84540b6f7855762155f63244a39da5b361fd619d362f9`;
+  `supporting-b.bin` =
+  `7efa163282540f2e49f63c02b4ca968f5e03af57815161d50cb51fa565b75b42`.
+- No dependency, lockfile, schema, metadata-version-1 fixture, toolchain,
+  install-script authority, adapter, fast-path change observation, repair, or M3
+  change was made.
+
+## Code review and disposition
+
+Review completed at `2026-08-15T17:34:45Z` against the exact commands
+`git diff d66e9b0bf46b5c303c1944368258ea978cf2043e...HEAD` and
+`git log d66e9b0bf46b5c303c1944368258ea978cf2043e..HEAD`. Standards and Spec
+were reviewed independently and in parallel as required by the project-local
+`code-review` skill, then independently revalidated after each remediation.
+
+### Standards
+
+- Initial outcome: `1` hard fixture-boundary violation and `3` judgment calls.
+  The two one-purpose derived-index recipes now live under `contracts/` and are
+  consumed in place; one shared index-assessment routine owns observation/read/
+  version/parse/semantic/deterministic decisions; staging paths come from the
+  filesystem replacement owner; and operation-failure vocabulary lives in the
+  purpose-named `operations` module with Ticket 001 compatibility re-exports.
+- First post-remediation review found `1` traceability-marker omission and `4`
+  judgment calls. The dedicated replacement suite now carries recognized decision
+  sources; the duplicate failure matrix was removed from the rebuild suite;
+  Package-relative staging evidence is derived from the filesystem-owned absolute
+  path; index semantic validation moved beside `PackageMetadata`; and the canonical
+  module description now reflects its ordinary-load refresh orchestration.
+- The broader canonical-module split was dispositioned as unhelpful for this
+  observable vertical slice: `open_package` must compose canonical classification,
+  derived-index assessment, and required refresh into one public load result, while
+  metadata semantics, replacement mechanics, and operation evidence now have their
+  own owners.
+- Remediation commits: `dd6c332` (`Resolve Ticket 003 review findings`) and
+  `67c3763` (`Complete Ticket 003 review remediation`).
+- Final independent Standards validation found no remaining hard violation or
+  unresolved in-scope judgment-call smell.
+
+### Spec
+
+- Initial outcome: `4` findings, all accepted: staged validation did not bind the
+  bytes to the canonical candidate; index kind-observation failure could select a
+  reasonless malformed rebuild; embedded semantic/sort validation did not require
+  normalized facts; and failure location/effect/hash evidence was partial.
+- Staged bytes must now equal the canonical candidate before semantic and exact
+  deterministic validation. Index kind-observation failure returns a typed general
+  operation failure without replacement. Index validation requires already
+  normalized embedded Orders/Vendors and the required ordering.
+- The dedicated replacement-failure suite now covers all six primary/cleanup
+  phases, ordered original assessment, unchanged old bytes, exact absolute and
+  Package-relative index/staging locations, independently healthy canonical
+  evidence, one exact Orders Directory listing, the complete authorized effect
+  path budget, and byte-identical untouched Supporting Material.
+- First post-remediation Spec validation found no behavioral defect or scope creep
+  and one minor absolute-location/original-reasons assertion gap; commit `67c3763`
+  closed that gap. Final independent Spec validation found no remaining finding.
+
+### Post-review verification
+
+- `cargo test -p spielorders-core --test package_index_rebuild --locked`: pass,
+  `28` tests.
+- `cargo test -p spielorders-core --test package_index_replacement_failure
+  --locked`: pass, the complete injected failure/effect matrix.
+- Affected `atomic_replacement`, `metadata_v1`, `package_metadata`,
+  `order_validation`, `readme_read`, `canonical_package_load`, and `package_paths`
+  suites: pass (`89` tests total).
+- `cargo test -p spielorders-core --locked`: pass.
+- `cargo test --workspace --locked`: pass.
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`: pass.
+- All touched Rust sources pass `rustfmt --edition 2024 --check`.
+- Under `.nvmrc` Node `v26.5.1` and npm `12.0.2`, `npm run test:schemas`: pass
+  (`4` schemas, `8` accepted examples, `19` rejected fixtures, `22` scenarios,
+  and `2` preservation sentinels), and `npm run check:traceability`: pass.
+- `git diff --check d66e9b0bf46b5c303c1944368258ea978cf2043e...HEAD`:
+  pass.
+- Exact focused repetitions pass for enumeration-independent byte-identical
+  rebuild and the complete replacement-failure matrix. Every injected phase
+  retains the old index bytes and independently healthy canonical evidence.
+- Dependency/source audit leaves the core tree exactly `focaccia 2.0.0`, `serde
+  1.0.229`, `serde_json 1.0.151`, and `toml 1.1.4+spec-1.1.0`; no dependency,
+  lockfile, schema, metadata-version-1 fixture, toolchain, CLI, Tauri, React,
+  retry, repair, M3, Ticket 004 fast-path, or Supporting Material inspection
+  change exists. The only mutation remains the existing validated replacement
+  boundary for `.spielorders/index.json`.
+- Independent before/after sentinel commands produced identical hashes:
+  `supporting-a.bin` =
+  `a78997f8accf7ad0fcb84540b6f7855762155f63244a39da5b361fd619d362f9`;
+  `supporting-b.bin` =
+  `7efa163282540f2e49f63c02b4ca968f5e03af57815161d50cb51fa565b75b42`.
+
+## Result
+
+Ticket 003 is complete. Ordinary Package opening now assesses the Package Index
+separately from canonical health; rebuilds missing, malformed, wrong-version, and
+conservatively stale indexes from complete healthy canonical projections with
+exact deterministic metadata-version-1 bytes; excludes damaged Orders and all
+diagnostics from persisted bytes; and returns a complete current/rebuilt Package
+after successful validated atomic replacement. Every required replacement failure
+blocks ordinary use while retaining the original ordered assessment, old bytes,
+exact index/staging locations, cleanup phase, independently healthy canonical
+context, damaged placeholders, diagnostics, and untouched Supporting Material.
+Ticket 004's portable freshness observation and no-canonical-reread fast path
+remain unimplemented and unclaimed.
 
 ## Handoff requirement
 

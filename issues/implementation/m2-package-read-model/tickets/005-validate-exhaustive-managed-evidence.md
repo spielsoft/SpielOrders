@@ -1,6 +1,10 @@
 ---
 title: Validate exhaustive managed evidence without inspecting Supporting Material
-status: open
+status: closed
+ticket_start_fixed_point: ecd853b08009b1e1a946050b9594f482949bd3b7
+assignee: /root
+claimed_at: 2026-08-20T17:18:51Z
+closed_at: 2026-08-21T11:34:30Z
 parent: M2 — Package loading, diagnostics, and Package Index
 labels:
   - implementation:m2
@@ -161,6 +165,187 @@ Repository gates:
 - exact before/after hashes for both opaque sentinels.
 
 Use pinned Node and do not update dependencies or lockfiles.
+
+## Implementation evidence (pre-review)
+
+- Exact pre-claim fixed point:
+  `ecd853b08009b1e1a946050b9594f482949bd3b7`.
+- Claim commit: `2a8959d` (`Claim M2 Ticket 005 exhaustive validation`).
+- Implementation commit: `5d7a225` (`Implement M2 exhaustive managed validation`).
+- Public RED-to-GREEN tracer bullets began with the separately invoked reserved-
+  content warning that a proven-current ordinary fast load intentionally lacks,
+  then advanced one observable behavior at a time through the exhaustive result
+  and validity contract, exact Package and Order README evidence, Package and
+  Order immediate reserved listings, recognizable staging evidence and known
+  valid/invalid destinations, absent versus unavailable documents, exact warning
+  deduplication, combined Package/Order/document damage, every duplicate-ID
+  participant, deterministic Package/document/Order grouping, errors before
+  warnings, exact effect budgets, fast-load non-retroactivity, every authorized
+  canonicalize/kind/list failure, persistently observed required-artifact reads,
+  enumeration/source-detail independence, Package-damage continuation, zero
+  mutation, and real-filesystem Supporting Material preservation.
+- `cargo test -p spielorders-core --test exhaustive_validation --locked`: pass,
+  `11` public integration tests. The complete conservative failure matrix covers
+  `3` canonicalize locations, `11` authorized no-follow kind observations, `3`
+  authorized immediate directory listings, `4` required canonical read failures,
+  and both exact README read failures with exact typed operation/diagnostic paths.
+- The healthy one-Order effect-budget case reads exactly once each:
+  `config.toml`, `version.json`, `vendors.json`, the exact `order.json`, Package
+  `README.md`, and Order `README.md`; lists exactly the Orders Directory, root
+  `.spielorders`, and that Order's `.spielorders`; and performs zero stage, write,
+  sync, replace, remove, general Order Directory listing, recursion, or Supporting
+  Material effect. Canonical inspection caches the already-read healthy Order
+  README only inside the exhaustive call, so ordinary fast-path evidence remains
+  deliberately narrower.
+- Deterministic evidence covers opposite Order enumeration, Package first then
+  Package README, lexical Order then adjacent Order README groups, errors before
+  warnings, stable diagnostic/evidence ordering, exact duplicate collapse, and
+  retained per-Order duplicate-ID diagnostics with the same complete lexical
+  conflict set.
+- Combined validity evidence proves every Damaged Order and every Package error
+  invalidates exhaustive validation; healthy Orders remain available through the
+  separate ordinary load operation; warnings, unavailable READMEs, unexpected
+  reserved content, and staging artifacts never create damage; and absent READMEs
+  remain nondiagnostic empty documents.
+- A proven-current fast result compared equal before and after exhaustive
+  validation and retained no reserved/staging/document evidence. Ticket 004's
+  `package_index_fast_path` (`16` tests), `package_index_rebuild` (`28` tests), and
+  complete replacement-failure suite pass unchanged, preserving the exact
+  three-read fast path and one-list fallback behavior.
+- `cargo test -p spielorders-core --locked`: pass (`154` tests total, including
+  all canonical load, README, Package Index, metadata, Package, Order, path,
+  filesystem observation, and atomic/multi-file replacement suites).
+- `cargo test --workspace --locked`: pass; `cargo clippy --workspace --all-targets
+  --locked -- -D warnings`: pass; every touched Rust source passes
+  `rustfmt --edition 2024 --check`.
+- Under `.nvmrc` Node `v26.5.1` and npm `12.0.2`, `npm run test:schemas`: pass
+  (`4` schemas, `8` accepted examples, `19` rejected fixtures, `22` scenarios,
+  and `2` preservation sentinels), and `npm run check:traceability`: pass.
+- `git diff --check ecd853b08009b1e1a946050b9594f482949bd3b7...HEAD`:
+  pass after the implementation commit.
+- Dependency/source audit retains core's direct tree exactly as `focaccia 2.0.0`,
+  `serde 1.0.229`, `serde_json 1.0.151`, and `toml 1.1.4+spec-1.1.0`. The range
+  contains only shared-core source/tests and Ticket 005 claim/evidence; it adds no
+  CLI/Tauri/React behavior, adapter rule, dependency, lockfile, schema,
+  metadata-version-1 fixture, repair/mutation plan, recursive scan, watcher,
+  search, Ticket 006, or M3 work. Write-shaped methods remain only pre-existing
+  filesystem-port delegations used by ordinary index replacement, never by
+  exhaustive validation.
+- Independent sentinel hashes before implementation and after every pre-review
+  gate are identical: `supporting-a.bin` =
+  `a78997f8accf7ad0fcb84540b6f7855762155f63244a39da5b361fd619d362f9`;
+  `supporting-b.bin` =
+  `7efa163282540f2e49f63c02b4ca968f5e03af57815161d50cb51fa565b75b42`.
+
+## Code review and disposition
+
+Review ran from the exact fixed point with
+`git diff ecd853b08009b1e1a946050b9594f482949bd3b7...HEAD` and
+`git log ecd853b08009b1e1a946050b9594f482949bd3b7..HEAD`. Standards and Spec
+ran independently and in parallel under the project-local `code-review` skill,
+then independently revalidated remediation commit
+`178462e872a0394198338b89f0cad15eb0177ca0` (`Remediate Ticket 005 review
+findings`).
+
+Review disposition commit:
+`0c42ef3fef0ce1c6bb977a24604fcf269f15ccd9` (`Record Ticket 005 review
+disposition`). The closure commit is this ticket/index status transition and is
+recorded by exact SHA in the immediately following closure-evidence commit.
+
+### Standards
+
+- Initial outcome: no hard documented-standard violation, one moderate
+  Feature-Envy/Divergent-Change judgment finding, and one low Data-Clump/
+  Divergent-Change judgment finding. Validation-only README/path cache state in
+  public `HealthyOrder` and `DamagedPackageProjection` changed derived equality
+  and debug output; reserved inspection also suppressed `too_many_arguments` and
+  mixed specification, observation, interpretation, and group mutation.
+- Remediation removed all validation-only state from public projections. The
+  private `ExhaustiveInspectionEvidence` sidecar carries discovered Order paths,
+  and exhaustive canonical inspection defers exact README evidence to its one
+  exhaustive document pass. `ReservedDirectorySpec` now aggregates the inspection
+  contract while observation and diagnostic-group merging remain separate.
+- Final independent Standards validation found `0` hard violations and `0`
+  remaining judgment-call smells. Traceability markers, dependency direction,
+  and the filesystem-port boundary remain intact.
+
+### Spec
+
+- Initial outcome: two P1 and two P2 findings. A healthy Order later quarantined
+  for duplicate ID could have its exact README read twice; validation-only public
+  state violated ordinary-result evidence isolation; non-UTF-8 reserved names
+  were silently skipped; and the failure matrices did not independently seed and
+  guard both opaque sentinels.
+- Exhaustive canonical inspection now records only private candidate paths and
+  leaves every Package/Order README for the single exhaustive document pass. A
+  duplicate-participant regression proves one exact README read, and absent versus
+  empty README evidence no longer changes ordinary public Order equality.
+- A non-UTF-8 immediate reserved entry now conservatively returns the existing
+  typed `list_directory` operation failure at the reserved directory because a
+  complete stable managed location cannot be represented. Its Unix integration
+  test prevents incomplete success.
+- The canonicalize/kind/list matrix and exact canonical/README read cases now seed
+  both sentinels and apply one shared before/effect/after guard. Each exact read
+  failure is attempted once, neither sentinel path is observed, and bytes remain
+  unchanged.
+- Final independent Spec validation found `0` remaining findings and no scope
+  creep. Residual risk is limited to platform filesystem behavior beyond the
+  exercised Unix non-UTF-8 case.
+
+## Post-review verification
+
+- `cargo test -p spielorders-core --test exhaustive_validation --locked`: pass,
+  `13/13`, including the four review regressions and the complete conservative
+  boundary-failure/preservation matrix.
+- `cargo test -p spielorders-core --locked`: pass, `156` tests total. Ticket 004's
+  `package_index_fast_path` remains `16/16`, `package_index_rebuild` remains
+  `28/28`, and the complete replacement-failure suite passes unchanged.
+- `cargo test --workspace --locked`: pass.
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`: pass.
+- `rustfmt --edition 2024 --check` for every Rust file touched from the fixed
+  point: pass.
+- Under `.nvmrc` Node `v26.5.1` and npm `12.0.2`, `npm run test:schemas`: pass
+  (`4` schemas, `8` accepted examples, `19` rejected fixtures, `22` scenarios,
+  and `2` preservation sentinels); `npm run check:traceability`: pass.
+- `git diff --check ecd853b08009b1e1a946050b9594f482949bd3b7...HEAD`:
+  pass. The fixed-point file audit contains only shared-core source/tests and
+  Ticket 005 milestone/evidence files. It has no CLI, Tauri, React, schema,
+  metadata-version-1 fixture, dependency, lockfile, toolchain, repair/mutation,
+  Ticket 006, or M3 change.
+- `cargo tree -p spielorders-core --depth 1 --locked` remains exactly `focaccia
+  2.0.0`, `serde 1.0.229`, `serde_json 1.0.151`, and `toml
+  1.1.4+spec-1.1.0`.
+- Independent post-review sentinel hashes remain byte-identical:
+  `supporting-a.bin` =
+  `a78997f8accf7ad0fcb84540b6f7855762155f63244a39da5b361fd619d362f9`;
+  `supporting-b.bin` =
+  `7efa163282540f2e49f63c02b4ca968f5e03af57815161d50cb51fa565b75b42`.
+
+## Result
+
+Ticket 005 behavior is complete and review-clean. A caller can separately invoke
+exhaustive managed-evidence validation to obtain deterministic Package, exact
+document, lexical Order, reserved-content, and staging evidence with closed
+validity/damage semantics and typed conservative failures. Ordinary and proven-
+current fast loads retain their narrower evidence; validation performs no writes,
+never lists a general Order Directory or recurses, and neither observes nor
+changes Supporting Material. Ticket 006 integration and toolchain refresh remain
+unimplemented and unclaimed.
+
+## Exact commit record
+
+- Claim: `2a8959d5496978b48e14210a5a7811b9495aaf76` (`Claim M2 Ticket 005
+  exhaustive validation`).
+- Implementation: `5d7a225d57b7e7daa402d4ac40bd8b3b96f799b5` (`Implement M2 exhaustive
+  managed validation`).
+- Pre-review evidence: `629ac14e7ffcf5e9e6324bf4cae318f5454ab977` (`Record Ticket 005
+  pre-review evidence`).
+- Remediation: `178462e872a0394198338b89f0cad15eb0177ca0` (`Remediate Ticket 005
+  review findings`).
+- Review disposition: `0c42ef3fef0ce1c6bb977a24604fcf269f15ccd9` (`Record Ticket 005 review
+  disposition`).
+- Closure: `1ee856a490572405eac3fb46df483ce8fbf558f9` (`Close M2 Ticket 005
+  exhaustive validation`).
 
 ## Handoff requirement
 

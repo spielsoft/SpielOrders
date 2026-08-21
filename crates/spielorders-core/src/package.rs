@@ -1,8 +1,8 @@
 //! Cross-record metadata validation for a steady-state SpielOrder Package.
 
 use crate::metadata::{
-    IndexDocument, OrderDocument, Vendor, VendorId, VendorsDocument, VersionDocument,
-    normalize_optional_multiline, normalize_optional_single_line,
+    IndexDocument, IndexOrder, OrderDocument, Vendor, VendorId, VendorsDocument, Version1,
+    VersionDocument, normalize_optional_multiline, normalize_optional_single_line,
 };
 use crate::order::{OrderValidationFailure, ValidatedOrder};
 use focaccia::unicode_full_case_eq;
@@ -13,6 +13,67 @@ pub enum ReusableValue {
     Absent,
     Reused(String),
     New(String),
+}
+
+pub(crate) fn index_semantics_are_valid(index: &IndexDocument) -> bool {
+    let version = VersionDocument {
+        metadata_version: Version1,
+    };
+    let orders = index
+        .orders
+        .iter()
+        .map(|entry| entry.order.clone())
+        .collect::<Vec<_>>();
+    let vendors = VendorsDocument {
+        schema_version: Version1,
+        vendors: index.vendors.clone(),
+    };
+    let normalized_index = PackageMetadata::new(&version, &orders, &vendors)
+        .with_index(index)
+        .validate()
+        .ok()
+        .and_then(|validated| validated.index().cloned());
+    let metadata_is_valid_and_normalized = normalized_index.as_ref() == Some(index);
+    let directories_are_unique = index
+        .orders
+        .iter()
+        .map(|entry| entry.order_directory.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
+        == index.orders.len();
+    let locators_match_directories = index.orders.iter().all(|entry| {
+        entry.order.package_root.as_str().split('/').count()
+            == entry.order_directory.as_str().split('/').count()
+    });
+    let orders_are_sorted = index
+        .orders
+        .windows(2)
+        .all(|pair| compare_index_orders(&pair[0], &pair[1]).is_le());
+    metadata_is_valid_and_normalized
+        && directories_are_unique
+        && locators_match_directories
+        && orders_are_sorted
+}
+
+fn compare_index_orders(left: &IndexOrder, right: &IndexOrder) -> std::cmp::Ordering {
+    right
+        .order
+        .date_ordered
+        .as_str()
+        .cmp(left.order.date_ordered.as_str())
+        .then_with(|| {
+            left.order
+                .title
+                .as_str()
+                .as_bytes()
+                .cmp(right.order.title.as_str().as_bytes())
+        })
+        .then_with(|| {
+            left.order
+                .order_id
+                .as_str()
+                .cmp(right.order.order_id.as_str())
+        })
 }
 
 pub fn canonicalize_reusable_value<T: AsRef<str>>(

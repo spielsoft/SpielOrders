@@ -9,12 +9,41 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum FileSystemEntryKind {
     Directory,
     File,
     SymbolicLink,
     Other,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FileChangeEvidence {
+    Comparable {
+        comparison_domain: u64,
+        sequence: u128,
+    },
+    Uncertain,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FileChangeObservation {
+    kind: Option<FileSystemEntryKind>,
+    evidence: FileChangeEvidence,
+}
+
+impl FileChangeObservation {
+    pub fn new(kind: Option<FileSystemEntryKind>, evidence: FileChangeEvidence) -> Self {
+        Self { kind, evidence }
+    }
+
+    pub fn kind(self) -> Option<FileSystemEntryKind> {
+        self.kind
+    }
+
+    pub fn evidence(self) -> FileChangeEvidence {
+        self.evidence
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -61,6 +90,12 @@ pub trait FileSystem {
     /// replacement uses this value as destination identity before its first write.
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, Self::Error>;
     fn symlink_metadata(&self, path: &Path) -> Result<Option<FileSystemEntryKind>, Self::Error>;
+    /// Observes the final entry without following a symbolic link and returns
+    /// comparable in-memory change evidence when the adapter can supply it.
+    fn observe_file_change(&self, path: &Path) -> Result<FileChangeObservation, Self::Error> {
+        self.symlink_metadata(path)
+            .map(|kind| FileChangeObservation::new(kind, FileChangeEvidence::Uncertain))
+    }
     fn read_directory(&self, path: &Path) -> Result<Vec<DirectoryEntry>, Self::Error>;
 }
 

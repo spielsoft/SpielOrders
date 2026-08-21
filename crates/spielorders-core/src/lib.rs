@@ -1,13 +1,17 @@
 //! Platform-independent core boundary for SpielOrders.
 //!
-//! M1 adds the durable metadata vocabulary while Package behavior remains deferred.
+//! M1 defines durable metadata, and M2 adds canonical Package read projection,
+//! Package Index loading, and separately invoked exhaustive validation.
 
+pub mod canonical;
 pub mod filesystem;
 pub mod metadata;
+pub mod operations;
 pub mod order;
 pub mod package;
 pub mod paths;
 pub mod ports;
+pub mod readme;
 
 /// Identifies the reusable SpielOrders core crate.
 pub const CRATE_NAME: &str = "spielorders-core";

@@ -1,6 +1,10 @@
 ---
 title: Read one exact conventional README through the shared core
-status: open
+status: closed
+ticket_start_fixed_point: 3ce6265e76d61771dcc45b40bee6f6c831939d4f
+assignee: /root
+claimed_at: 2026-08-14T20:23:38Z
+closed_at: 2026-08-14T20:48:01Z
 parent: M2 — Package loading, diagnostics, and Package Index
 labels:
   - implementation:m2
@@ -140,6 +144,96 @@ Repository gates:
 
 Run under the repository-pinned Node version where npm is involved. Do not update a
 dependency or lockfile in this ticket.
+
+## Implementation evidence (pre-review)
+
+- Exact pre-claim fixed point:
+  `3ce6265e76d61771dcc45b40bee6f6c831939d4f`.
+- Claim commit: `e4b3f70` (`Claim M2 Ticket 001 README read`).
+- Implementation commit: `0cc1b6a` (`Implement exact JIT README reads`).
+- Public RED-to-GREEN tracer bullets covered absent-as-empty first, exact UTF-8,
+  no-follow wrong-kind handling, injected read failure, invalid encoding, injected
+  observation failure, version-1 cache non-evidence, absolute and normalized
+  Package-relative locations, exact effect budgets, stable vocabulary/equality/order,
+  and byte-preserving real-filesystem sentinel coverage. The filesystem port was
+  the only fake seam; no standalone filesystem-port implementation changed.
+- `cargo test -p spielorders-core --test readme_read --locked`: pass, 11 tests.
+- `cargo test -p spielorders-core --locked`: pass.
+- `cargo test --workspace --locked`: pass.
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`: the first run
+  found one test-only `useless_vec`; after replacing it with an array, the focused
+  suite and the complete clippy command passed.
+- Under `.nvmrc` Node `v26.5.1` and npm `12.0.2`, `npm run test:schemas`: pass
+  (`4` schemas, `8` accepted examples, `19` rejected fixtures, `22` scenarios,
+  and `2` preservation sentinels), and `npm run check:traceability`: pass.
+- `git diff --check 3ce6265e76d61771dcc45b40bee6f6c831939d4f...HEAD`: pass.
+- Independent sentinel hashes before and after the implementation are identical:
+  `supporting-a.bin` =
+  `a78997f8accf7ad0fcb84540b6f7855762155f63244a39da5b361fd619d362f9`;
+  `supporting-b.bin` =
+  `7efa163282540f2e49f63c02b4ca968f5e03af57815161d50cb51fa565b75b42`.
+- No dependency, lockfile, schema, metadata-version, adapter, CLI, Tauri, React,
+  Package-load/index, README-write, M3, install-script, or SpielGantt change was
+  made.
+
+## Code review and disposition
+
+Review completed at `2026-08-14T20:47:14Z` against the exact commands
+`git diff 3ce6265e76d61771dcc45b40bee6f6c831939d4f...HEAD` and
+`git log 3ce6265e76d61771dcc45b40bee6f6c831939d4f..HEAD`. Standards and Spec
+were reviewed independently and in parallel as required by the project-local
+`code-review` skill.
+
+### Standards
+
+- Outcome: `0` documented-standard violations and `2` smell-baseline judgement
+  calls.
+- Accepted Duplicated Code finding: the three repeated unavailable-warning
+  assertion blocks now use one focused `assert_unavailable` helper.
+- Dispositioned Refused Bequest finding: no second narrow filesystem trait was
+  introduced. Ticket 001 and the M2 shared operating contract explicitly require
+  the existing filesystem port to remain the sole effect/fake boundary, so the
+  documented repository/spec rule overrides this heuristic.
+- Post-disposition outcome: no unresolved Standards finding.
+
+### Spec
+
+- Outcome before remediation: `2` findings.
+- Accepted exact-reference finding: `ReadmeReference::new` now rejects missing
+  Package-relative evidence, non-`README.md` paths, mismatched absolute/relative
+  paths, and Package/Order kind mismatches; the observation-failure fixture now
+  uses an exact established Package README reference.
+- Accepted ordering finding: `Location` ordering now uses normalized
+  Package-relative paths when both are established and falls back to absolute
+  paths only when relative evidence is absent. The public test reverses absolute
+  and relative lexical order to prove the closed rule.
+- Remediation commit: `d47db73` (`Resolve Ticket 001 review findings`).
+- Review-disposition evidence commit: `6e92d1c`
+  (`Record Ticket 001 review disposition`).
+- Post-remediation outcome: no unresolved Spec finding and no scope creep retained.
+
+### Post-review verification
+
+- `cargo test -p spielorders-core --test readme_read --locked`: pass, 12 tests.
+- `cargo test -p spielorders-core --locked`: pass.
+- `cargo test --workspace --locked`: pass.
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`: pass.
+- Under `.nvmrc` Node `v26.5.1` and npm `12.0.2`, `npm run test:schemas` and
+  `npm run check:traceability`: pass.
+- `git diff --check 3ce6265e76d61771dcc45b40bee6f6c831939d4f...HEAD`: pass.
+- Sentinel hashes remain
+  `a78997f8accf7ad0fcb84540b6f7855762155f63244a39da5b361fd619d362f9`
+  (`supporting-a.bin`) and
+  `7efa163282540f2e49f63c02b4ca968f5e03af57815161d50cb51fa565b75b42`
+  (`supporting-b.bin`), identical to the recorded before values.
+
+## Result
+
+Ticket 001 is complete. The shared Rust core now reads exactly one established
+conventional Package or Order README through the existing filesystem port with the
+closed absence, UTF-8, wrong-kind, unreadable, invalid-encoding, stable evidence,
+path, effect-budget, cache non-evidence, and Supporting Material preservation
+semantics. Ticket 002 and every later M2 capability remain unimplemented.
 
 ## Handoff requirement
 

@@ -1,6 +1,12 @@
 ---
 title: Integrate M2 acceptance and refresh the complete selected-major toolchain
-status: open
+status: closed
+ticket_start_fixed_point: a97de65bd09e249991ab7969305ce7663ce3719e
+assignee: /root
+claimed_at: 2026-08-21T13:11:21Z
+closed_at: 2026-08-21T13:21:40Z
+reopened_at: 2026-08-21T12:55:39Z
+reopened_by_gate: fresh-m2-external-validation
 parent: M2 — Package loading, diagnostics, and Package Index
 labels:
   - implementation:m2
@@ -38,9 +44,21 @@ is ready for fresh external validation.
 
 ## Blocking
 
-Blocked by [Validate exhaustive managed evidence without inspecting Supporting Material](005-validate-exhaustive-managed-evidence.md).
-Tickets 001 through 005 must all be closed and integrated before this gate is
-claimed.
+Unblocked. [Validate exhaustive managed evidence without inspecting Supporting Material](005-validate-exhaustive-managed-evidence.md)
+and the four earlier named capability slices remain closed and integrated. This reopened lifecycle
+was claimed from the exact clean post-reopen documentation fixed point before any
+remediation or refreshed gate work; the frontmatter records that fixed point,
+assignee, and claim time.
+
+Fresh external validation on 2026-08-21 reopened this ticket after the independent
+Spec review found that the
+[current-index fast-path](004-load-current-index-fast-path.md) row in
+`ACCEPTANCE.md` does not record the exact review-disposition commit. The prior
+integrated-acceptance claim, implementation, review, and closure sections below
+remain the historical record of the first closure. At reopen, this capability was
+the first unblocked, unclaimed owner of the
+evidence correction, complete refreshed gate, independent review, and reclosure.
+It was then claimed, passed the refreshed gate and review, and reclosed.
 
 ## Scope
 
@@ -113,7 +131,9 @@ builds, tests, smoke checks, and fault injection.
 
 The integrated API must leave all Package rules in `spielorders-core`; the existing
 filesystem port remains the sole effect boundary with only the portable no-follow
-change observation added by Ticket 004. Dependency trees and source audits must
+change observation added by
+[Load a current Package Index without canonical record rereads](004-load-current-index-fast-path.md).
+Dependency trees and source audits must
 prove CLI and Tauri depend on core, never the reverse, and React sees no M2 rule.
 No CLI envelope/command, Tauri command, React state, retry presentation, or platform
 error contract is part of this gate.
@@ -219,3 +239,211 @@ independent count/currentness/preservation/boundary audit above, and use the
 project-local `code-review` skill against the complete range. The prompt must
 prohibit fixes, dependency changes, M3 work, and reinterpretation of failures; it
 may update only external-validation and roadmap status documentation after a pass.
+
+## Implementation evidence (pre-review)
+
+- Fixed-point claim: `866f619414e57aa816184509ed8e57209c8ea62f`.
+- Claim commit: `ee1584966614d62d1850ecaf1c23fd6fdd770d5b` (isolated claim for
+  integrated M2 acceptance and selected-major refresh).
+- Refresh commit: `51dcbe1c033c1ad4f5d9201328f4ba008be89624` (`Refresh M2
+  selected-major toolchains and dependencies`).
+- Rust/Cargo moved from 1.97.1 to current 1.98.0; Node moved from 26.5.1 to
+  current 26.7.0. npm 12.0.2 and TypeScript 7.0.2 remain current.
+- Direct npm refreshes are Node types 26.2.0, React types 19.2.18, ReactDOM types
+  19.2.4, Vite React plugin 6.1.0, and Vite 8.2.2. Compatible lock refreshes
+  include `fast-uri` 3.1.5 and Rolldown 1.2.5. All direct Rust crates remain
+  current; 59 compatible Cargo lock entries advanced.
+- No product or adapter behavior changed. Under the TDD skill, dependency and lock
+  changes alone do not justify a synthetic RED test; the unchanged public behavior
+  passed the complete integration suite.
+- Fresh no-hardlink acceptance ran detached at the refresh commit in
+  `/private/tmp/spielorders-m2-006.Idg47j/repo`. Both online and offline npm clean
+  installs, empty-target Rust build, 156 workspace tests, core-only tests, 94
+  focused M2 tests, clippy, schemas, traceability, two frontend tests, production
+  frontend build, Tauri no-bundle release build, and bounded Tauri development
+  smoke passed.
+- Both npm audits report zero vulnerabilities and the install-script audits grant
+  no lifecycle authority. A desktop `fsevents` 2.3.3 script explicitly blocked
+  for lack of `allowScripts` is passing denial evidence, not granted or unreviewed
+  authority. Cargo and npm behind-latest records are fully explained by upstream
+  selectors or absent platform/peer-optionals; no override or new-major authority
+  was added.
+- The canonical corpus independently contains 4 schemas, 8 accepted examples, 19
+  rejected fixtures, 22 scenarios, and 2 sentinels. The sentinels retained the M1/
+  M1-upgrade external-validation hashes before and after the full gate.
+- Complete commands, versions, sources, lock hashes, dependency trees, read/effect
+  budgets, fault coverage, failed-probe disposition, scope audits, and preservation
+  evidence are recorded in [M2 integrated acceptance](../ACCEPTANCE.md).
+- Pre-review outcome: every acceptance gate passes, no M2 behavior defect was
+  found, and no M3, schema, contract, adapter, Mantine, SpielGantt, or install-script
+  scope entered the range.
+
+## Code review and disposition
+
+The project-local `code-review` skill reviewed the fixed range beginning at
+`866f619414e57aa816184509ed8e57209c8ea62f`. Standards and Spec ran
+independently and in parallel against pre-review evidence commit
+`5eacd7fcbb7d927e87b13103d5a417291eacb21f`.
+
+### Standards
+
+- Initial outcome: one P2 hard traceability-language finding and no baseline smell
+  finding. Bare tracker identifiers in the new acceptance record substituted for
+  meaningful linked decision/capability names.
+- Accepted and remediated in `8a2e7f8367e0885539e2356a1bdbce4bf4e05ee6`
+  (integrated-acceptance review-evidence remediation).
+- Final independent revalidation found zero remaining hard violation and zero new
+  or remaining smell.
+
+### Spec
+
+- Initial outcome: two P2 evidence findings. Exact prior-slice lifecycle/review
+  commits were not inventoried, and port-fault/version-1 byte-shape evidence lacked
+  a complete operation matrix and exact output.
+- The lifecycle inventory and fault matrix were accepted and remediated in
+  `8a2e7f8367e0885539e2356a1bdbce4bf4e05ee6`. Recheck found only the need
+  to reproduce all ten exact artifact key arrays and hashes.
+- The last evidence gap was remediated in
+  `08b8309fd1e0d166816d9d02c34318857955f66e` (completed integrated-
+  acceptance version-one evidence). Final independent recheck found no remaining
+  or new Spec finding.
+
+### Post-review verification
+
+- A fresh no-hardlink copy detached at the first remediation passed all 94 focused
+  M2 tests, schema and traceability checks, exact metadata-version-1 key/version/
+  hash audit, fixed-point whitespace check, clean-status guard, and both sentinel
+  hashes.
+- A third fresh no-hardlink copy detached at the final remediation reproduced all
+  ten exact key arrays and hashes, ten version assertions, both sentinel hashes,
+  fixed-point whitespace, and empty status.
+- No code, contract, fixture, dependency, lockfile, adapter, or product behavior
+  changed during review remediation. Every Standards and Spec finding is resolved;
+  closure is now eligible.
+
+## Result and closure
+
+M2 integrated acceptance is complete. The refreshed selected-major toolchains and
+dependency graphs pass every required clean-copy gate, all six public load-result
+families and the complete read-side/fault/preservation boundaries compose through
+`spielorders-core`, and the fixed-point Standards and Spec review has no unresolved
+finding.
+
+Exact lifecycle before closure:
+
+- Claim: `ee1584966614d62d1850ecaf1c23fd6fdd770d5b`.
+- Refresh: `51dcbe1c033c1ad4f5d9201328f4ba008be89624`.
+- Pre-review acceptance evidence: `5eacd7fcbb7d927e87b13103d5a417291eacb21f`.
+- Review remediation: `8a2e7f8367e0885539e2356a1bdbce4bf4e05ee6` and
+  `08b8309fd1e0d166816d9d02c34318857955f66e`.
+- Review disposition: `345f0fa007722b6952be884f704159fccf45dccb`.
+- Closure: `3edd745c002805a668cd33d8a5d89ea6a46009f3`.
+
+The closure commit is the ticket, milestone, acceptance, and roadmap transition
+identified above. This follow-up records its exact SHA without changing product
+behavior or widening the milestone.
+M2 stops here and awaits fresh validation-only external reproduction. No M3 work
+has begun.
+
+## External-validation reopen
+
+Fresh validation-only external reproduction started from the original
+integrated-acceptance fixed point `866f619414e57aa816184509ed8e57209c8ea62f`
+and exact completed target
+`f9ff9ad901438dc88c88e26136cebd3fabe418ce` in a clean no-hardlink detached copy.
+All executable, currentness, count, preservation, architecture, and prohibited-
+scope gates passed. The project-local code-review skill's Standards axis passed
+with zero findings, but the independent Spec axis reported one P2 evidence
+finding:
+
+- `issues/implementation/m2-package-read-model/ACCEPTANCE.md` records the
+  [current-index fast path](004-load-current-index-fast-path.md)'s review
+  disposition as `Recorded with remediation` rather than the exact commit.
+  Remediation commit `b4831a2b21bf6756fb2873b8154aac79fdebcdcc`
+  changes only Rust source and tests. The current-index fast path's final
+  Standards/Spec disposition was recorded in closure commit
+  `ecd853b08009b1e1a946050b9594f482949bd3b7`, so the lifecycle table must record
+  that exact disposition commit and note that disposition and closure coincide.
+
+The validation worker made no repository, implementation, dependency, lockfile,
+contract, roadmap, or validation-status change. The integrated M2 acceptance and
+selected-major refresh capability is the smallest owner because its scope and
+acceptance criteria require an exact inventory of every
+prior ticket resolution and review. The reopened worker must correct only the
+owned evidence defect, independently refresh all authoritative release data under
+`AGENTS.md`, rerun the complete target-pinned integrated acceptance gate, run
+Standards and Spec independently and in parallel, and close the integrated
+acceptance capability and M2 only if every result passes. Reclosure must hand off a
+new exact completed target to a fresh
+validation-only external worker. M3 remains blocked.
+
+## Reopened implementation evidence (pre-review)
+
+- Reopen fixed point: `a97de65bd09e249991ab7969305ce7663ce3719e`.
+- Isolated claim: `60e4afb7732ff11976ee1ba7b4d7618cc674a0e4`.
+- Evidence correction and refreshed-currentness candidate:
+  `06c5198741b682297865c6d1b8477e85cea834c2`.
+- The [current-index fast-path](004-load-current-index-fast-path.md) lifecycle row
+  now records exact review disposition and closure
+  `ecd853b08009b1e1a946050b9594f482949bd3b7`; Rust remediation
+  `b4831a2b21bf6756fb2873b8154aac79fdebcdcc` is separately and accurately scoped.
+- Authoritative Rust, Node, npm, and crates.io release data was refreshed on
+  2026-08-21. Every direct selection is current in its selected major, and every
+  behind-latest transitive is selector-, target-, platform-, or different-major
+  constrained. No manifest or lockfile changed.
+- A fresh no-hardlink clone detached at the candidate passed online/offline npm
+  recreation, empty-target Rust build, 156 workspace tests, core repetition, 94
+  focused M2 tests, clippy, schemas, traceability, frontend tests/build, Tauri
+  no-bundle build, and bounded HTTP/process/shutdown development smoke.
+- Both npm audits are clean and the install-script audits grant no lifecycle
+  authority; explicitly blocked desktop `fsevents` 2.3.3 confirms that
+  `allowScripts` remains absent. Exact dependency trees prove core/adapter
+  direction and explain `generic-array`, TOML-family, `fast-uri`, Nano ID,
+  `undici-types`, and Rolldown selections without overrides.
+- Independent counts, all ten version-1 shape/hash assertions, both sentinel
+  hashes, all six load-result families, port-fault coverage, read/effect budgets,
+  and Supporting Material preservation reproduced exactly. The detached clone is
+  clean and the reopen range changes only this ticket, the milestone index, and
+  the integrated acceptance record.
+- No implementation or compatibility defect exists, so no synthetic TDD test was
+  added for the documentation-only evidence correction.
+
+## Reopened code review and disposition
+
+The project-local `code-review` skill reviewed the fixed range from
+`a97de65bd09e249991ab7969305ce7663ce3719e` after pre-review evidence commit
+`9db286ba49897e82fbccd88cad80c01881e817ab`. Standards and Spec ran independently
+and in parallel.
+
+### Standards
+
+- Initial outcome: three P2 hard stale-state documentation violations and zero
+  Fowler-baseline smells. Milestone, ticket, and acceptance prose contradicted the
+  current claimed and gate-passed state.
+- Remediation `90e8f25dd001ec9ec140c06e856c62765e4280b7` distinguishes
+  historical pre-claim/original-review state from the reopened current state.
+- Independent revalidation found zero remaining or new hard violation, zero
+  smell, and a clean whitespace diff.
+
+### Spec
+
+- Initial outcome: two overlapping P2 documentation-state contradictions, no
+  scope creep, and confirmation that the
+  [current-index fast-path](004-load-current-index-fast-path.md) lifecycle
+  correction is exact.
+- The same remediation resolves the stale gate/review fixed point and claim-state
+  contradictions.
+- Independent revalidation found zero remaining or new missing/partial
+  requirement, scope creep, or incorrect implementation. Both axes pass without
+  waiver, which made reclosure eligible.
+
+## Reopened result and reclosure
+
+The owned lifecycle-inventory defect is corrected, authoritative selected-major
+currentness is refreshed, the complete detached no-hardlink gate passes, and the
+fixed-point Standards and Spec review passes after all initial findings were
+resolved in `90e8f25dd001ec9ec140c06e856c62765e4280b7`. The review disposition is
+`51a650466d19924b4c03ea512967234380d1984c`. The integrated M2 acceptance and
+selected-major refresh capability and M2 reclose without waiver in closure
+transition `e280145ae8eff2b03a856562aa2338b0cebd263f`
+and await a new validation-only external reproduction. No M3 work begins.

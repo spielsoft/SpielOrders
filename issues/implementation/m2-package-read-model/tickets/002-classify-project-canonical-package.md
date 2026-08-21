@@ -1,6 +1,10 @@
 ---
 title: Classify and project canonical Package state
-status: open
+status: closed
+ticket_start_fixed_point: eb193dbf019690c828bba07758fde019468c12c1
+assignee: /root
+claimed_at: 2026-08-15T11:19:41Z
+closed_at: 2026-08-15T12:07:53Z
 parent: M2 — Package loading, diagnostics, and Package Index
 labels:
   - implementation:m2
@@ -201,6 +205,124 @@ Repository gates:
 
 Use the pinned Node version for npm commands. Do not modify dependencies, lockfiles,
 schemas, or metadata-version-1 fixtures.
+
+## Implementation evidence
+
+- Exact pre-claim fixed point:
+  `eb193dbf019690c828bba07758fde019468c12c1`.
+- Claim commit: `db55e00` (`Claim M2 Ticket 002 canonical Package projection`).
+- Implementation commit: `e2a60c2` (`Implement M2 canonical package projection`).
+- Pre-review hygiene commit: `a9c80bb` (`Fix canonical test source whitespace`).
+- Public RED-to-GREEN tracer bullets advanced one observable defect at a time
+  through unmanaged/current classification, exact managed locations, each Package
+  artifact and configuration failure, complete healthy Order/Vendor/totals/README
+  projection, every Order-local damage family, duplicate Order and Vendor
+  identities, reusable-value grouping and healthy sorting, stable diagnostic
+  grouping/evidence, general filesystem-operation failures, metadata states, and
+  real-filesystem Supporting Material preservation.
+- `cargo test -p spielorders-core --test canonical_package_load --locked`: pass,
+  `21` tests.
+- Focused `readme_read`, `metadata_v1`, `order_validation`, `package_metadata`, and
+  `package_paths` integration suites: pass (`58` tests total); focused
+  `ports::tests`: pass.
+- `cargo test -p spielorders-core --locked`: pass.
+- `cargo test --workspace --locked`: pass.
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`: pass.
+- Under `.nvmrc` Node `v26.5.1` and npm `12.0.2`, `npm run test:schemas`: pass
+  (`4` schemas, `8` accepted examples, `19` rejected fixtures, `22` scenarios,
+  and `2` preservation sentinels), and `npm run check:traceability`: pass.
+- Touched Rust sources pass `rustfmt --check --edition 2024`; the first fixed-point
+  diff check found one test-source trailing space, and the focused canonical suite
+  plus `git diff --check eb193dbf019690c828bba07758fde019468c12c1...HEAD`
+  passed after the whitespace-only pre-review fix.
+- The dependency tree remains core-only (`focaccia`, `serde`, `serde_json`, and
+  `toml`); source audits found no CLI, Tauri, React, index replacement, repair,
+  upgrade executor, or Supporting Material inspection. Write-shaped methods occur
+  only as unused implementations required by the existing shared filesystem-port
+  trait; canonical loading invokes no mutation method.
+- Independent sentinel hashes before and after implementation are identical:
+  `supporting-a.bin` =
+  `a78997f8accf7ad0fcb84540b6f7855762155f63244a39da5b361fd619d362f9`;
+  `supporting-b.bin` =
+  `7efa163282540f2e49f63c02b4ca968f5e03af57815161d50cb51fa565b75b42`.
+- No dependency, lockfile, schema, metadata-version-1 fixture, adapter, Package
+  Index classification/replacement, fast-path, repair, or M3 change was made.
+
+## Code review and disposition
+
+Review completed at `2026-08-15T12:07:10Z` against the exact commands
+`git diff eb193dbf019690c828bba07758fde019468c12c1...HEAD` and
+`git log eb193dbf019690c828bba07758fde019468c12c1..HEAD`. Standards and Spec
+were reviewed independently and in parallel as required by the project-local
+`code-review` skill, then independently revalidated after remediation.
+
+### Standards
+
+- Outcome: `0` hard documented-standard violations and `4` judgment calls.
+- Accepted quarantine-construction finding: every damaged-order branch now uses
+  one `quarantine_order` helper that owns placeholder/group construction and
+  diagnostic normalization.
+- Accepted schema-path ownership finding in part: exact field-path inference moved
+  from canonical orchestration beside the metadata codecs and now covers nested
+  Item, Vendor, and Contact fields. The remaining local required/known-field map is
+  dispositioned: stable contract field evidence cannot be recovered from plain
+  serde errors, and adding a dependency or redesigning the codec error API would
+  broaden this fixed M2 slice. The representation is private, tested against the
+  shared rejected fixtures, and has one metadata-module owner.
+- Accepted naming finding: the general envelope is now `Diagnostic`, while
+  `ReadmeDiagnostic` remains only a Ticket 001 compatibility alias.
+- Dispositioned diagnostics-module finding: moving the already-public Ticket 001
+  vocabulary to a new module would be a public-path migration with no Ticket 002
+  behavior change. The compatibility-safe name correction removes the misleading
+  type ownership; a module split is not retained as unrequested scope.
+- Accepted documentation finding: crate-level docs now describe the M2 canonical
+  Package read projection.
+- Post-remediation Standards validation found no new hard violation and no
+  unresolved in-scope finding.
+
+### Spec
+
+- Initial outcome: `5` findings, all accepted and resolved.
+- Previously observed Package diagnostics now survive configured-path failure, and
+  every diagnostic-only/quarantine/final group path uses stable sort/dedup.
+- Metadata state now combines trustworthy marker and Vendors artifact versions.
+- Reserved metadata classification compares the exact first configured component,
+  with `.spielorders-link` regression coverage.
+- Nested Order Item, Vendor, and Contact shape failures retain exact field paths,
+  including the shared invalid-item and invalid-contact fixtures.
+- Remediation commit: `c96696d` (`Resolve Ticket 002 review findings`).
+- Post-remediation Spec validation found all five resolved, with no regression,
+  mutation, adapter work, Ticket 003+ behavior, or Supporting Material scope creep.
+
+### Post-review verification
+
+- `cargo test -p spielorders-core --test canonical_package_load --locked`: pass,
+  `23` tests.
+- `cargo test -p spielorders-core --locked`: pass.
+- `cargo test --workspace --locked`: pass.
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`: pass.
+- Touched Rust sources pass `rustfmt --check --edition 2024`.
+- Under `.nvmrc` Node `v26.5.1` and npm `12.0.2`, `npm run test:schemas` and
+  `npm run check:traceability`: pass.
+- `git diff --check eb193dbf019690c828bba07758fde019468c12c1...HEAD`: pass.
+- Source/dependency audit remains free of adapter, index replacement, mutation,
+  repair, upgrade-executor, dependency, lockfile, schema, and fixture changes; the
+  only write-shaped methods are unused delegations required by the shared port.
+- Sentinel hashes remain
+  `a78997f8accf7ad0fcb84540b6f7855762155f63244a39da5b361fd619d362f9`
+  (`supporting-a.bin`) and
+  `7efa163282540f2e49f63c02b4ca968f5e03af57815161d50cb51fa565b75b42`
+  (`supporting-b.bin`), identical to the recorded before values.
+
+## Result
+
+Ticket 002 is complete. The shared Rust core now classifies unmanaged, canonical
+current-candidate, diagnostic-only, symbolic upgrade-pending, and general
+operation-failed Package states; projects complete healthy Orders, Vendors,
+totals, README cache text, reusable values, damaged placeholders, trustworthy
+identity, exact managed locations, and stable diagnostics; and preserves the
+pre-index `not_assessed` / `not_attempted` boundary. Ticket 003 and every later M2
+capability remain unimplemented.
 
 ## Handoff requirement
 
