@@ -4,8 +4,7 @@
 //! boundaries; Define durable metadata schemas and version evolution; Require two
 //! parent segments in the Order package locator.
 
-mod support;
-
+use crate::support::{RealFileSystem, TemporaryTree};
 use spielorders_core::metadata::{Config, OrderDocument};
 use spielorders_core::paths::{
     ConfiguredPath, ConfiguredPathFailure, DirectChildClassification, OrderLocatorError,
@@ -18,7 +17,6 @@ use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
 };
-use support::{RealFileSystem, TemporaryTree};
 
 #[derive(Default)]
 struct MemoryFileSystem {

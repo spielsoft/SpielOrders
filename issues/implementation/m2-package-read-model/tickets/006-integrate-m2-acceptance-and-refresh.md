@@ -232,13 +232,11 @@ substitute for this complete rerun.
 
 ## Handoff requirement
 
-When this ticket and the milestone close, stop the M2 implementation chain. Produce
-a complete ready-to-paste prompt for a fresh validation-only worker to inspect the
-original M2 fixed point and exact completed target, reproduce every command and
-independent count/currentness/preservation/boundary audit above, and use the
-project-local `code-review` skill against the complete range. The prompt must
-prohibit fixes, dependency changes, M3 work, and reinterpretation of failures; it
-may update only external-validation and roadmap status documentation after a pass.
+When this ticket and the milestone close, stop the M2 implementation chain. Hand
+the fresh validation-only worker the milestone path, original fixed point, exact
+completed target, permitted documentation writes, and prohibition on M3 work.
+The worker reads verification requirements from this ticket and `ACCEPTANCE.md`;
+do not duplicate them in a generated prompt.
 
 ## Implementation evidence (pre-review)
 
@@ -447,3 +445,7 @@ resolved in `90e8f25dd001ec9ec140c06e856c62765e4280b7`. The review disposition i
 selected-major refresh capability and M2 reclose without waiver in closure
 transition `e280145ae8eff2b03a856562aa2338b0cebd263f`
 and await a new validation-only external reproduction. No M3 work begins.
+
+That external reproduction subsequently passed at exact target
+`18101a3c419d6794f7768b99820ac2d1976a836d`; see
+[M2 external validation](../VALIDATION.md).

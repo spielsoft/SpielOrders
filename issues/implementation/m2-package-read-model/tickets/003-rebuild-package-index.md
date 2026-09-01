@@ -331,7 +331,7 @@ remain unimplemented and unclaimed.
 
 ## Handoff requirement
 
-After closure, generate the complete ready-to-paste prompt for the first eligible
-ticket—expected to be [Load a current Package Index without canonical record rereads](004-load-current-index-fast-path.md)—with
-the same exact fixed point, one-ticket TDD/review, preservation, gates, and handoff
-rules. Never skip a blocked or claimed ticket.
+After closure, report the final SHA and the next eligible ticket—at that point,
+[Load a current Package Index without canonical record rereads](004-load-current-index-fast-path.md).
+The next worker loads its rules from the milestone index and project-local skills;
+never skip a blocked or claimed ticket, and do not generate a recursive prompt.

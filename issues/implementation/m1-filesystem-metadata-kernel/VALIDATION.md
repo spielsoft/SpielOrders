@@ -312,39 +312,9 @@ range. There are no waivers and no blocking findings.
 
 M2 planning may begin. M2 implementation has not begun.
 
-## Ready-to-paste next prompt
+## Next-work pointer
 
-```text
-Decompose M2 — Package loading, diagnostics, and Package Index into independently reviewable implementation tickets. This is planning only: do not implement production code, tests, schemas, fixtures, dependencies, or any M2 behavior.
-
-Work in /Users/example/Code/Apps/SpielOrders. Read and follow AGENTS.md, then read .agents/skills/to-tickets/SKILL.md completely and use the project-local to-tickets skill faithfully. Inspect:
-- issues/roadmaps/spielorders-implementation-roadmap.md, especially M2 and its dependency graph;
-- issues/implementation/m1-filesystem-metadata-kernel/README.md;
-- issues/implementation/m1-filesystem-metadata-kernel/VALIDATION.md;
-- all closed product/architecture decisions governing M2;
-- docs/architecture/boundaries.md;
-- docs/development/traceability.md;
-- CONTEXT.md; and
-- existing contract schemas, examples, fixtures, and scenario recipes.
-
-Create only M2 planning/ticket documentation. Do not reopen M1, begin M2 implementation, create a shared SpielGantt crate, or pull M3 mutations/persistence into M2.
-
-The M2 decomposition must:
-- cover every M2 roadmap deliverable and acceptance-gate clause with explicit traceability to the governing named decisions;
-- produce small, independently implementable and independently reviewable tickets with Outcome, Decision sources, Blocking, Scope, Acceptance criteria, Review boundary, and explicit exclusions;
-- state exact ticket dependencies and a safe milestone execution order;
-- define public seams and observable acceptance behavior without prescribing private implementation;
-- separate Package opening/discovery, integrity/damage classification, stable diagnostics, current-index fast loading, deterministic index rebuild/staleness, README reads/warnings, and the final integrated M2 acceptance gate where reviewability permits;
-- preserve opaque Supporting Material and the M1 filesystem/metadata ownership boundary;
-- require canonical fixtures to be consumed in place and add only narrowly justified M2 fixtures;
-- prohibit M3 domain mutation, persistence workflows, repair execution, Metadata Upgrade orchestration, CLI/Tauri/React behavior, and premature shared foundations;
-- include dependency/toolchain currency checks under AGENTS.md without adopting a new major without approval; and
-- update the M2 milestone index/roadmap planning status only as appropriate.
-
-After creating the tickets, validate their completeness, dependency graph, review boundaries, and full M2-roadmap coverage. Run documentation/traceability checks applicable to planning changes, but do not run or create implementation tests.
-
-Finish with:
-1. the ordered ticket list and dependency graph;
-2. any unresolved planning blocker; and
-3. a ready-to-paste prompt for a fresh agent to implement only the first open M2 ticket using the appropriate project-local implement/tdd/code-review workflow, with an exact clean fixed point and no work on later tickets.
-```
+The historical next action was planning-only decomposition of M2 with the
+project-local `to-tickets` skill. The implementation roadmap and M2 milestone
+index became the canonical instructions; no generated prompt or copy of their
+requirements was needed. M2 has since been implemented and externally validated.

@@ -2,8 +2,7 @@
 //! contract; Define the complete M2 Package read projection and load-state
 //! contract; Decide how Package Index freshness is proven without canonical rereads.
 
-mod support;
-
+use crate::support::{RealFileSystem, TemporaryTree};
 use spielorders_core::canonical::{
     CanonicalPackageLoad, MetadataState, UpgradeArtifactState, inspect_canonical_package,
 };
@@ -15,7 +14,6 @@ use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
 };
-use support::{RealFileSystem, TemporaryTree};
 
 const VERSION: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -380,7 +378,7 @@ fn healthy_order_projection_contains_complete_facts_totals_readme_vendor_and_reu
     assert_eq!(order.document().title.as_str(), "Laser components");
     assert_eq!(order.item_totals(), &[169.0]);
     assert_eq!(order.order_total(), 169.0);
-    assert_eq!(order.index_readme_text(), "# Exact Order notes\r\n");
+    assert_eq!(order.readme_text(), Some("# Exact Order notes\r\n"));
     assert!(order.document().vendor_id.is_some());
     assert_eq!(package.vendors()[0].name.as_str(), "Tarnwick");
     assert_eq!(
@@ -1014,7 +1012,7 @@ fn order_readme_absence_and_unavailability_keep_orders_healthy_with_exact_cache_
     else {
         panic!("README absence is ordinary")
     };
-    assert_eq!(absent_package.healthy_orders()[0].index_readme_text(), "");
+    assert_eq!(absent_package.healthy_orders()[0].readme_text(), Some(""));
     assert!(absent_package.diagnostic_groups().is_empty());
 
     for filesystem in [
@@ -1042,7 +1040,12 @@ fn order_readme_absence_and_unavailability_keep_orders_healthy_with_exact_cache_
             panic!("README unavailability does not damage an Order")
         };
         assert_eq!(package.healthy_orders().len(), 1);
-        assert_eq!(package.healthy_orders()[0].index_readme_text(), "");
+        assert_eq!(
+            package.healthy_orders()[0].readme_text(),
+            None,
+            "a README that exists and could not be read carries no text, \
+             which the absent case above shows is not the same as an empty one"
+        );
         let [group] = package.diagnostic_groups() else {
             panic!("one unavailable README produces one document group")
         };
@@ -1247,6 +1250,20 @@ fn invalid_shape_diagnostics_retain_stable_known_field_paths() {
                 INVALID_VENDOR_CONTACT,
             ),
             "vendors[0].contacts[0].name",
+        ),
+        (
+            minimal_package_filesystem().file(
+                "/package/.spielorders/vendors.json",
+                br#"{"schema_version":1,"vendors":[{"vendor_id":"e0990d31-06aa-42e9-97c8-088e3e894822","name":"Vendor","contacts":[],"hidden":"true"}]}"#,
+            ),
+            "vendors[0].hidden",
+        ),
+        (
+            minimal_package_filesystem().file(
+                "/package/.spielorders/vendors.json",
+                br#"{"schema_version":1,"vendors":[{"vendor_id":"e0990d31-06aa-42e9-97c8-088e3e894822","name":17,"contacts":[],"hidden":true}]}"#,
+            ),
+            "vendors[0].name",
         ),
         (
             minimal_package_filesystem()

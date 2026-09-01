@@ -2,8 +2,10 @@
 //! Define the stable M2 diagnostic vocabulary and evidence contract; Define the complete M2
 //! Package read projection and load-state contract.
 
-mod support;
-
+use crate::support::{
+    RealFileSystem, TemporaryTree,
+    package_index::{Effect, ReplacementBoundary, TestFileSystem},
+};
 use spielorders_core::canonical::{
     PackageIndexMalformedReason, PackageIndexRefresh, PackageIndexStaleReason, PackageIndexState,
     PackageLoad, open_package,
@@ -14,10 +16,6 @@ use spielorders_core::readme::{
     OperationEvidence, OperationFailureCode, PackageIndexReplacementPhase,
 };
 use std::path::{Path, PathBuf};
-use support::{
-    RealFileSystem, TemporaryTree,
-    package_index::{Effect, ReplacementBoundary, TestFileSystem},
-};
 
 const VERSION: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -50,10 +48,6 @@ const MINIMAL_INDEX: &[u8] = include_bytes!(concat!(
 const FULL_INDEX: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../contracts/examples/v1/full/index.json"
-));
-const NON_DETERMINISTIC_MINIMAL_INDEX: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../contracts/examples/v1/minimal/index.json"
 ));
 const WRONG_PATH_INDEX: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -100,8 +94,8 @@ fn missing_index_is_rebuilt_exactly_and_the_package_becomes_available() {
     assert_eq!(
         stage_effects,
         [
+            // Stage, make durable, rename. The staged bytes are never read back.
             Effect::WriteStage(staging.clone(), MINIMAL_INDEX.to_vec()),
-            Effect::Read(staging.clone()),
             Effect::Sync(staging.clone()),
             Effect::Replace(
                 staging.clone(),
@@ -368,10 +362,13 @@ fn semantically_invalid_embedded_order_is_malformed_before_freshness() {
 #[test]
 fn valid_noncanonical_json_preserves_non_deterministic_serialization_reason() {
     let filesystem = TestFileSystem::minimal_package();
-    filesystem.put_file(
-        "/package/.spielorders/index.json",
-        NON_DETERMINISTIC_MINIMAL_INDEX,
-    );
+    // The deterministic index fixture, made non-canonical here rather than relied
+    // upon to be non-canonical. This test used to include the accepted example
+    // directly, which worked only because the corpus carried a second trailing
+    // newline; normalizing the corpus removed the very property the test needs, so it
+    // now states that property itself.
+    let non_deterministic = [MINIMAL_INDEX, b"\n"].concat();
+    filesystem.put_file("/package/.spielorders/index.json", &non_deterministic);
     filesystem.fail_at(ReplacementBoundary::WriteStage);
 
     let PackageLoad::IndexReplacementFailed(failed) =
@@ -626,62 +623,6 @@ fn rebuild_bytes_are_enumeration_independent_sorted_and_healthy_only() {
 }
 
 #[test]
-fn staged_deterministic_but_semantically_invalid_index_is_rejected() {
-    let filesystem = TestFileSystem::minimal_package();
-    filesystem.put_file("/package/.spielorders/index.json", MINIMAL_INDEX);
-    let impossible = FULL_INDEX.replacen("2026-07-19", "2026-02-31", 1);
-    let deterministic_impossible = IndexDocument::from_json_bytes(impossible.as_bytes())
-        .unwrap()
-        .to_json_bytes()
-        .unwrap();
-    filesystem.override_staged_bytes(deterministic_impossible);
-
-    let PackageLoad::IndexReplacementFailed(failed) =
-        open_package(Path::new("/package"), &filesystem)
-    else {
-        panic!("semantic candidate validation blocks replacement")
-    };
-
-    assert_eq!(
-        failed.failure().evidence(),
-        &OperationEvidence::PackageIndexReplacement {
-            phase: PackageIndexReplacementPhase::CandidateValidation,
-            cleanup_failure: None,
-        }
-    );
-    assert_eq!(
-        filesystem.bytes("/package/.spielorders/index.json"),
-        Some(MINIMAL_INDEX.to_vec())
-    );
-}
-
-#[test]
-fn staged_valid_deterministic_bytes_that_differ_from_the_projection_are_rejected() {
-    let filesystem = TestFileSystem::minimal_package();
-    filesystem.put_file("/package/.spielorders/index.json", MINIMAL_INDEX);
-    filesystem.override_staged_bytes(WRONG_PATH_INDEX.to_vec());
-
-    let PackageLoad::IndexReplacementFailed(failed) =
-        open_package(Path::new("/package"), &filesystem)
-    else {
-        panic!("candidate validation must bind staged bytes to the canonical projection")
-    };
-
-    assert_eq!(
-        failed.failure().evidence(),
-        &OperationEvidence::PackageIndexReplacement {
-            phase: PackageIndexReplacementPhase::CandidateValidation,
-            cleanup_failure: None,
-        }
-    );
-    assert_eq!(failed.old_index_bytes(), Some(MINIMAL_INDEX));
-    assert_eq!(
-        filesystem.bytes("/package/.spielorders/index.json"),
-        Some(MINIMAL_INDEX.to_vec())
-    );
-}
-
-#[test]
 fn index_semantics_require_already_normalized_embedded_metadata() {
     let filesystem = TestFileSystem::minimal_package();
     let unnormalized = FULL_INDEX.replacen("Laser components", " Laser components ", 1);
@@ -829,8 +770,6 @@ fn success_and_every_replacement_failure_preserve_and_never_touch_supporting_mat
     let scenarios = [
         None,
         Some(ReplacementBoundary::WriteStage),
-        Some(ReplacementBoundary::ReadStage),
-        Some(ReplacementBoundary::CandidateValidation),
         Some(ReplacementBoundary::SyncStage),
         Some(ReplacementBoundary::Replace),
         Some(ReplacementBoundary::RemoveStage),
@@ -949,14 +888,17 @@ fn package_index_public_vocabulary_uses_every_closed_spelling() {
     }
     for (phase, spelling) in [
         (PackageIndexReplacementPhase::WriteStage, "write_stage"),
-        (PackageIndexReplacementPhase::ReadStage, "read_stage"),
-        (
-            PackageIndexReplacementPhase::CandidateValidation,
-            "candidate_validation",
-        ),
         (PackageIndexReplacementPhase::SyncStage, "sync_stage"),
         (PackageIndexReplacementPhase::Replace, "replace"),
         (PackageIndexReplacementPhase::RemoveStage, "remove_stage"),
+        (
+            PackageIndexReplacementPhase::DestinationChanged,
+            "destination_changed",
+        ),
+        (
+            PackageIndexReplacementPhase::DestinationUnreadable,
+            "destination_unreadable",
+        ),
     ] {
         assert_eq!(phase.as_str(), spelling);
     }
@@ -997,4 +939,109 @@ fn real_filesystem_rebuild_is_atomic_and_preserves_both_sentinels() {
     );
     assert_eq!(std::fs::read(&supporting_a).unwrap(), SUPPORTING_A);
     assert_eq!(std::fs::read(&supporting_b).unwrap(), SUPPORTING_B);
+}
+
+/// A Package load rebuilds a stale index. If someone else writes that index between
+/// the load assessing it and the rebuild renaming over it, the rebuild must not
+/// discard their work — and the caller must be able to tell that from a failed rename,
+/// because retrying is right for one and wrong for the other.
+#[test]
+fn a_rebuild_refuses_an_index_another_writer_changed_and_says_which() {
+    const THEIRS: &[u8] = b"{\n  \"schema_version\": 1,\n  \"orders\": [],\n  \"vendors\": []\n}\n";
+    let filesystem = TestFileSystem::minimal_package()
+        .editing_at_staging("/package/.spielorders/index.json", THEIRS);
+    filesystem.put_entry("/package/Orders/Order", FileSystemEntryKind::Directory);
+    filesystem.put_file(
+        "/package/Orders/Order/.spielorders/order.json",
+        MINIMAL_ORDER,
+    );
+    filesystem.put_file("/package/.spielorders/index.json", WRONG_PATH_INDEX);
+
+    let PackageLoad::IndexReplacementFailed(failed) =
+        open_package(Path::new("/package"), &filesystem)
+    else {
+        panic!("an index changed underneath the rebuild does not replace it");
+    };
+
+    assert_eq!(
+        failed.failure().evidence(),
+        &OperationEvidence::PackageIndexReplacement {
+            phase: PackageIndexReplacementPhase::DestinationChanged,
+            cleanup_failure: None,
+        },
+        "the caller can tell a concurrent writer from a failed rename"
+    );
+    // Their index is intact.
+    assert_eq!(
+        filesystem.files.borrow()["/package/.spielorders/index.json".as_ref() as &Path],
+        THEIRS
+    );
+}
+
+/// The same protection where this load observed no index at all. Absence is what the
+/// rebuild is authorized against, so an index appearing at the path afterwards — a
+/// concurrent load's own rebuild, or a restore — is a changed destination like any
+/// other, and renaming over it would discard work this load never saw.
+#[test]
+fn a_rebuild_refuses_an_index_that_appeared_where_the_load_observed_none() {
+    const THEIRS: &[u8] = b"{\n  \"schema_version\": 1,\n  \"orders\": [],\n  \"vendors\": []\n}\n";
+    let filesystem = TestFileSystem::minimal_package()
+        .editing_at_staging("/package/.spielorders/index.json", THEIRS);
+    filesystem.put_entry("/package/Orders/Order", FileSystemEntryKind::Directory);
+    filesystem.put_file(
+        "/package/Orders/Order/.spielorders/order.json",
+        MINIMAL_ORDER,
+    );
+    // No index is put at the destination, so this load observes nothing there.
+
+    let PackageLoad::IndexReplacementFailed(failed) =
+        open_package(Path::new("/package"), &filesystem)
+    else {
+        panic!("an index that appeared underneath the rebuild does not replace it");
+    };
+
+    assert_eq!(
+        failed.old_index_bytes(),
+        None,
+        "the observation this rebuild carried was that nothing was there"
+    );
+    assert_eq!(
+        failed.failure().evidence(),
+        &OperationEvidence::PackageIndexReplacement {
+            phase: PackageIndexReplacementPhase::DestinationChanged,
+            cleanup_failure: None,
+        },
+        "an appearance is reported the same way a change is"
+    );
+    assert_eq!(
+        filesystem.files.borrow()["/package/.spielorders/index.json".as_ref() as &Path],
+        THEIRS,
+        "their index survives"
+    );
+}
+
+/// An index that is there but could not be read is not an index observed absent, and
+/// the difference is the whole reason absence is checked by observing the path. The
+/// rebuild heals an unreadable index — a rename replaces a file it never has to read —
+/// and calling that a changed destination would strand the Package in a state whose
+/// only repair is the rebuild being refused.
+///
+/// The two malformed-reason cases next door cannot see this: both inject a staging
+/// write failure, which fires before the destination is ever compared.
+#[test]
+fn an_unreadable_index_is_healed_rather_than_refused_as_a_changed_destination() {
+    let filesystem = TestFileSystem::minimal_package();
+    filesystem.put_file("/package/.spielorders/index.json", MINIMAL_INDEX);
+    filesystem.fail_read("/package/.spielorders/index.json");
+
+    let PackageLoad::Available(package) = open_package(Path::new("/package"), &filesystem) else {
+        panic!("an unreadable index is rebuilt rather than refused")
+    };
+
+    assert_eq!(package.index().refresh(), PackageIndexRefresh::Rebuilt);
+    assert_eq!(
+        filesystem.bytes("/package/.spielorders/index.json"),
+        Some(MINIMAL_INDEX.to_vec()),
+        "the rebuild reaches the destination it could not read"
+    );
 }

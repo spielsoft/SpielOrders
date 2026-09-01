@@ -4,7 +4,6 @@ description: Plan a huge chunk of work — more than one agent session can hold 
 metadata:
   uuid: "a9834760-0f6f-499b-abd7-f5af37e1ae07"
   modified-from: "https://github.com/mattpocock/skills/tree/9603c1cc8118d08bc1b3bf34cf714f62178dea3b/skills/engineering/wayfinder"
-disable-model-invocation: true
 ---
 
 A loose idea has arrived — too big for one agent session, and wrapped in fog: the way from here to the **destination** isn't visible yet. Wayfinding is about finding that way, not charging at the destination. This skill charts the way as a **shared map** on the repo's issue tracker, then works its **decision tickets** — questions whose resolution is a decision, not slices of a build to execute — one at a time until the route is clear.
@@ -14,6 +13,13 @@ The destination varies per effort, and naming it is the first act of charting �
 ## Plan, don't do
 
 Wayfinder is **planning** by default: each ticket resolves a decision, and the map is done when the way is clear — nothing left to decide before someone goes and does the thing. The pull to just do the work is usually the signal you've reached the edge of the map and it's time to hand off. An effort can override this in its **Notes** — carrying execution into the map itself — but absent that, produce decisions, not deliverables.
+
+Do not invoke Wayfinder merely because an implementation roadmap has milestones,
+claims, blockers, or one-ticket workers. Once product decisions are closed, use
+`/to-tickets` to decompose a milestone, `/implement` and `/tdd` for one
+implementation ticket, and `/code-review` for its diff. Acceptance execution and
+external validation are likewise outside Wayfinder unless they uncover a genuinely
+new decision that must be mapped.
 
 ## Refer by name
 

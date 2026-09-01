@@ -61,6 +61,9 @@
         },
         "purchasing_notes": {
           "type": "string"
+        },
+        "hidden": {
+          "type": "boolean"
         }
       }
     }

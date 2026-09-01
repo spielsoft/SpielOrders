@@ -2,23 +2,22 @@
 //! Define the complete M2 Package read projection and load-state contract; Decide how Package
 //! Index freshness is proven without canonical rereads.
 
-mod support;
-
+use crate::support::{
+    RealFileSystem, TemporaryTree,
+    package_index::{Effect, TestFileSystem},
+};
 use spielorders_core::{
     canonical::{
         CanonicalPackageLoad, ExhaustivePackageValidation, PackageIndexRefresh, PackageLoad,
         inspect_canonical_package, open_package, validate_package_exhaustively,
     },
+    digest::ContentDigest,
     ports::{DirectoryEntry, FileSystem, FileSystemEntryKind},
     readme::{DiagnosticCode, DiagnosticEvidence, EvidenceScope, Severity},
 };
 use std::{
     cell::RefCell,
     path::{Path, PathBuf},
-};
-use support::{
-    RealFileSystem, TemporaryTree,
-    package_index::{Effect, TestFileSystem},
 };
 
 const MINIMAL_INDEX: &[u8] = include_bytes!(concat!(
@@ -29,6 +28,8 @@ const MINIMAL_ORDER: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../contracts/examples/v1/minimal/order.json"
 ));
+const STAGED_ORDER: &[u8] = b"{\"schema_version\": 1, \"abandoned\": \"order candidate\"}\n";
+const STAGED_VENDORS: &[u8] = b"{\"schema_version\": 1, \"abandoned\": \"vendors candidate\"}\n";
 const SUPPORTING_A: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../contracts/fixtures/assets/supporting-a.bin"
@@ -119,13 +120,13 @@ fn exhaustive_validation_reads_exact_documents_and_reports_staging_with_known_de
         MINIMAL_ORDER,
     );
     filesystem.put_file("/package/Orders/Order/README.md", b"# Order notes\n");
-    filesystem.put_entry(
+    filesystem.put_file(
         "/package/.spielorders/.vendors.json.spielorders-stage",
-        FileSystemEntryKind::File,
+        STAGED_VENDORS,
     );
-    filesystem.put_entry(
+    filesystem.put_file(
         "/package/Orders/Order/.spielorders/.order.json.spielorders-stage",
-        FileSystemEntryKind::File,
+        STAGED_ORDER,
     );
     filesystem.put_entry(
         "/package/Orders/Order/.spielorders/unexpected.txt",
@@ -165,13 +166,37 @@ fn exhaustive_validation_reads_exact_documents_and_reports_staging_with_known_de
         "staging_artifact_present"
     );
     assert!(staging.iter().all(|diagnostic| {
-        diagnostic.severity() == Severity::Warning
-            && diagnostic.related_locations().len() == 1
-            && diagnostic.evidence()
-                == &DiagnosticEvidence::StagingArtifactPresent {
-                    destination_valid: Some(true),
-                }
+        diagnostic.severity() == Severity::Warning && diagnostic.related_locations().len() == 1
     }));
+    // Each staging diagnostic names the candidate actually sitting at that name, not
+    // merely that some candidate is there: promotion writes those exact bytes.
+    let staged_evidence = |name: &str| {
+        staging
+            .iter()
+            .find(|diagnostic| {
+                diagnostic
+                    .primary_location()
+                    .absolute_path()
+                    .ends_with(name)
+            })
+            .unwrap_or_else(|| panic!("a staging diagnostic at {name}"))
+            .evidence()
+            .clone()
+    };
+    assert_eq!(
+        staged_evidence(".vendors.json.spielorders-stage"),
+        DiagnosticEvidence::StagingArtifactPresent {
+            destination_valid: Some(true),
+            candidate_digest: Some(ContentDigest::of(STAGED_VENDORS)),
+        }
+    );
+    assert_eq!(
+        staged_evidence(".order.json.spielorders-stage"),
+        DiagnosticEvidence::StagingArtifactPresent {
+            destination_valid: Some(true),
+            candidate_digest: Some(ContentDigest::of(STAGED_ORDER)),
+        }
+    );
     let unexpected = diagnostics
         .iter()
         .find(|diagnostic| diagnostic.code() == DiagnosticCode::ReservedContentUnexpected)
@@ -360,9 +385,9 @@ fn combined_damage_documents_reserved_content_and_staging_have_complete_determin
         invalid_date.as_bytes(),
     );
     filesystem.put_file("/package/Orders/B/.spielorders/order.json", MINIMAL_ORDER);
-    filesystem.put_entry(
+    filesystem.put_file(
         "/package/Orders/A/.spielorders/.order.json.spielorders-stage",
-        FileSystemEntryKind::File,
+        STAGED_ORDER,
     );
     filesystem.put_entry(
         "/package/Orders/A/.spielorders/unexpected",
@@ -444,6 +469,7 @@ fn combined_damage_documents_reserved_content_and_staging_have_complete_determin
         staging.evidence(),
         &DiagnosticEvidence::StagingArtifactPresent {
             destination_valid: Some(false),
+            candidate_digest: Some(ContentDigest::of(STAGED_ORDER)),
         }
     );
     assert!(report.package_readme().diagnostics().len() == 1);

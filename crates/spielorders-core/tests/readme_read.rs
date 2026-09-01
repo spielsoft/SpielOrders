@@ -2,8 +2,7 @@
 //! contract; Define the complete M2 Package read projection and load-state
 //! contract; Define the SpielOrders package topology.
 
-mod support;
-
+use crate::support::{RealFileSystem, TemporaryTree};
 use spielorders_core::metadata::IndexDocument;
 use spielorders_core::ports::{DirectoryEntry, FileSystem, FileSystemEntryKind};
 use spielorders_core::readme::{
@@ -16,7 +15,6 @@ use std::{
     io,
     path::{Path, PathBuf},
 };
-use support::{RealFileSystem, TemporaryTree};
 
 const SUPPORTING_A: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),

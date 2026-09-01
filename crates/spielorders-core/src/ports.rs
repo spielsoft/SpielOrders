@@ -18,6 +18,18 @@ pub enum FileSystemEntryKind {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NewFileLinkOutcome {
+    Linked,
+    DestinationExists,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NewDirectoryRenameOutcome {
+    Renamed,
+    DestinationExists,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FileChangeEvidence {
     Comparable {
         comparison_domain: u64,
@@ -99,6 +111,39 @@ pub trait FileSystem {
     fn read_directory(&self, path: &Path) -> Result<Vec<DirectoryEntry>, Self::Error>;
 }
 
+/// Minimal creation effects used by Package and Order mutations.
+///
+/// A failed creation must not leave a newly created directory. Removal applies
+/// only to an empty directory selected explicitly by the caller.
+pub trait DirectoryFileSystem: FileSystem {
+    /// Creates one new directory, failing when anything already stands at that path.
+    ///
+    /// It never adopts an existing directory. A capability that undoes its own work
+    /// tells the directory it created from one that was already there by whether this
+    /// succeeded, so an adapter that quietly accepted an existing directory would hand
+    /// that rollback a directory the user made.
+    fn create_directory(&self, path: &Path) -> Result<(), Self::Error>;
+    fn remove_directory(&self, path: &Path) -> Result<(), Self::Error>;
+    /// Atomically links a staged file at an absent destination without consuming
+    /// the staged name. Existing destination evidence is never replaced.
+    fn link_new_file(
+        &self,
+        source: &Path,
+        destination: &Path,
+    ) -> Result<NewFileLinkOutcome, Self::Error>;
+    /// Atomically renames a complete staging directory into discovery without
+    /// replacing destination evidence that appeared concurrently.
+    ///
+    /// An occupied destination must be refused by the same operation that publishes.
+    /// Checking the destination separately leaves a window in which a directory created
+    /// at that name is silently replaced instead of reported.
+    fn rename_new_directory(
+        &self,
+        source: &Path,
+        destination: &Path,
+    ) -> Result<NewDirectoryRenameOutcome, Self::Error>;
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LocalDate {
     pub year: i32,
@@ -128,6 +173,18 @@ pub trait SupportingMaterialSearch {
         query: String,
         cancellation: &dyn Cancellation,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+}
+
+/// The narrow platform Trash effect one explicit whole-Order removal may use. It
+/// submits an intact directory to the platform Trash or Recycle Bin and never erases
+/// content; permanent disposal remains ordinary platform trash management, and this
+/// port offers no enumeration or emptying.
+pub trait NativeTrash {
+    type Error;
+
+    /// Submits one complete directory, returning where the platform put it when the
+    /// platform reports that at all.
+    fn submit_directory(&self, path: &Path) -> Result<Option<PathBuf>, Self::Error>;
 }
 
 pub trait NativeFiles {

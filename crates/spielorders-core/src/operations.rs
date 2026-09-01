@@ -50,19 +50,24 @@ pub enum OperationEvidence {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum PackageIndexReplacementPhase {
     WriteStage,
-    ReadStage,
-    CandidateValidation,
     SyncStage,
     Replace,
     RemoveStage,
+    /// The index on disk stopped matching the one this load assessed, so a concurrent
+    /// writer changed it. Nothing was written, and rebuilding over them would have
+    /// discarded their index.
+    DestinationChanged,
+    /// The index could not be read to compare it against what this load assessed, so
+    /// whether it still matches is unknown. Nothing was written.
+    DestinationUnreadable,
 }
 
 impl PackageIndexReplacementPhase {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::DestinationChanged => "destination_changed",
+            Self::DestinationUnreadable => "destination_unreadable",
             Self::WriteStage => "write_stage",
-            Self::ReadStage => "read_stage",
-            Self::CandidateValidation => "candidate_validation",
             Self::SyncStage => "sync_stage",
             Self::Replace => "replace",
             Self::RemoveStage => "remove_stage",

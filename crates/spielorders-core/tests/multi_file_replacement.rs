@@ -2,8 +2,7 @@
 //! filesystem-bucket foundation; Define integrity, validation, and repair
 //! boundaries; Define durable metadata schemas and version evolution.
 
-mod support;
-
+use crate::support::{RealFileSystem, TemporaryTree};
 use spielorders_core::filesystem::{
     FileReplacement, MultiFileReplacementFailure, ReplacementPlanFailure,
     ValidatedReplacementFailure, replace_validated_files,
@@ -16,7 +15,6 @@ use std::{
     convert::Infallible,
     path::{Path, PathBuf},
 };
-use support::{RealFileSystem, TemporaryTree};
 
 const MINIMAL_ORDER: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -56,6 +54,14 @@ struct TestFileSystem {
     failed_replacement_calls: BTreeSet<usize>,
     replacement_order: RefCell<Vec<PathBuf>>,
     writes: RefCell<Vec<PathBuf>>,
+    /// A writer outside this operation, editing a destination partway through it.
+    /// Keyed by the staging write it lands before, which puts the edit strictly
+    /// between the operation's prior read and its write of that destination.
+    edits_before_staging: RefCell<BTreeMap<usize, (PathBuf, Vec<u8>)>>,
+    /// The same, keyed by the `replace_file` call it lands before, for reaching the
+    /// window between a completed operation and the rollback that would undo it.
+    edits_before_replace: RefCell<BTreeMap<usize, (PathBuf, Vec<u8>)>>,
+    staging_writes: RefCell<usize>,
 }
 
 impl TestFileSystem {
@@ -65,7 +71,26 @@ impl TestFileSystem {
             failed_replacement_calls: failed_calls.iter().copied().collect(),
             replacement_order: RefCell::new(Vec::new()),
             writes: RefCell::new(Vec::new()),
+            edits_before_staging: RefCell::new(BTreeMap::new()),
+            edits_before_replace: RefCell::new(BTreeMap::new()),
+            staging_writes: RefCell::new(0),
         }
+    }
+
+    /// Schedules an outside writer's edit immediately before the given staging write.
+    fn editing_before_staging(self, before_call: usize, path: &Path, bytes: &[u8]) -> Self {
+        self.edits_before_staging
+            .borrow_mut()
+            .insert(before_call, (path.to_path_buf(), bytes.to_vec()));
+        self
+    }
+
+    /// Schedules an outside writer's edit immediately before the given `replace_file`.
+    fn editing_before_replace(self, before_call: usize, path: &Path, bytes: &[u8]) -> Self {
+        self.edits_before_replace
+            .borrow_mut()
+            .insert(before_call, (path.to_path_buf(), bytes.to_vec()));
+        self
     }
 
     fn bytes(&self, path: &Path) -> Vec<u8> {
@@ -93,6 +118,18 @@ impl FileSystem for TestFileSystem {
     }
 
     fn write_new(&self, path: &Path, contents: &[u8]) -> Result<(), Self::Error> {
+        let call = {
+            let mut count = self.staging_writes.borrow_mut();
+            let call = *count;
+            *count += 1;
+            call
+        };
+        // The outside writer lands here: after this operation read prior contents,
+        // and before it writes this destination. Nothing about it goes through this
+        // operation's plan.
+        if let Some((edited, bytes)) = self.edits_before_staging.borrow_mut().remove(&call) {
+            self.files.borrow_mut().insert(edited, bytes);
+        }
         self.writes.borrow_mut().push(path.to_path_buf());
         let mut files = self.files.borrow_mut();
         if files.contains_key(path) {
@@ -108,6 +145,11 @@ impl FileSystem for TestFileSystem {
 
     fn replace_file(&self, source: &Path, destination: &Path) -> Result<(), Self::Error> {
         let call = self.replacement_order.borrow().len();
+        // The outside writer lands here: after this operation read prior contents,
+        // and before it writes. Nothing about it goes through this operation's plan.
+        if let Some((edited, bytes)) = self.edits_before_replace.borrow_mut().remove(&call) {
+            self.files.borrow_mut().insert(edited, bytes);
+        }
         self.writes.borrow_mut().push(destination.to_path_buf());
         self.replacement_order
             .borrow_mut()
@@ -400,4 +442,172 @@ fn validate_canonical_file(destination: &Path, bytes: &[u8]) -> Result<(), Strin
             .map_err(|error| error.to_string()),
         _ => Err("unexpected canonical destination".into()),
     }
+}
+
+/// A destination edited by someone else after this operation read it must not be
+/// written over. The edit is introduced through the effect port partway through the
+/// operation, so the window this closes is the real one, not a narrowed one.
+#[test]
+fn a_destination_changed_after_the_prior_read_is_refused_rather_than_overwritten() {
+    let tree = TemporaryTree::new("multi-file-concurrent-forward");
+    let root = tree.path();
+    let order = root.join("order.json");
+    let vendors = root.join("vendors.json");
+    const CONCURRENT: &[u8] = b"{\n  \"written\": \"by someone else\"\n}\n";
+
+    let filesystem = TestFileSystem::new(
+        [
+            (order.clone(), MINIMAL_ORDER.to_vec()),
+            (vendors.clone(), MINIMAL_VENDORS.to_vec()),
+        ],
+        &[],
+    )
+    // Lands after both prior reads, before the second destination is staged, so it
+    // sits squarely inside the window between observing and writing.
+    .editing_before_staging(1, &vendors, CONCURRENT);
+
+    let error = replace_validated_files(
+        &[
+            FileReplacement::new(&order, FULL_ORDER),
+            FileReplacement::new(&vendors, FULL_VENDORS),
+        ],
+        &filesystem,
+        |_, _| Ok::<(), Infallible>(()),
+    )
+    .expect_err("a destination changed by another writer is refused");
+
+    assert!(
+        matches!(
+            error.failure(),
+            MultiFileReplacementFailure::DestinationChanged { operation_index: 1, destination, .. }
+                if destination == &vendors
+        ),
+        "the refusal names the destination and the operation: {:?}",
+        error.failure()
+    );
+    // The other writer's bytes survive. That is the whole point.
+    assert_eq!(
+        filesystem.bytes(&vendors),
+        CONCURRENT,
+        "the concurrent writer's work is intact"
+    );
+    // And the batch still unwinds: the operation that did complete is put back,
+    // because nobody else had touched it.
+    assert_eq!(
+        filesystem.bytes(&order),
+        MINIMAL_ORDER,
+        "the completed operation is rolled back"
+    );
+    assert!(
+        error.rollback_failures().is_empty() && error.refused_rollbacks().is_empty(),
+        "an uncontended restoration neither fails nor is refused: {:?} {:?}",
+        error.rollback_failures(),
+        error.refused_rollbacks()
+    );
+}
+
+/// The same rule on the recovery path. A rollback restores only what this operation
+/// actually put there; a destination someone else has since edited is left alone and
+/// the refusal is reported rather than silently skipped.
+#[test]
+fn rollback_leaves_a_destination_another_writer_changed_and_reports_it() {
+    let tree = TemporaryTree::new("multi-file-concurrent-rollback");
+    let root = tree.path();
+    let order = root.join("order.json");
+    let vendors = root.join("vendors.json");
+    const CONCURRENT: &[u8] = b"{\n  \"written\": \"by someone else\"\n}\n";
+
+    let filesystem = TestFileSystem::new(
+        [
+            (order.clone(), MINIMAL_ORDER.to_vec()),
+            (vendors.clone(), MINIMAL_VENDORS.to_vec()),
+        ],
+        // The second destination fails, so operation 0 is rolled back.
+        &[1],
+    )
+    // Lands after operation 0 wrote the Order and before the failing write, so the
+    // rollback that follows would overwrite it.
+    .editing_before_replace(1, &order, CONCURRENT);
+
+    let error = replace_validated_files(
+        &[
+            FileReplacement::new(&order, FULL_ORDER),
+            FileReplacement::new(&vendors, FULL_VENDORS),
+        ],
+        &filesystem,
+        |_, _| Ok::<(), Infallible>(()),
+    )
+    .expect_err("the second replacement fails");
+
+    assert!(
+        matches!(
+            error.failure(),
+            MultiFileReplacementFailure::Replacement {
+                operation_index: 1,
+                ..
+            }
+        ),
+        "the initiating failure is still the one that stopped the run: {:?}",
+        error.failure()
+    );
+    // The rollback refused rather than clobbering, and said so in its own channel:
+    // this is not a restoration that failed, it is one that must not be attempted.
+    assert!(
+        error
+            .refused_rollbacks()
+            .iter()
+            .any(|refusal| refusal.destination() == order && refusal.operation_index() == 0),
+        "the refused restoration is reported beside the initiating failure: {:?}",
+        error.refused_rollbacks()
+    );
+    assert!(
+        error.rollback_failures().is_empty(),
+        "a refusal is not a restoration failure: {:?}",
+        error.rollback_failures()
+    );
+    assert_eq!(
+        filesystem.bytes(&order),
+        CONCURRENT,
+        "the concurrent writer's work survives the rollback"
+    );
+}
+
+/// Caller-supplied evidence guards a wider window than the batch's own snapshot read.
+///
+/// Here the change lands before the operation starts, so the batch's snapshot already
+/// sees the other writer's bytes and would happily replace them. Only the caller knows
+/// what it actually authorized the commit against, and carrying that is what refuses.
+#[test]
+fn a_destination_changed_before_the_batch_began_is_refused_on_the_callers_evidence() {
+    let tree = TemporaryTree::new("multi-file-stale-caller-evidence");
+    let root = tree.path();
+    let order = root.join("order.json");
+    const CONCURRENT: &[u8] = b"{\n  \"written\": \"by someone else\"\n}\n";
+
+    // The caller observed MINIMAL_ORDER. Someone else has written since.
+    let filesystem = TestFileSystem::new([(order.clone(), CONCURRENT.to_vec())], &[]);
+
+    let error = replace_validated_files(
+        &[FileReplacement::observed(&order, FULL_ORDER, MINIMAL_ORDER)],
+        &filesystem,
+        |_, _| Ok::<(), Infallible>(()),
+    )
+    .expect_err("a destination that no longer matches the caller's evidence is refused");
+
+    assert!(
+        matches!(
+            error.failure(),
+            MultiFileReplacementFailure::DestinationChanged {
+                operation_index: 0,
+                destination,
+            } if destination == &order
+        ),
+        "the refusal names the destination: {:?}",
+        error.failure()
+    );
+    assert_eq!(
+        filesystem.bytes(&order),
+        CONCURRENT,
+        "the concurrent writer's work is intact"
+    );
 }

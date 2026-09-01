@@ -1,6 +1,6 @@
 ---
 title: M2 — Package loading, diagnostics, and Package Index
-status: closed; awaiting fresh external validation
+status: externally validated
 progress: 6/6 tickets closed
 parent: SpielOrders implementation roadmap
 labels:
@@ -28,9 +28,8 @@ metadata version 1, or authorize M3 or adapter behavior.
 - [Define the complete M2 Package read projection and load-state contract](../../wayfinder/m2-package-read-model/tickets/003-package-read-projection.md)
 - [Audit M2 decision completeness and hand off implementation decomposition](../../wayfinder/m2-package-read-model/tickets/004-audit-m2-decision-completeness.md)
 
-The later [Define the Rust CLI capability contract](../../wayfinder/spielorders-product-architecture/tickets/006-cli-contract.md)
-refinements are authoritative: `orders_path = "."` is invalid and Vendor Merge is
-absent. No ticket may restore either superseded statement.
+The current product contract is consistent across the linked decisions:
+`orders_path = "."` is invalid and Vendor Merge is absent.
 
 ## Ticket order and dependencies
 
@@ -182,22 +181,16 @@ M3 behavior. The
 capability owns the one complete closeout refresh, so it is neither omitted nor
 duplicated.
 
-## Handoff chain
+## Handoff protocol
 
-At the end of every ticket, inspect this index and all ticket frontmatter in
-milestone order. Provide a complete ready-to-paste prompt for a fresh worker to
-claim and implement only the first open, unblocked, unclaimed ticket. The prompt
-must repeat the clean fixed-point protocol, one-ticket rule, implement/TDD/review
-workflow, preservation and boundary constraints, every required verification,
-permission to update/close only that worker's ticket and the milestone status as
-appropriate, and this same handoff requirement. If no ticket is eligible, report
-the exact blocker or current claim instead of selecting later work.
+Workers use the project-local `implement` skill. A completed ticket reports only
+its final SHA and the next eligible ticket or blocker; the next worker loads this
+index, that ticket, and its direct sources from the repository. Milestone rules,
+commands, evidence, and recursive handoff prose are not copied into prompts.
 
-When
-[Integrate M2 acceptance and refresh the complete selected-major toolchain](tickets/006-integrate-m2-acceptance-and-refresh.md)
-closes, stop the implementation chain. M2 is complete only after fresh external
-validation reproduces the completed target. Its handoff must therefore be a
-validation-only prompt that prohibits fixes, dependency changes, and M3 work.
+The integrated acceptance ticket ended the implementation chain and supplied its
+fixed point and completed target to the external validator. The authoritative
+[external-validation record](VALIDATION.md) now closes that handoff.
 
 ## Milestone acceptance and closeout refresh
 
@@ -235,11 +228,11 @@ target before any M3 work begins.
 
 ## Result
 
-All six vertical slices are closed. The complete selected-major refresh and
+All six vertical slices are closed and externally validated. The complete selected-major refresh and
 [integrated acceptance](ACCEPTANCE.md) passed from fresh no-hardlink target copies,
-the fixed-point Standards and Spec review has no unresolved finding, and M2 is
-complete at the implementation layer. Fresh external validation of the exact
-completed target is required before M3 may begin. The milestone closure transition
+the fixed-point Standards and Spec review has no unresolved finding, and the
+[external validation](VALIDATION.md) independently passed target
+`18101a3c419d6794f7768b99820ac2d1976a836d`. The milestone closure transition
 for the first lifecycle was `3edd745c002805a668cd33d8a5d89ea6a46009f3`;
 the reopened closure transition is
 `e280145ae8eff2b03a856562aa2338b0cebd263f`.

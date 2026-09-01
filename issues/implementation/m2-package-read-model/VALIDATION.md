@@ -206,4 +206,5 @@ four-document path inventory, all three lockfile hashes, and both sentinel hashe
 matched their baselines. The source worktree also remained clean until this sole
 authorized external-validation record and M2 roadmap-status update were applied.
 
-M2 is externally validated. M3 remains blocked and no M3 work began.
+M2 is externally validated. The validator began no M3 work; the roadmap now marks
+M3 ready for decomposition.

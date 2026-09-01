@@ -3,15 +3,13 @@
 //! Package read projection and load-state contract.
 //! Package Index replacement-failure evidence and effect-budget integration tests.
 
-mod support;
-
+use crate::support::package_index::{Effect, ReplacementBoundary, TestFileSystem};
 use spielorders_core::canonical::{
     PackageIndexRefresh, PackageIndexStaleReason, PackageIndexState, PackageLoad, open_package,
 };
 use spielorders_core::ports::FileSystemEntryKind;
 use spielorders_core::readme::{OperationEvidence, PackageIndexReplacementPhase};
 use std::{collections::BTreeSet, path::Path};
-use support::package_index::{Effect, ReplacementBoundary, TestFileSystem};
 
 const MINIMAL_INDEX: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -39,16 +37,6 @@ fn every_replacement_and_cleanup_failure_preserves_complete_evidence_and_effect_
             None,
         ),
         (
-            ReplacementBoundary::ReadStage,
-            PackageIndexReplacementPhase::ReadStage,
-            None,
-        ),
-        (
-            ReplacementBoundary::CandidateValidation,
-            PackageIndexReplacementPhase::CandidateValidation,
-            None,
-        ),
-        (
             ReplacementBoundary::SyncStage,
             PackageIndexReplacementPhase::SyncStage,
             None,
@@ -60,7 +48,7 @@ fn every_replacement_and_cleanup_failure_preserves_complete_evidence_and_effect_
         ),
         (
             ReplacementBoundary::RemoveStage,
-            PackageIndexReplacementPhase::CandidateValidation,
+            PackageIndexReplacementPhase::SyncStage,
             Some(PackageIndexReplacementPhase::RemoveStage),
         ),
     ] {

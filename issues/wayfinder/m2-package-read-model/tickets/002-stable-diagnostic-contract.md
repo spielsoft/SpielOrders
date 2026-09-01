@@ -85,9 +85,11 @@ operation evidence. Collections are present even when empty.
 Each location carries an absolute path and, when an established SpielOrders Root
 contains that path, its normalized Package-relative path. The absolute path names
 the exact observed or attempted location and does not imply that the entry exists
-or was canonicalized by following links. Package-relative path is absent only when
-Package membership has not been established; it is never fabricated for an
-outside path. Missing artifacts still name their exact expected locations.
+or was canonicalized by following links. Package-relative path is absent when
+Package membership has not been established, and when the entry has no normalized
+Package-relative spelling at all; it is never fabricated, for an outside path or
+for one this application cannot express. Missing artifacts still name their exact
+expected locations.
 
 Identity evidence is present only after the value has decoded as a valid
 metadata-version-1 identity:
@@ -111,7 +113,7 @@ behavior never depend on it.
 
 ### Stable diagnostic codes
 
-The initial stable diagnostic vocabulary is:
+The stable diagnostic vocabulary is:
 
 | Code | Severity and scope | Required typed evidence |
 | --- | --- | --- |
@@ -125,6 +127,7 @@ The initial stable diagnostic vocabulary is:
 | `configuration_path_invalid` | `error`; Package | `orders_path` or `removed_path`; the existing stable M1 reason; config location |
 | `configuration_paths_overlap` | `error`; Package | both configured values; config location |
 | `configured_orders_directory_unavailable` | `error`; Package | configured value; existing stable M1 reason `not_directory`, `outside_package`, or `reserved_metadata`; directory location |
+| `configured_orders_directory_name_unusable` | `error`; Package | configured value; configured directory location |
 | `order_semantic_invalid` | `error`; Order | trustworthy Order ID when available; field path; stable reason, initially `invalid_gregorian_date`; order location |
 | `order_package_locator_mismatch` | `error`; Order | trustworthy Order ID when available; `package_root`; reason `not_active_direct_child` or `does_not_resolve_to_package`; Order and Package locations |
 | `order_id_duplicate` | `error`; Order | duplicated trustworthy Order ID; complete conflict-set locations |
@@ -132,9 +135,18 @@ The initial stable diagnostic vocabulary is:
 | `vendor_name_duplicate` | `error`; Package | complete trustworthy Vendor-ID set; conflicting observed names; `vendors` location |
 | `vendor_reference_unresolved` | `error`; Order | trustworthy Order ID and referenced Vendor ID; Order location |
 | `orders_directory_entry_disallowed` | `warning`; Package | observed no-follow kind `file`, `symbolic_link`, or `other`; entry location |
+| `orders_directory_entry_name_unusable` | `warning`; Package | observed no-follow kind; absolute entry location with no Package-relative spelling |
 | `reserved_content_unexpected` | `warning`; Package or Order | observed no-follow kind; unexpected entry location |
 | `staging_artifact_present` | `warning`; Package or Order | staging and canonical-destination locations; destination validity when already known |
 | `readme_unavailable` | `warning`; document | document kind `package_readme` or `order_readme`; reason `wrong_kind`, `unreadable`, or `invalid_encoding`; exact README location |
+
+`orders_directory_entry_name_unusable` reports a direct Orders Directory child
+whose filesystem name has no normalized Package-relative spelling. A name
+containing `\` is the reachable Unix case. `configured_orders_directory_name_unusable`
+reports a configured Orders path that resolves through a symbolic link to such a
+real name. These locations carry absolute paths and no fabricated Package-relative
+paths. The existing `configured_orders_directory_unavailable` reasons remain
+`not_directory`, `outside_package`, and `reserved_metadata`.
 
 `managed_artifact_invalid_shape` covers requiredness, unknown fields, wrong types,
 invalid enumerations, malformed UUID shape, invalid currency shape, invalid local
@@ -211,6 +223,22 @@ A required Package Index replacement failure uses the more specific stable code
 - refresh outcome `replacement_failed`;
 - phase `write_stage`, `read_stage`, `candidate_validation`, `sync_stage`,
   `replace`, or `remove_stage`; and
+
+  > **Two of those phases have since been removed, and this decision's text is left
+  > as it stood.** `read_stage` went with Ticket 021, which removed the staging
+  > read-back, and `candidate_validation` went with Ticket 023, which removed the
+  > index rebuild's candidate guard. Both were removed for the same stated reason —
+  > a public, spelled failure code that nothing can emit is worse than no code — and
+  > `PackageIndexReplacementPhase` now spells `write_stage`, `sync_stage`, `replace`,
+  > `remove_stage`, `destination_changed`, and `destination_unreadable`.
+  >
+  > Recorded here rather than settled silently, per
+  > [`docs/development/traceability.md`](../../../../docs/development/traceability.md),
+  > "Contradictions". The enumeration above is not edited, because it is what this
+  > decision decided on 2026-08-13 and a closed record should not be made to describe
+  > a later moment. **No new decision ticket is opened**: the narrowing was the
+  > project owner's decision of 2026-08-29 and Ticket 021's review before it, so
+  > there is no open question here — only a record that needed to point forward.
 - cleanup failure as related operation evidence when one also occurred.
 
 It blocks Package opening, leaves the old index bytes and original assessment

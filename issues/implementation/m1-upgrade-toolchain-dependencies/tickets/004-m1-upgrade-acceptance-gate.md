@@ -148,13 +148,11 @@ change dependencies, begin M2, or reinterpret a failed command as a pass.
 ## Gate handoff
 
 When this ticket closes, stop the implementation chain. Report that M1-upgrade is
-complete and ready for external validation, then provide a ready-to-paste prompt for
-a fresh validation-only agent. That prompt must name the original pre-upgrade fixed
-point, the exact completed target, all upgrade tickets and recorded resolutions, the
-project-local code-review skill, every acceptance command, independent dependency
-currency verification, the user-approved frozen-snapshot disposition and M2-closeout
-refresh obligation, documentation-only outcome recording, and an explicit ban on
-fixes and M2 work.
+complete and ready for external validation. Hand the validation-only agent the
+milestone path, original pre-upgrade fixed point, exact completed target, permitted
+documentation writes, and explicit ban on fixes and M2 work. The milestone and
+acceptance ticket remain the canonical source for commands and requirements; do
+not duplicate them in a generated prompt.
 
 ## Resolution
 

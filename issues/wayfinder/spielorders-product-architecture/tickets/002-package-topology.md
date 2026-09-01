@@ -39,7 +39,7 @@ The package topology is:
 
 ### Root contract
 
-- `.spielorders/config.toml` is required, user-editable, and deliberately unversioned. Its optional `orders_path` value must be a relative descendant of the SpielOrders Root and defaults to `Orders`. A value of `.` is an explicit opt-in to using the root itself as the Orders Directory.
+- `.spielorders/config.toml` is required, user-editable, and deliberately unversioned. Its optional `orders_path` value must be a relative descendant of the SpielOrders Root and defaults to `Orders`. A value of `.` is **not** valid, superseded by [Define the Rust CLI capability contract](006-cli-contract.md): `orders_path` must name a nonempty relative descendant of the SpielOrders Root. Making the Root its own Orders Directory contradicts this document — the Package README becomes a disallowed direct-child file, `removed_path` overlaps the Orders Directory, and every unrelated root directory becomes a presumed Order that is permanently damaged, so the "unrestricted user space" this section grants would have nowhere left to exist.
 - `.spielorders/version.json` is the required canonical package-wide metadata-version marker. It is updated last during a resumable Metadata Upgrade; each other managed JSON repeats its version so interrupted work can be recognized and resumed.
 - `.spielorders/vendors.json` is the required, versioned, canonical aggregate of shared Vendor records.
 - `.spielorders/index.json` is required and versioned, but derived and rebuildable. It contains the complete healthy Order, Order README, and Vendor projection needed to load the eventual top-level GUI without reading every `order.json`; it never becomes a second canonical source of domain facts.

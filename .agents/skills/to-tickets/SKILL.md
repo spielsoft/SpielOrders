@@ -1,7 +1,6 @@
 ---
 name: to-tickets
 description: Break a plan, spec, or the current conversation into a set of tracer-bullet tickets, each declaring its blocking edges, published to the configured tracker — edges as text in one file per ticket locally, or native blocking links on a real tracker.
-disable-model-invocation: true
 ---
 
 # To Tickets
@@ -37,23 +36,44 @@ Break the work into **tracer bullet** tickets.
 
 Give each ticket its **blocking edges** — the other tickets that must complete before it can start. A ticket with no blockers can start immediately.
 
+Each ticket must also be cheap for a fresh agent to load:
+
+- Link to the milestone and the few decision sources that directly govern the
+  slice; do not copy their bodies into the ticket.
+- State the observable outcome, blockers, acceptance criteria, exclusions, and
+  ticket-owned checks. Put shared claim/review/dependency rules once in the
+  milestone index or project skills.
+- Do not require a worker to read all sibling tickets, all historical validation
+  evidence, or the full decision archive before starting. Prior tickets are
+  dependencies, not mandatory context dumps; link specific outcomes when needed.
+- Keep exact versions, hashes, test counts, and command transcripts in canonical
+  acceptance/evidence records unless a particular value is itself the contract.
+- Do not embed a ready-to-paste prompt or recursive handoff requirement. A ticket
+  ends with a concise next-ticket pointer produced by `/implement`.
+
 **Wide refactors are the exception to vertical slicing.** A **wide refactor** is one mechanical change — rename a column, retype a shared symbol — whose **blast radius** fans across the whole codebase, so a single edit breaks thousands of call sites at once and no vertical slice can land green. Don't force it into a tracer bullet; sequence it as **expand–contract**. First expand: add the new form beside the old so nothing breaks. Then migrate the call sites over in batches sized by blast radius (per package, per directory), each batch its own ticket blocked by the expand, keeping CI green batch to batch because the old form still exists. Finally contract: delete the old form once no caller remains, in a ticket blocked by every migrate batch. When even the batches can't stay green alone, keep the sequence but let them share an integration branch that all block a final integrate-and-verify ticket — green is promised only there.
 
-### 4. Quiz the user
+### 4. Confirm the breakdown when needed
 
-Present the proposed breakdown as a numbered list. For each ticket, show:
+If the user asked to create or publish tickets from an already approved roadmap or
+spec, that request authorizes publishing the decomposition. Make conservative
+granularity assumptions, publish it, and summarize the result afterward.
+
+If the source is still exploratory or a choice would materially change ownership,
+scope, or sequencing, present the proposed breakdown as a numbered list. For each
+ticket, show:
 
 - **Title**: short descriptive name
 - **Blocked by**: which other tickets (if any) must complete first
 - **What it delivers**: the end-to-end behaviour this ticket makes work
 
-Ask the user:
+Ask only the questions needed to resolve that material choice:
 
 - Does the granularity feel right? (too coarse / too fine)
 - Are the blocking edges correct — does each ticket only depend on tickets that genuinely gate it?
 - Should any tickets be merged or split further?
 
-Iterate until the user approves the breakdown.
+Do not add an approval round merely to reconfirm an already approved milestone.
 
 ### 5. Publish the tickets to the configured tracker
 
@@ -65,6 +85,12 @@ Publish the approved tickets. **How** depends on the tracker `/setup-matt-pocock
 Work the **frontier**: any ticket whose blockers are all done. For a purely linear chain that means top to bottom.
 
 Do NOT close or modify any parent issue.
+
+Before publishing, audit the set as a workflow: a fresh agent should be able to
+start any frontier ticket from `AGENTS.md`, the milestone index, that ticket, and
+its direct sources without loading the entire milestone. The final integration
+ticket may compose the capabilities and run milestone acceptance, but it must not
+re-inventory every prior claim/review commit or reproduce their full evidence.
 
 <local-ticket-template>
 

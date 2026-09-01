@@ -9,7 +9,7 @@ assignee: /root
 
 ## Question
 
-How does an Order identify its one Vendor; which Vendor facts are shared; what historical facts remain fixed on old Orders; and how should Vendor rename, merge, deletion, and incomplete information behave?
+How does an Order identify its one Vendor; which Vendor facts are shared; what historical facts remain fixed on old Orders; and how should Vendor rename, merge, visibility, and incomplete information behave?
 
 ## Blocking
 
@@ -40,11 +40,19 @@ Vendor association is editable at every Order Status. Assigning, correcting, cha
 
 Renaming a Vendor is an ordinary edit to the shared Vendor Name. The Vendor ID is unchanged, all referencing Orders immediately resolve the new name, and existing Order Directory names are not renamed automatically.
 
-### Merge, deletion, and incomplete information
+### Duplicate evidence, visibility, and incomplete information
 
-Vendor Merge is a rare, explicit reconciliation used when importing already managed SpielOrders records introduces a duplicate. SpielOrders asks the user what to do; it never merges automatically. The user chooses the surviving Vendor ID and resolves conflicting populated facts, imported Order references are redirected to the survivor, nonconflicting facts are combined, and the absorbed Vendor is removed. No historical alias or merge record is retained.
+SpielOrders has no Vendor Merge operation. When legacy or adoption evidence appears
+to duplicate an existing Vendor, the user must select the existing Vendor, create a
+deliberately distinct Vendor, or leave the Order without a Vendor. SpielOrders never
+combines Vendor facts or redirects managed Order references as a merge.
 
-A Vendor referenced by any Order cannot be deleted. The user must first reassign or clear every Vendor Reference, or consolidate the Vendor through an applicable Vendor Merge. An unreferenced Vendor may be deleted after confirmation.
+A Vendor is never deleted. A Vendor the user no longer wants offered for new use is
+**hidden** instead, which is permitted whether or not Orders reference it — the usual
+reason to hide one is precisely that it is no longer used for new Orders — and is
+reversible at any time. Its record and Vendor ID stay in `vendors.json` permanently, so
+every Vendor Reference keeps resolving the Vendor's current shared facts and SpielOrders
+itself can never orphan one. Hiding governs what is offered, never what is resolved.
 
 Vendor ID and Vendor Name are the only required Vendor facts. An Order whose Vendor is not known has no Vendor Reference; placeholder Vendors such as `Unknown` or `Vendor Not Recorded` are not created.
 

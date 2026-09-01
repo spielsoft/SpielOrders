@@ -151,19 +151,13 @@ failed attempts' evidence substituted for the passing rerun.
 
 ## Agent handoff chain
 
-Every implementation-ticket agent must end by inspecting the milestone index and
-ticket frontmatter in milestone order:
-
-1. Identify the first open, unblocked, unclaimed M1-upgrade ticket.
-2. Provide a complete ready-to-paste prompt for a fresh agent to implement exactly
-   that ticket under this same operating contract.
-3. Make that suggested prompt require its agent to repeat this handoff procedure, so
-   the chain remains intact without relying on conversation history.
-4. When Tickets 001 through 003 are closed, the next prompt must target
-   [Integrate and verify the M1-upgrade acceptance gate](tickets/004-m1-upgrade-acceptance-gate.md).
-5. When the acceptance-gate ticket is closed, stop the implementation chain, report
-   that M1-upgrade is complete and ready for external validation, and provide the
-   validation-only prompt required by that gate.
+Every implementation-ticket agent reports its final SHA and the first open,
+unblocked, unclaimed ticket in milestone order. The next agent loads the operating
+contract and selected ticket from the repository; handoffs do not reproduce them.
+After Tickets 001 through 003, the next ticket was
+[Integrate and verify the M1-upgrade acceptance gate](tickets/004-m1-upgrade-acceptance-gate.md).
+That gate stopped the implementation chain and handed external validation only the
+milestone path, fixed point, completed target, and allowed documentation writes.
 
 If no ticket is eligible because an open ticket is blocked or claimed, report the
 exact blocker or claim instead of selecting later work. Never use the handoff chain

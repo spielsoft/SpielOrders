@@ -1,10 +1,18 @@
-//! Exact just-in-time reads of conventional Package and Order README documents.
+//! Package-relative locations, the stable diagnostic envelope, and exact
+//! just-in-time reads of conventional Package and Order README documents.
+//!
+//! The README reads came first and named the module. What has accumulated beside
+//! them is everything that describes *where* something is and *what is wrong with
+//! it*: `Location` and the grammar that decides which paths this application can
+//! express, and the diagnostic codes, severities, scopes, and typed evidence that
+//! every reader reports through.
 
 pub use crate::operations::{
     FileSystemOperation, OperationEvidence, OperationFailure, OperationFailureCode,
     PackageIndexReplacementPhase,
 };
 use crate::{
+    digest::ContentDigest,
     metadata::{OrderId, VendorId},
     ports::{FileSystem, FileSystemEntryKind},
 };
@@ -99,6 +107,31 @@ fn is_normalized_package_relative(path: &str) -> bool {
                 .all(|segment| !segment.is_empty() && segment != "." && segment != ".."))
 }
 
+/// The normalized Package-relative spelling of `path` within `root`, when this
+/// application has one for it.
+///
+/// `None` when `path` is not inside `root`, when one of the components between
+/// them is not Unicode, or when the joined text is not a normalized
+/// Package-relative path — the three ways a real filesystem entry can exist
+/// inside a Package and still have no name a `Location` will carry.
+///
+/// This is the only place that answers the question. The code that must judge a
+/// name a user chose and the code that assembles a path out of this crate's own
+/// literal managed names ask it here rather than each carrying its own copy of
+/// the grammar, because a copy that drifts lets one admit what the other refuses.
+pub(crate) fn package_relative_path_text(root: &Path, path: &Path) -> Option<String> {
+    let relative = path.strip_prefix(root).ok()?;
+    let mut text = relative
+        .components()
+        .map(|component| component.as_os_str().to_str())
+        .collect::<Option<Vec<_>>>()?
+        .join("/");
+    if text.is_empty() {
+        text.push('.');
+    }
+    is_normalized_package_relative(&text).then_some(text)
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ReadmeKind {
     PackageReadme,
@@ -163,6 +196,7 @@ impl ReadmeReference {
 pub enum DiagnosticCode {
     ConfigurationPathInvalid,
     ConfigurationPathsOverlap,
+    ConfiguredOrdersDirectoryNameUnusable,
     ConfiguredOrdersDirectoryUnavailable,
     ManagedArtifactInvalidEncoding,
     ManagedArtifactInvalidShape,
@@ -175,6 +209,7 @@ pub enum DiagnosticCode {
     OrderPackageLocatorMismatch,
     OrderSemanticInvalid,
     OrdersDirectoryEntryDisallowed,
+    OrdersDirectoryEntryNameUnusable,
     ReadmeUnavailable,
     ReservedContentUnexpected,
     StagingArtifactPresent,
@@ -196,6 +231,9 @@ impl DiagnosticCode {
             Self::ConfigurationPathInvalid => "configuration_path_invalid",
             Self::ConfigurationPathsOverlap => "configuration_paths_overlap",
             Self::ConfiguredOrdersDirectoryUnavailable => "configured_orders_directory_unavailable",
+            Self::ConfiguredOrdersDirectoryNameUnusable => {
+                "configured_orders_directory_name_unusable"
+            }
             Self::OrderSemanticInvalid => "order_semantic_invalid",
             Self::OrderPackageLocatorMismatch => "order_package_locator_mismatch",
             Self::OrderIdDuplicate => "order_id_duplicate",
@@ -203,6 +241,7 @@ impl DiagnosticCode {
             Self::VendorNameDuplicate => "vendor_name_duplicate",
             Self::VendorReferenceUnresolved => "vendor_reference_unresolved",
             Self::OrdersDirectoryEntryDisallowed => "orders_directory_entry_disallowed",
+            Self::OrdersDirectoryEntryNameUnusable => "orders_directory_entry_name_unusable",
             Self::ReadmeUnavailable => "readme_unavailable",
             Self::ReservedContentUnexpected => "reserved_content_unexpected",
             Self::StagingArtifactPresent => "staging_artifact_present",
@@ -306,6 +345,9 @@ pub enum ConfiguredOrdersDirectoryReason {
     NotDirectory,
     OutsidePackage,
     ReservedMetadata,
+    /// The configured path resolves to a real name that has no normalized
+    /// Package-relative spelling, so no location can carry it.
+    NameUnusable,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -342,6 +384,7 @@ impl ConfiguredOrdersDirectoryReason {
             Self::NotDirectory => "not_directory",
             Self::OutsidePackage => "outside_package",
             Self::ReservedMetadata => "reserved_metadata",
+            Self::NameUnusable => "name_unusable",
         }
     }
 }
@@ -390,14 +433,41 @@ pub enum DiagnosticEvidence {
         configured_value: String,
         reason: ConfiguredOrdersDirectoryReason,
     },
+    /// The configured Orders path resolves, through a symbolic link, to a real name
+    /// with no normalized Package-relative spelling, so nothing that describes the
+    /// Package could refer to the directory it names. The configured value is
+    /// carried because it is the text the user can act on; the resolved name is the
+    /// one that has no spelling to report.
+    ConfiguredOrdersDirectoryNameUnusable {
+        configured_value: String,
+    },
     OrdersDirectoryEntryDisallowed {
+        observed_kind: FileSystemEntryKind,
+    },
+    /// One direct child of the Orders Directory whose filesystem name has no
+    /// normalized Package-relative spelling. Its `primary_location` therefore
+    /// carries an absolute path and no Package-relative one: the entry is inside
+    /// the Package, and the missing spelling is the condition being reported.
+    OrdersDirectoryEntryNameUnusable {
         observed_kind: FileSystemEntryKind,
     },
     ReservedContentUnexpected {
         observed_kind: FileSystemEntryKind,
     },
+    /// An abandoned staging candidate sits beside a managed destination.
+    ///
+    /// `candidate_digest` identifies *which* candidate, because promotion writes that
+    /// candidate's bytes: the path and the destination's validity are the same for
+    /// every candidate that name has ever held, so neither can tell one from another.
+    /// A digest rather than the bytes — a diagnostic is a report, and arbitrary user
+    /// content does not belong in one.
+    ///
+    /// It is `None` when the entry has no readable content to identify: a directory or
+    /// a link at the staging name, or a file that cannot be read. Nothing distinguishes
+    /// two such candidates, and reporting no evidence is how that is said.
     StagingArtifactPresent {
         destination_valid: Option<bool>,
+        candidate_digest: Option<ContentDigest>,
     },
     VendorIdDuplicate {
         vendor_id: VendorId,

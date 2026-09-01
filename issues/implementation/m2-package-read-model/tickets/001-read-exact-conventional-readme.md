@@ -237,9 +237,7 @@ semantics. Ticket 002 and every later M2 capability remain unimplemented.
 
 ## Handoff requirement
 
-After closure, inspect the milestone index and every M2 ticket in order. Generate a
-complete ready-to-paste prompt for a fresh worker to claim and implement only the
-first open, unblocked, unclaimed ticket—expected to be
-[Classify and project canonical Package state](002-classify-project-canonical-package.md)—under
-the same fixed-point, one-ticket, TDD, preservation, review, verification, and
-handoff rules. If it is blocked or claimed, report that state instead.
+After closure, report the final SHA and the next eligible ticket—at that point,
+[Classify and project canonical Package state](002-classify-project-canonical-package.md).
+The next worker derives claim, implementation, verification, and review rules from
+the milestone index and project-local skills; do not copy them into a prompt.

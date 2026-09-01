@@ -50,17 +50,20 @@ RIGHT (vertical):
 
 Before writing any code:
 
-- [ ] Confirm with user what interface changes are needed
-- [ ] Confirm with user which behaviors to test (prioritize)
+- [ ] Establish the approved public interface and prioritized behaviors from the
+      ticket/spec and its linked decisions
 - [ ] Identify opportunities for [deep modules](deep-modules.md) (small interface, deep implementation)
 - [ ] Design interfaces for [testability](interface-design.md)
 - [ ] List the behaviors to test (not implementation steps)
 - [ ] For each proposed test, state the running-system failure it would catch
-- [ ] Get user approval on the plan
+- [ ] Ask the user only if a material interface or product choice is still open
 
-Ask: "What should the public interface look like? Which behaviors are most important to test?"
+An approved implementation ticket is planning approval. Do not repeat its design
+interview in a fresh agent. Read additional decisions only when the selected
+behavior is ambiguous.
 
-**You can't test everything.** Confirm with the user exactly which behaviors matter most. Focus testing effort on critical paths and complex logic, not every possible edge case.
+**You can't test everything.** Follow the approved ticket's priorities and focus
+testing effort on critical paths and complex logic, not every possible edge case.
 
 ### 2. Tracer Bullet
 
@@ -92,12 +95,13 @@ Rules:
 ### 4. Hand Off to Code Review
 
 After all planned behavior is GREEN, stop the TDD loop and hand the complete ticket
-diff to `/code-review`. Refactoring and structural cleanup belong to that explicit
-review stage rather than being mixed into red-green implementation.
+diff to `/code-review`, run in its parallel sub-agent form. Refactoring and structural
+cleanup belong to that explicit review stage rather than being mixed into red-green
+implementation.
 
 - [ ] Run the focused tests for the behavior under review
-- [ ] Run the full test suite once
-- [ ] Invoke `/code-review` against the ticket's fixed starting point
+- [ ] Let `/implement` run the affected repository gate once after the ticket is stable
+- [ ] Invoke `/code-review` against the ticket's fixed starting point, parallel axes
 - [ ] Address accepted correctness, specification, and maintainability findings
 - [ ] Rerun focused and full tests after review-driven changes
 

@@ -2,7 +2,11 @@
 //! managed-evidence validation.
 
 use crate::{
-    filesystem::{ValidatedReplacementFailure, replace_validated_file, staging_path},
+    digest::ContentDigest,
+    filesystem::{
+        DestinationExpectation, ValidatedReplacementFailure, replace_validated_file_expecting,
+        staging_path,
+    },
     metadata::{
         Config, IndexDocument, IndexOrder, IndexOrderDirectory, MetadataErrorKind, OrderDocument,
         OrderId, Vendor, VendorsDocument, Version1, VersionDocument, config_shape_field,
@@ -13,7 +17,8 @@ use crate::{
     package::{PackageMetadata, PackageMetadataValidationFailure, index_semantics_are_valid},
     paths::{
         ConfiguredPath, ConfiguredPathFailure, DirectChildClassification, DirectChildObservation,
-        PackagePathError, discover_order_direct_children, resolve_package_layout,
+        PackagePathError, discover_order_direct_children, locator_resolves_to_root,
+        resolve_package_layout,
     },
     ports::{
         DirectoryEntry, FileChangeEvidence, FileChangeObservation, FileSystem, FileSystemEntryKind,
@@ -22,7 +27,7 @@ use crate::{
         ConfigurationPathKind, ConfigurationPathReason, ConfiguredOrdersDirectoryReason,
         Diagnostic, DiagnosticCode, DiagnosticEvidence, EvidenceScope, Location,
         ManagedArtifactKind, OrderLocatorReason, OrderSemanticReason, ReadmeKind, ReadmeRead,
-        ReadmeReference, Severity, read_readme,
+        ReadmeReference, Severity, package_relative_path_text, read_readme,
     },
 };
 use std::{
@@ -282,6 +287,33 @@ impl PackageIndexRecord {
     pub fn expected_version(&self) -> Option<u64> {
         self.expected_version
     }
+
+    pub(crate) fn after_committed_membership_change_without_refresh(&self) -> Self {
+        self.after_committed_change_without_refresh(PackageIndexStaleReason::OrderMembershipChanged)
+    }
+
+    pub(crate) fn after_committed_vendor_change_without_refresh(&self) -> Self {
+        self.after_committed_change_without_refresh(PackageIndexStaleReason::VendorsChanged)
+    }
+
+    pub(crate) fn after_committed_order_metadata_change_without_refresh(&self) -> Self {
+        self.after_committed_change_without_refresh(PackageIndexStaleReason::OrderMetadataChanged)
+    }
+
+    pub(crate) fn after_committed_order_readme_change_without_refresh(&self) -> Self {
+        self.after_committed_change_without_refresh(PackageIndexStaleReason::OrderReadmeChanged)
+    }
+
+    fn after_committed_change_without_refresh(&self, reason: PackageIndexStaleReason) -> Self {
+        let mut record = self.clone();
+        record.state = PackageIndexState::Stale;
+        record.refresh = PackageIndexRefresh::NotAttempted;
+        record.malformed_reasons.clear();
+        record.stale_reasons = vec![reason];
+        record.observed_version = None;
+        record.expected_version = None;
+        record
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -316,7 +348,7 @@ pub struct HealthyOrder {
     document: OrderDocument,
     item_totals: Vec<f64>,
     order_total: f64,
-    index_readme_text: String,
+    readme_text: Option<String>,
 }
 
 impl HealthyOrder {
@@ -336,8 +368,21 @@ impl HealthyOrder {
         self.order_total
     }
 
-    pub fn index_readme_text(&self) -> &str {
-        &self.index_readme_text
+    /// The Order README text this projection carries, or `None` when it carries none.
+    ///
+    /// An absent README reads as `Some("")`, because absence is a text: there is
+    /// nothing written. `None` says the opposite — this projection does not know what
+    /// the document holds, because it exists and could not be read, is not valid
+    /// UTF-8, or is not a file at all; the load's document diagnostics say which.
+    /// Collapsing the two would report a file that holds bytes as one a reader could
+    /// safely treat as blank.
+    ///
+    /// **Every capability that reports an Order carries this distinction unchanged.**
+    /// None of them writes the Order README, so each reports what the load knew — and
+    /// `None` when the load knew nothing. Their own comments say why the load's
+    /// knowledge is still current for that operation, not what `None` means.
+    pub fn readme_text(&self) -> Option<&str> {
+        self.readme_text.as_deref()
     }
 }
 
@@ -431,8 +476,21 @@ impl CurrentPackageCandidate {
         &self.damaged_orders
     }
 
+    /// Every Vendor in the Package, Hidden Vendors included, each carrying its own
+    /// visibility. A caller that needs one either way — `package show`, the Vendors
+    /// table and its show/hide control — reads this rather than a filtered list.
     pub fn vendors(&self) -> &[Vendor] {
         &self.vendors
+    }
+
+    /// The Vendors this Package offers for new use. A Hidden Vendor is excluded here
+    /// and still resolves through `vendors` and `vendor_for_order`, because hiding
+    /// governs what is offered and never what is resolved.
+    pub fn offered_vendors(&self) -> Vec<&Vendor> {
+        self.vendors
+            .iter()
+            .filter(|vendor| !vendor.is_hidden())
+            .collect()
     }
 
     pub fn vendor_for_order(&self, order_index: usize) -> Option<&Vendor> {
@@ -852,18 +910,27 @@ fn reserved_directory_diagnostics<F: FileSystem>(
         })?;
     let mut diagnostics = Vec::new();
     for entry in entries {
-        let Some(name) = entry.name().to_str() else {
+        // An entry this application cannot name is refused here for the same
+        // reason a name that is not Unicode already was: every diagnostic below
+        // needs a Package-relative location for it, and there is none to give.
+        // Both are one condition, so they get one answer.
+        let named = entry.name().to_str().and_then(|name| {
+            let path = specification.directory.absolute_path().join(name);
+            let relative = package_relative_path_text(root, &path)?;
+            Some((name.to_owned(), path, relative))
+        });
+        let Some((name, path, relative)) = named else {
             return Err(OperationFailure::filesystem(
                 FileSystemOperation::ListDirectory,
                 specification.directory.clone(),
                 Vec::new(),
             ));
         };
+        let name = name.as_str();
         if specification.expected.contains(&name) {
             continue;
         }
-        let path = specification.directory.absolute_path().join(name);
-        let primary = managed_location(path.clone(), relative_path(root, &path));
+        let primary = managed_location(path, relative);
         if let Some(destination_name) = recognized_staging_destination(name, specification.expected)
         {
             let destination_path = specification
@@ -882,13 +949,28 @@ fn reserved_directory_diagnostics<F: FileSystem>(
                     })
                 })
             });
+            // Which candidate is staged here, so a confirmation to promote it stops
+            // authorizing anything once a different candidate takes its place. Only an
+            // entry the listing reported as a regular file is read: a directory has no
+            // content to promote, and a link is not this application's to follow.
+            // Neither yields identifying evidence, and neither is given a stand-in.
+            let candidate_digest = match entry.kind() {
+                FileSystemEntryKind::File => filesystem
+                    .read(primary.absolute_path())
+                    .ok()
+                    .map(|bytes| ContentDigest::of(&bytes)),
+                _ => None,
+            };
             diagnostics.push(Diagnostic::new(
                 DiagnosticCode::StagingArtifactPresent,
                 Severity::Warning,
                 specification.scope,
                 primary,
                 vec![destination],
-                DiagnosticEvidence::StagingArtifactPresent { destination_valid },
+                DiagnosticEvidence::StagingArtifactPresent {
+                    destination_valid,
+                    candidate_digest,
+                },
             ));
         } else {
             diagnostics.push(Diagnostic::new(
@@ -948,6 +1030,22 @@ pub fn open_package<F: FileSystem>(selected_root: &Path, filesystem: &F) -> Pack
     open_package_canonically(selected_root, &filesystem, fast_stale_reasons)
 }
 
+/// No candidate validation failure is possible when rebuilding the derived index, and
+/// this states it in a form the compiler checks.
+///
+/// The rebuild's candidate is `index_document(&package)` serialized, built from a
+/// `CurrentPackageCandidate` whose Orders were validated and normalized at load, whose
+/// duplicate ids were quarantined before sorting, and whose Vendors validated as an
+/// aggregate. `sort_healthy_orders` orders by exactly the rule `compare_index_orders`
+/// validates by. Nothing on disk reaches the candidate, so there was never a condition
+/// for a guard here to refuse.
+///
+/// The index still gets both checks — semantics and canonical serialization — at load,
+/// in `assess_index`. That is where a *stored* index can be wrong, and it is the
+/// deliberate exception a cache this application owns keeps.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IndexCandidateFailure {}
+
 fn open_package_canonically<F: FileSystem>(
     selected_root: &Path,
     filesystem: &F,
@@ -965,10 +1063,7 @@ fn open_package_canonically<F: FileSystem>(
         }
         CanonicalPackageLoad::OperationFailed(package) => PackageLoad::OperationFailed(package),
         CanonicalPackageLoad::CurrentCandidate(mut package) => {
-            let index = index_document(&package);
-            let candidate = index
-                .to_json_bytes()
-                .expect("validated canonical facts serialize as metadata version 1");
+            let rebuilt = index_document(&package);
             let index_path = package.context.index.absolute_path().to_path_buf();
             let assessment = match assess_index(package.index.clone(), filesystem) {
                 Ok(assessment) => assessment,
@@ -981,6 +1076,11 @@ fn open_package_canonically<F: FileSystem>(
                 }
             };
             let old_index_bytes = assessment.bytes;
+            // Whether this load observed nothing at the index path, taken from the
+            // assessment before the bookkeeping below rewrites the state it recorded.
+            // Carrying no bytes is not the same question: an index that is a directory,
+            // or a file whose read failed, carries none either and is plainly there.
+            let observed_no_index = assessment.record.state == PackageIndexState::Missing;
             package.index = assessment.record;
             if package.index.state == PackageIndexState::NotAssessed {
                 let mut stale_reasons = stale_index_reasons(
@@ -1005,37 +1105,73 @@ fn open_package_canonically<F: FileSystem>(
                 package.index.stale_reasons = stale_reasons;
                 package.index.state = PackageIndexState::Stale;
             }
-            let replacement =
-                replace_validated_file(&index_path, &candidate, filesystem, |staged| {
-                    if staged != candidate {
-                        return Err(crate::metadata::MetadataError::invalid_semantics());
-                    }
-                    let parsed = IndexDocument::from_json_bytes(staged)?;
-                    if !index_semantics_are_valid(&parsed) {
-                        Err(crate::metadata::MetadataError::invalid_semantics())
-                    } else if parsed.to_json_bytes()? == staged {
-                        Ok(())
-                    } else {
-                        Err(crate::metadata::MetadataError::non_deterministic())
-                    }
-                });
+            // A load that could not read an Order README has nothing to cache for it,
+            // so it caches nothing: the stored index keeps whatever a load that could
+            // read it left there, and its assessment stands as found. The alternative
+            // is writing an empty README into the durable record and then, on the next
+            // load, proving that record current against change evidence — which is how
+            // a momentary read failure became a permanent silent one.
+            let Some(index) = rebuilt else {
+                package.index.refresh = PackageIndexRefresh::NotAttempted;
+                return PackageLoad::Available(package);
+            };
+            let candidate = index
+                .to_json_bytes()
+                .expect("validated canonical facts serialize as metadata version 1");
+            // The index as this load assessed it. Rebuilding over a different one
+            // would discard a concurrent writer's index; refusing lets the caller
+            // reload instead. Observing no index is an observation like any other, so
+            // an index appearing at the path since is a changed destination — checked
+            // by observing the path, because there are no bytes to compare.
+            //
+            // An index that is there but could not be read as bytes is neither
+            // observation. This contract can say "these bytes" and "nothing", not
+            // "something I could not read", so that case carries no evidence, exactly
+            // as it did before absence was distinguished from it. Claiming absence
+            // instead would refuse the rebuild that heals it, permanently, and blame a
+            // concurrent writer for it. Ticket 020's closeout names this as the one
+            // remaining unevidenced index write.
+            let expectation = match old_index_bytes.as_deref() {
+                Some(bytes) => DestinationExpectation::Exactly(bytes),
+                None if observed_no_index => DestinationExpectation::Absent,
+                None => DestinationExpectation::Unchecked,
+            };
+            let replacement = replace_validated_file_expecting(
+                &index_path,
+                &candidate,
+                expectation,
+                filesystem,
+                |_| Ok::<(), IndexCandidateFailure>(()),
+            );
             if let Err(error) = replacement {
                 package.index.refresh = PackageIndexRefresh::ReplacementFailed;
                 let phase = match error.failure() {
                     ValidatedReplacementFailure::StagingWrite(_) => {
                         PackageIndexReplacementPhase::WriteStage
                     }
-                    ValidatedReplacementFailure::ValidationRead(_) => {
-                        PackageIndexReplacementPhase::ReadStage
-                    }
-                    ValidatedReplacementFailure::CandidateValidation(_) => {
-                        PackageIndexReplacementPhase::CandidateValidation
+                    // Forced to stay because `error.failure()` hands back a reference,
+                    // and rustc wants a pattern for an uninhabited type matched behind
+                    // one. Discharged by an empty match on the dereferenced value,
+                    // which the compiler checks and which produces no phase — so the
+                    // rebuild has no spelled failure code that nothing can emit.
+                    ValidatedReplacementFailure::CandidateValidation(impossible) => {
+                        match *impossible {}
                     }
                     ValidatedReplacementFailure::Durability(_) => {
                         PackageIndexReplacementPhase::SyncStage
                     }
                     ValidatedReplacementFailure::Replacement(_) => {
                         PackageIndexReplacementPhase::Replace
+                    }
+                    // The rebuild carries the index this load assessed, so it can be
+                    // refused. A caller that cannot tell a concurrent writer from a
+                    // failed rename would retry the rebuild and discard their index,
+                    // which is the whole reason the evidence is carried.
+                    ValidatedReplacementFailure::DestinationChanged => {
+                        PackageIndexReplacementPhase::DestinationChanged
+                    }
+                    ValidatedReplacementFailure::DestinationUnreadable(_) => {
+                        PackageIndexReplacementPhase::DestinationUnreadable
                     }
                     ValidatedReplacementFailure::InvalidDestination => {
                         PackageIndexReplacementPhase::WriteStage
@@ -1243,16 +1379,7 @@ fn try_open_current_index<F: FileSystem>(
     let mut package_diagnostics = layout
         .direct_children()
         .iter()
-        .filter_map(|observation| {
-            let DirectChildClassification::Disallowed(kind) = observation.classification() else {
-                return None;
-            };
-            Some(orders_directory_entry_disallowed_diagnostic(
-                &root,
-                observation,
-                kind,
-            ))
-        })
+        .filter_map(|observation| unusable_direct_child_diagnostic(&root, observation))
         .collect::<Vec<_>>();
     normalize_diagnostics(&mut package_diagnostics);
     let mut diagnostic_groups = if package_diagnostics.is_empty() {
@@ -1277,7 +1404,10 @@ fn try_open_current_index<F: FileSystem>(
             healthy_order_from_validated(
                 order_paths(&root, &order_directory),
                 &validated,
-                entry.readme.clone(),
+                // A stored entry is a text some load read from that README, and this
+                // path proved nothing has replaced it since. Only the rebuild can put
+                // a text here, and it refuses to invent one.
+                Some(entry.readme.clone()),
             )
         })
         .collect::<Vec<_>>();
@@ -1331,27 +1461,37 @@ fn cutoff_reason(
     }
 }
 
-fn index_document(package: &CurrentPackageCandidate) -> IndexDocument {
-    IndexDocument {
+/// The index this Package's canonical facts would be cached as, or `None` when one
+/// of them is not known.
+///
+/// A version-1 entry must carry a `readme` string, and there is no spelling in that
+/// closed schema for "the README exists and this load could not read it". Writing
+/// the empty string there would record a document that holds bytes as one that holds
+/// none, in the durable file a later load proves itself current against. Returning
+/// `None` instead is what makes the refusal at the single rebuild site unmissable.
+fn index_document(package: &CurrentPackageCandidate) -> Option<IndexDocument> {
+    Some(IndexDocument {
         schema_version: Version1,
         orders: package
             .healthy_orders
             .iter()
-            .map(|order| IndexOrder {
-                order_directory: IndexOrderDirectory::new(
-                    order
-                        .paths
-                        .directory
-                        .package_relative_path()
-                        .expect("healthy Order paths are established"),
-                )
-                .expect("healthy Order paths are valid index paths"),
-                order: order.document.clone(),
-                readme: order.index_readme_text.clone(),
+            .map(|order| {
+                Some(IndexOrder {
+                    order_directory: IndexOrderDirectory::new(
+                        order
+                            .paths
+                            .directory
+                            .package_relative_path()
+                            .expect("healthy Order paths are established"),
+                    )
+                    .expect("healthy Order paths are valid index paths"),
+                    order: order.document.clone(),
+                    readme: order.readme_text.clone()?,
+                })
             })
-            .collect(),
+            .collect::<Option<Vec<_>>>()?,
         vendors: package.vendors.clone(),
-    }
+    })
 }
 
 fn assess_index_without_freshness<F: FileSystem>(
@@ -1526,7 +1666,16 @@ fn stale_index_reasons(
             .orders
             .iter()
             .find(|entry| entry.order_directory.as_str() == path)
-            .is_some_and(|entry| entry.readme != order.index_readme_text)
+            .is_some_and(|entry| {
+                // Only a text this load actually read can show the stored one is out
+                // of date. A README this load could not read is not evidence that it
+                // changed, and reporting it as changed would name the wrong reason
+                // for an index this load is about to decline to rewrite anyway.
+                order
+                    .readme_text
+                    .as_deref()
+                    .is_some_and(|text| entry.readme != text)
+            })
     }) {
         reasons.push(PackageIndexStaleReason::OrderReadmeChanged);
     }
@@ -1811,17 +1960,9 @@ fn inspect_canonical_package_with_breadth<F: FileSystem>(
     let mut damaged_orders = Vec::new();
     let mut diagnostic_groups = Vec::new();
     for observation in layout.direct_children() {
-        match observation.classification() {
-            DirectChildClassification::IgnoredHidden => continue,
-            DirectChildClassification::Disallowed(kind) => {
-                package_diagnostics.push(orders_directory_entry_disallowed_diagnostic(
-                    &root,
-                    observation,
-                    kind,
-                ));
-                continue;
-            }
-            DirectChildClassification::OrderCandidate => {}
+        if observation.classification() != DirectChildClassification::OrderCandidate {
+            package_diagnostics.extend(unusable_direct_child_diagnostic(&root, observation));
+            continue;
         }
         let paths = order_paths(&root, observation.path());
         if breadth == CanonicalInspectionBreadth::Exhaustive {
@@ -1941,9 +2082,12 @@ fn inspect_canonical_package_with_breadth<F: FileSystem>(
         {
             Some(OrderLocatorReason::NotActiveDirectChild)
         } else {
-            let parent_count = validated.order().package_root.as_str().split('/').count();
-            (resolved_order_directory.ancestors().nth(parent_count) != Some(root.as_path()))
-                .then_some(OrderLocatorReason::DoesNotResolveToPackage)
+            (!locator_resolves_to_root(
+                &resolved_order_directory,
+                &validated.order().package_root,
+                &root,
+            ))
+            .then_some(OrderLocatorReason::DoesNotResolveToPackage)
         };
         if let Some(reason) = locator_reason {
             order_diagnostics.push(Diagnostic::new(
@@ -1994,7 +2138,7 @@ fn inspect_canonical_package_with_breadth<F: FileSystem>(
             );
             continue;
         }
-        let index_readme_text = if breadth == CanonicalInspectionBreadth::Ordinary {
+        let readme_text = if breadth == CanonicalInspectionBreadth::Ordinary {
             let readme = match read_readme(&paths.readme, filesystem) {
                 Ok(readme) => readme,
                 Err(failure) => return operation_failed(None, Some(context.clone()), failure),
@@ -2006,15 +2150,16 @@ fn inspect_canonical_package_with_breadth<F: FileSystem>(
                     diagnostics: readme.diagnostics().to_vec(),
                 });
             }
-            readme.text().unwrap_or("").to_owned()
+            // `read_readme` already separates absence, which is an empty text, from
+            // a document that exists and could not be read, which is no text at all.
+            // The projection carries that separation instead of flattening it.
+            readme.text().map(str::to_owned)
         } else {
-            String::new()
+            // The exhaustive breadth reads and reports every README on its own and
+            // discards these Orders, so this loop consults none and claims none.
+            None
         };
-        healthy_orders.push(healthy_order_from_validated(
-            paths,
-            &validated,
-            index_readme_text,
-        ));
+        healthy_orders.push(healthy_order_from_validated(paths, &validated, readme_text));
     }
     quarantine_duplicate_order_ids(
         &mut healthy_orders,
@@ -2074,18 +2219,105 @@ fn orders_directory_entry_disallowed_diagnostic(
     )
 }
 
+/// Names one direct child of the Orders Directory the application cannot express
+/// as a Package-relative path, so that a reader learns which entry was skipped
+/// and why rather than losing the whole Package to an assertion.
+///
+/// The location is absolute only. Every other managed location also carries a
+/// Package-relative path, and this one cannot: having none is the very condition
+/// being reported, and fabricating one would name a different entry.
+fn orders_directory_entry_name_unusable_diagnostic(
+    observation: &DirectChildObservation,
+    observed_kind: FileSystemEntryKind,
+) -> Diagnostic {
+    Diagnostic::new(
+        DiagnosticCode::OrdersDirectoryEntryNameUnusable,
+        Severity::Warning,
+        EvidenceScope::Package,
+        // The path is the canonicalized Orders Directory joined with one entry
+        // name, so it is absolute for the same reason the Orders Directory is.
+        Location::absolute(observation.path().to_path_buf())
+            .expect("a direct child of the canonical Orders Directory is absolute"),
+        Vec::new(),
+        DiagnosticEvidence::OrdersDirectoryEntryNameUnusable { observed_kind },
+    )
+}
+
+/// What one direct child of the Orders Directory that is not an Order candidate
+/// reports, or `None` when it reports nothing.
+///
+/// The ordinary load and the current-index fast path both walk the same
+/// classified list and owe the same answer for it, so they read that answer here
+/// rather than each carrying a copy of the mapping.
+fn unusable_direct_child_diagnostic(
+    root: &Path,
+    observation: &DirectChildObservation,
+) -> Option<Diagnostic> {
+    match observation.classification() {
+        DirectChildClassification::Disallowed(kind) => Some(
+            orders_directory_entry_disallowed_diagnostic(root, observation, kind),
+        ),
+        DirectChildClassification::NameUnusable(kind) => Some(
+            orders_directory_entry_name_unusable_diagnostic(observation, kind),
+        ),
+        // A hidden child is ignored rather than reported, and an Order candidate
+        // is projected as an Order instead.
+        DirectChildClassification::IgnoredHidden | DirectChildClassification::OrderCandidate => {
+            None
+        }
+    }
+}
+
 fn healthy_order_from_validated(
     paths: OrderPaths,
     validated: &ValidatedOrder,
-    index_readme_text: String,
+    readme_text: Option<String>,
 ) -> HealthyOrder {
     HealthyOrder {
         paths,
         document: validated.order().clone(),
         item_totals: validated.item_totals().to_vec(),
         order_total: validated.order_total(),
-        index_readme_text,
+        readme_text,
     }
+}
+
+pub(crate) fn project_created_order(
+    root: &Path,
+    directory: &Path,
+    document: &OrderDocument,
+) -> HealthyOrder {
+    // Creation writes the conventional README itself, as an empty document, so the
+    // created Order's text is known rather than merely unread.
+    project_committed_order(root, directory, document, Some(String::new()))
+}
+
+/// The text of the Order README at `directory`, as `read_readme` reads it.
+///
+/// `Some("")` for an absent README, `Some(text)` for one that was read, and `None`
+/// for one that exists and could not be read, is not valid UTF-8, or is not a file.
+/// For projections built without a refreshed Package, which have no loaded Order to
+/// take the text from.
+pub(crate) fn order_readme_text<F: FileSystem>(
+    root: &Path,
+    directory: &Path,
+    filesystem: &F,
+) -> Option<String> {
+    read_readme(&order_paths(root, directory).readme, filesystem)
+        .ok()
+        .and_then(|readme| readme.text().map(str::to_owned))
+}
+
+pub(crate) fn project_committed_order(
+    root: &Path,
+    directory: &Path,
+    document: &OrderDocument,
+    readme_text: Option<String>,
+) -> HealthyOrder {
+    let validated = document
+        .validate()
+        .expect("a committed Order was validated before its first write");
+    healthy_order_from_validated(order_paths(root, directory), &validated, readme_text)
 }
 
 fn current_package_candidate(
@@ -2280,6 +2512,16 @@ fn layout_diagnostic<E>(root: &Path, config: &Config, error: PackagePathError<E>
             root,
             config,
             ConfiguredOrdersDirectoryReason::OutsidePackage,
+        ),
+        PackagePathError::OrdersDirectoryNameUnusable => Diagnostic::new(
+            DiagnosticCode::ConfiguredOrdersDirectoryNameUnusable,
+            Severity::Error,
+            EvidenceScope::Package,
+            managed_location(root.join(&config.orders_path), config.orders_path.clone()),
+            Vec::new(),
+            DiagnosticEvidence::ConfiguredOrdersDirectoryNameUnusable {
+                configured_value: config.orders_path.clone(),
+            },
         ),
         PackagePathError::RemovedOrdersDirectoryNotOrdinary => Diagnostic::new(
             DiagnosticCode::ConfigurationPathInvalid,
@@ -2847,20 +3089,31 @@ fn managed_root_context(root: &Path) -> ManagedContext {
     }
 }
 
+/// A `Location` for a managed path with a Package-relative spelling already in hand.
+///
+/// The expectation holds by construction rather than by assertion. Every caller
+/// supplies either one of this module's own literal managed names, an
+/// `IndexOrderDirectory` whose validator enforces the same grammar, or a value
+/// `relative_path` produced — and `relative_path` only ever produces normalized
+/// text, because the grammar is what decides whether it produces any at all.
 fn managed_location(path: PathBuf, relative: impl Into<String>) -> Location {
     Location::within_package(path, relative).expect("managed location is normalized")
 }
 
+/// The Package-relative spelling of a managed path inside `root`.
+///
+/// Every caller passes a path this crate assembled from its own literal managed
+/// names, or a direct child of the Orders Directory that
+/// `discover_order_direct_children` has already classified — and a child whose
+/// name has no spelling is classified `NameUnusable` and never reaches a
+/// projection. So the expectation is discharged by the classification rather
+/// than asserted here.
+///
+/// The configured managed paths were once outside that argument: an Orders
+/// Directory reached through a symbolic link resolves to a real name no configured
+/// value was checked against. `resolve_managed_paths` now asks the same grammar of
+/// the name it resolved to and refuses a Package whose managed directory has no
+/// spelling, so those paths reach this expectation already discharged too.
 fn relative_path(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .expect("managed path is inside root")
-        .components()
-        .map(|component| {
-            component
-                .as_os_str()
-                .to_str()
-                .expect("managed version-1 paths are UTF-8")
-        })
-        .collect::<Vec<_>>()
-        .join("/")
+    package_relative_path_text(root, path).expect("managed paths have a Package-relative spelling")
 }

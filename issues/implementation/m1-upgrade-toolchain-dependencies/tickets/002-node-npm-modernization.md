@@ -69,10 +69,10 @@ bundler/server infrastructure, product behavior, Rust dependency changes, and al
 M2/M3 work.
 
 For the third reopening only, the user-approved 2026-07-31 stabilization window
-supersedes the currentness-update bullets above for compatible releases published
-after frozen target `67dc5e4560df173b902b24d3463bb01ff46de23b`. This
-reopening records and reviews the deferral; it must not install those releases or
-regenerate either npm graph. The complete compatible refresh moves to M2 closeout.
+governs compatible releases published after frozen target
+`67dc5e4560df173b902b24d3463bb01ff46de23b`. This reopening records and reviews
+the deferral; it must not install those releases or regenerate either npm graph.
+The complete compatible refresh moves to M2 closeout.
 
 ## Acceptance criteria
 

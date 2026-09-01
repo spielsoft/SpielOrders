@@ -3,6 +3,7 @@
 use crate::metadata::{
     IndexDocument, IndexOrder, OrderDocument, Vendor, VendorId, VendorsDocument, Version1,
     VersionDocument, normalize_optional_multiline, normalize_optional_single_line,
+    normalize_optional_visibility,
 };
 use crate::order::{OrderValidationFailure, ValidatedOrder};
 use focaccia::unicode_full_case_eq;
@@ -252,6 +253,7 @@ fn normalize_vendors(vendors: &mut [Vendor]) {
         normalize_optional_single_line(&mut vendor.website);
         normalize_optional_multiline(&mut vendor.address);
         normalize_optional_multiline(&mut vendor.purchasing_notes);
+        normalize_optional_visibility(&mut vendor.hidden);
         for contact in &mut vendor.contacts {
             contact.name.normalize_single_line();
             normalize_optional_single_line(&mut contact.role);

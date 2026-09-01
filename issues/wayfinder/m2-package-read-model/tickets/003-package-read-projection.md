@@ -195,11 +195,18 @@ evidence. `exists` means the path was observed, not that it was an ordinary usab
 file.
 
 Because metadata version 1 requires Order README text in `index.json`, every
-healthy Order also carries `index_readme_text`. On the fast path it comes from the
-validated current index. On rebuild it is the exact decoded text, absence as empty,
-or empty when that rebuild observed an unavailable document and emitted its
-warning. This field is derived cache content, not an assertion that a later
-explicit read will succeed. Damaged Orders have no index text. The Package README
+healthy Order also carries the README text the load established, when it
+established one. On the fast path it comes from the validated current index. On
+rebuild it is the exact decoded text, or absence as empty.
+
+A rebuild that observed an unavailable document establishes no text. The healthy
+Order carries none, and the rebuild does not run: version 1 has no spelling for a
+README whose text is unknown, and the empty string is not one — writing it would
+record a document that holds bytes as one that holds none, in the durable file a
+later load proves itself current against. The stored index keeps whatever a load
+that could read the document left there. This field is derived cache content, not
+an assertion that a later explicit read will succeed. Damaged Orders have no index
+text. The Package README
 is never indexed; an adapter needing it composes Package load with its explicit
 README read. Editing and atomic README writes remain later mutation behavior.
 
@@ -216,7 +223,12 @@ The visible pair represents the state after the attempted load:
 - a successful canonical rebuild is `current` / `rebuilt` and does not retain the
   prior derived problem as a diagnostic;
 - canonical damage or an upgrade-only result retains any supported assessment
-  already made, or uses `not_assessed`, with `not_attempted`; and
+  already made, or uses `not_assessed`, with `not_attempted`;
+- a rebuild declined because a canonical input the index must carry was not
+  established — for example, an Order README that exists and could not be read —
+  likewise retains the assessment already made, with
+  `not_attempted`. The load remains available and the Order remains healthy; only
+  the cache is left alone; and
 - failed required replacement retains the original missing, malformed,
   wrong-version, or stale assessment and its ordered typed reasons with
   `replacement_failed`.

@@ -326,9 +326,7 @@ capability remain unimplemented.
 
 ## Handoff requirement
 
-After closure, generate the complete ready-to-paste prompt for the first open,
-unblocked, unclaimed M2 ticket—expected to be
-[Rebuild the Package Index and preserve replacement-failure evidence](003-rebuild-package-index.md)—and
-require the same exact fixed point, single-ticket TDD/review workflow, preservation,
-verification, and recursive handoff. Report a blocker or claim instead of skipping
-ahead.
+After closure, report the final SHA and the next eligible ticket—at that point,
+[Rebuild the Package Index and preserve replacement-failure evidence](003-rebuild-package-index.md).
+The next worker loads its rules from the milestone index and project-local skills;
+do not generate a recursive prompt.

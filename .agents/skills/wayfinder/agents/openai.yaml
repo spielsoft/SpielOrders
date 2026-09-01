@@ -1,0 +1,5 @@
+interface:
+  display_name: "Wayfinder"
+  short_description: "Resolve a map of product decisions"
+policy:
+  allow_implicit_invocation: false

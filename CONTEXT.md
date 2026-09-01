@@ -73,7 +73,7 @@ The conventional, user-authored `README.md` within an Order Directory. SpielOrde
 _Avoid_: Notes, generated summary
 
 **Vendor**:
-The person or organization from which an Order is obtained. A Vendor requires one Vendor Name and may retain general phone, email, website, multiline address, Vendor Contacts, and purchasing notes; it is shared across Orders and has one continuous identity despite changes to its facts.
+The person or organization from which an Order is obtained. A Vendor requires one Vendor Name and may retain general phone, email, website, multiline address, Vendor Contacts, and purchasing notes; it is shared across Orders and has one continuous identity despite changes to its facts. A Vendor is never deleted: taking one out of use is a visibility change that makes it a Hidden Vendor, so its record and Vendor ID survive and every Order referencing it keeps resolving.
 _Avoid_: Supplier record
 
 **Vendor ID**:
@@ -91,6 +91,10 @@ _Avoid_: Unknown Vendor, missing optional Vendor
 **Vendor Name**:
 The single required, nonblank, user-editable name used to identify a Vendor throughout one SpielOrder Package. Vendor Names are unique after trimming surrounding whitespace and ignoring letter case.
 _Avoid_: Display name, legal name, Vendor alias
+
+**Hidden Vendor**:
+A Vendor that SpielOrders no longer offers for new use, while its record and Vendor ID remain and every Order referencing it resolves its current shared facts exactly as before. Hiding is a reversible toggle and is permitted whether or not Orders reference the Vendor; it governs what is offered, never what is resolved.
+_Avoid_: Disabled Vendor, deleted Vendor, archived Vendor, inactive Vendor
 
 **Vendor Contact**:
 A named person associated with a Vendor, with optional role, phone, and email information. A Vendor may retain any number of Vendor Contacts independently of its general contact information.

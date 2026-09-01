@@ -66,7 +66,8 @@ spielorders order item remove POSITION
 
 spielorders vendor show NAME
 spielorders vendor edit NAME field=value...
-spielorders vendor remove NAME
+spielorders vendor hide NAME
+spielorders vendor unhide NAME
 
 spielorders vendor contact list NAME
 spielorders vendor contact add NAME field=value...
@@ -101,9 +102,13 @@ Every command's assignments form one order-independent, fully validated atomic m
 
 Order Items and Vendor Contacts have no IDs and use one-based positions. `add` appends unless `position=N` is supplied; `edit`, `move`, and `remove` evaluate positions against the pre-mutation ordered collection. The core rewrites the complete validated owning Order or Vendor aggregate atomically.
 
-Vendor Names are the ordinary Vendor selectors and resolve by the established trimmed, case-insensitive package-unique comparison. Machine responses always retain Vendor IDs. `vendor show` includes summaries of referencing Orders. `vendor remove` is rejected while any Order references the Vendor.
+Vendor Names are the ordinary Vendor selectors and resolve by the established trimmed, case-insensitive package-unique comparison. Machine responses always retain Vendor IDs. `vendor show` includes summaries of referencing Orders and resolves a Hidden Vendor exactly as it resolves any other. A Vendor is never deleted: `vendor hide` stops offering one for new use and `vendor unhide` offers it again, neither is rejected on reference grounds, and the Vendor's record and ID survive either way. Vendor lists default to the currently active Vendors: `package list vendors` and `package show` omit Hidden Vendors unless `--all` is supplied, and with `--all` every Vendor is reported carrying its visibility. The core does not filter — it exposes both the complete list with visibility and the offered-only list — so this default is a presentation choice the CLI makes, and the desktop Vendors table consumes the complete list for its show/hide control.
 
-Vendor Merge is removed from the product and core contract. The earlier merge provision in [Define Vendor identity and historical semantics](004-vendor-identity-history.md) is superseded. Duplicate reconciliation during adoption must use an existing Vendor association, a deliberately distinct Vendor, or removal of an unreferenced duplicate; it cannot consolidate two Vendor records.
+Vendor Merge is absent from the product and core contract, consistently with
+[Define Vendor identity and historical semantics](004-vendor-identity-history.md).
+Duplicate reconciliation during adoption must use an existing Vendor association,
+a deliberately distinct Vendor, or hiding the duplicate so it stops being offered
+for new use; it cannot consolidate two Vendor records.
 
 ### Removal and mutation boundaries
 
@@ -113,7 +118,7 @@ Vendor Merge is removed from the product and core contract. The earlier merge pr
 
 `order remove --delete` sends the complete directory to the platform Trash or Recycle Bin instead of the Removed Orders Directory. It never permanently erases it. Permanent disposal remains ordinary platform trash management.
 
-All mutating commands accept `--dry-run`. A dry run performs validation and emits the same planned mutation report with `committed: false`, but creates no directory, staging file, index rewrite, or cleanup side effect. Commands never prompt and there is no `--yes`: naming the mutation and omitting `--dry-run` is authorization. Preconditions still reject unsafe removal, collisions, referenced Vendor removal, invalid writes, and unsupported repair actions.
+All mutating commands accept `--dry-run`. A dry run performs validation and emits the same planned mutation report with `committed: false`, but creates no directory, staging file, index rewrite, or cleanup side effect. Commands never prompt and there is no `--yes`: naming the mutation and omitting `--dry-run` is authorization. Preconditions still reject unsafe removal, collisions, invalid writes, and unsupported repair actions.
 
 The core validates a complete mutation plan before its first write. Managed-file replacements retain the established beside-destination staging, validation, atomic replacement, and rollback rules. Reports distinguish changed, unchanged, rejected, and committed-with-warnings outcomes. A committed canonical mutation followed by a failed derived-index refresh remains committed, reports the warning, and avoids encouraging an unsafe retry.
 

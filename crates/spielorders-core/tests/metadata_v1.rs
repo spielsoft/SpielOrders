@@ -61,7 +61,7 @@ fn minimal_order_round_trips_through_canonical_json() {
 
     let canonical = order.to_json_bytes().expect("typed order serializes");
 
-    assert_eq!(canonical.trim_ascii_end(), MINIMAL_ORDER.trim_ascii_end());
+    assert_eq!(canonical, MINIMAL_ORDER);
     assert!(canonical.ends_with(b"}\n"));
     assert!(!canonical.ends_with(b"}\n\n"));
     assert_eq!(
@@ -77,7 +77,7 @@ fn index_documents_preserve_complete_order_readme_and_vendor_projections() {
 
         let canonical = index.to_json_bytes().expect("index serializes");
 
-        assert_eq!(canonical.trim_ascii_end(), source.trim_ascii_end());
+        assert_eq!(canonical, source);
         assert!(canonical.ends_with(b"}\n"));
         assert!(!canonical.ends_with(b"}\n\n"));
         assert_eq!(
@@ -254,7 +254,7 @@ fn vendor_documents_preserve_ordered_vendors_contacts_and_optional_facts() {
 
         let canonical = vendors.to_json_bytes().expect("vendors serialize");
 
-        assert_eq!(canonical.trim_ascii_end(), source.trim_ascii_end());
+        assert_eq!(canonical, source);
         assert!(canonical.ends_with(b"}\n"));
         assert!(!canonical.ends_with(b"}\n\n"));
         assert_eq!(
@@ -265,13 +265,62 @@ fn vendor_documents_preserve_ordered_vendors_contacts_and_optional_facts() {
 }
 
 #[test]
+fn vendor_visibility_is_an_optional_present_boolean_that_round_trips() {
+    let hidden = br#"{
+  "schema_version": 1,
+  "vendors": [
+    {
+      "vendor_id": "e0990d31-06aa-42e9-97c8-088e3e894822",
+      "name": "Tarnwick",
+      "contacts": [],
+      "hidden": true
+    }
+  ]
+}
+"#;
+
+    let document = VendorsDocument::from_json_bytes(hidden).expect("a Hidden Vendor parses");
+
+    assert_eq!(document.vendors[0].hidden, Some(true));
+    assert!(document.vendors[0].is_hidden());
+    assert_eq!(
+        document
+            .to_json_bytes()
+            .expect("a Hidden Vendor serializes"),
+        hidden
+    );
+}
+
+#[test]
+fn absent_vendor_visibility_means_visible_and_explicit_null_is_a_shape_failure() {
+    let visible = VendorsDocument::from_json_bytes(FULL_VENDORS).expect("full fixture parses");
+    let null_visibility = br#"{
+  "schema_version": 1,
+  "vendors": [
+    {
+      "vendor_id": "e0990d31-06aa-42e9-97c8-088e3e894822",
+      "name": "Tarnwick",
+      "contacts": [],
+      "hidden": null
+    }
+  ]
+}"#;
+
+    assert_eq!(visible.vendors[0].hidden, None);
+    assert!(!visible.vendors[0].is_hidden());
+    let error = VendorsDocument::from_json_bytes(null_visibility)
+        .expect_err("explicit null is not a schema-valid optional visibility");
+    assert_eq!(error.kind(), MetadataErrorKind::Shape);
+}
+
+#[test]
 fn version_marker_round_trips_through_canonical_json() {
     for source in [MINIMAL_VERSION, FULL_VERSION] {
         let version = VersionDocument::from_json_bytes(source).expect("version fixture parses");
 
         let canonical = version.to_json_bytes().expect("version serializes");
 
-        assert_eq!(canonical.trim_ascii_end(), source.trim_ascii_end());
+        assert_eq!(canonical, source);
         assert!(canonical.ends_with(b"}\n"));
         assert!(!canonical.ends_with(b"}\n\n"));
         assert_eq!(
@@ -287,7 +336,7 @@ fn full_order_preserves_every_version_one_fact_and_item() {
 
     let canonical = order.to_json_bytes().expect("typed order serializes");
 
-    assert_eq!(canonical.trim_ascii_end(), FULL_ORDER.trim_ascii_end());
+    assert_eq!(canonical, FULL_ORDER);
     assert!(canonical.ends_with(b"}\n"));
     assert!(!canonical.ends_with(b"}\n\n"));
     assert_eq!(

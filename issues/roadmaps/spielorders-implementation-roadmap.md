@@ -1,6 +1,6 @@
 # SpielOrders implementation roadmap
 
-Status: M0 complete; M1 externally validated; M1-upgrade externally validated; M2 externally validated; M3 blocked
+Status: M0 complete; M1 externally validated; M1-upgrade externally validated; M2 externally validated; M3 externally validated; M3-upgrade test harness ergonomics open
 
 Source: [Chart the SpielOrders product and architecture](../wayfinder/spielorders-product-architecture/MAP.md)
 
@@ -12,9 +12,11 @@ The MVP is a single-user, local-first, macOS-first desktop application backed by
 
 Institutional form generation, the shared Pending Northwind workflow, multi-user collaboration or synchronization, OCR/content indexing, execution of the legacy archive migration, post-MVP structured Order filters, and premature shared foundations with SpielGantt remain outside this roadmap.
 
-## Decision authority and refinements
+## Decision authority and consolidated contract
 
-The closed decision tickets are authoritative. Where a later ticket refines an earlier one, implementation follows the later contract:
+The closed decision tickets are authoritative and state one consistent current
+contract. The following cross-ticket points are repeated here because they govern
+multiple milestones:
 
 - Version-1 `order.json` includes the required normalized relative `package_root` locator.
 - `config.toml` permits `orders_path` and `removed_path`; `orders_path = "."` is invalid, and `removed_path` names an ordinary direct child of the SpielOrders Root.
@@ -46,6 +48,12 @@ M4 + M5 + M7 + M8 -> M9 hardening -> MVP release candidate
 ```
 
 The numbered sequence below is the default execution order. The dependency graph, not the numbering alone, determines what can safely run in parallel.
+
+Milestones are executed one ticket at a time against a single shared worktree, whether a
+person or a driving session hands out the tickets. The hazards that arrangement creates —
+establishing that a worker has actually stopped, resuming an interrupted ticket rather than
+restarting it, and keeping a review from evaporating with the agent that ran it — are
+recorded in [Driving agent work in one shared worktree](../../docs/development/agent-execution.md).
 
 ## Decision-to-milestone traceability
 
@@ -181,7 +189,7 @@ Acceptance gate:
 
 Create the read model that every adapter shares.
 
-**Status: externally validated 2026-08-21. M3 remains blocked.** M1 and the
+**Status: externally validated 2026-08-21.** M1 and the
 approved pre-M2 M1-upgrade
 modernization are externally validated. The closed
 [M2 Package read-model map](../wayfinder/m2-package-read-model/MAP.md) records the
@@ -225,18 +233,79 @@ Acceptance gate:
 
 Complete the Rust core capabilities required by both CLI and desktop adapters.
 
+**Status: externally validated**, at `d0fb5ee0107ab0871bcc0ee41c31d24b94c4df1b`, on the
+third attempt. The first external validation failed on 2026-09-01 with four blocking
+findings: three write paths that did not obey the durable-write standard the milestone
+wrote for itself, two of which could destroy or misreport canonical Package state, plus a
+normative contradiction between closed decision documents. The second failed on the fourth
+finding alone.
+
+The three code findings are remediated, and
+[the second external validation](../implementation/m3-domain-mutations-safe-persistence/VALIDATION.md)
+confirmed it by observing behaviour rather than by reading the closeouts: each fix was
+reverted in an isolated clone and each time exactly one test failed, the new one. A
+README observed absent and a derived index observed absent now carry
+`DestinationExpectation::Absent` (Ticket 020); whole-Order removal's locator rewrite
+carries a semantic expectation and reports its cleanup failure and any orphaned stage
+(Tickets 022 and 010); and the generated-identity precondition reads instead of
+rebuilding and names a Package nobody can read as itself (Ticket 013). Every
+repository-required gate passes, the test count is up 8, the toolchain and dependencies
+are current, and no M4 work has begun.
+
+**The fourth finding is now settled across every document it named.** The owner ruled that
+`orders_path = "."` is not valid, which is right and which the code already matched. That
+finding named three contradicting documents and the first settlement reached two, while
+asserting in its own commit message that it had reached all three. `d0fb5ee` corrected the
+third, [Define durable metadata schemas and version evolution](../wayfinder/spielorders-product-architecture/tickets/010-metadata-schemas.md),
+and in the same edit recorded the two refinements
+[Define the Rust CLI capability contract](../wayfinder/spielorders-product-architecture/tickets/006-cli-contract.md)
+had made to that section: `config.toml` permits `removed_path` as well as `orders_path`,
+and version-1 `order.json` requires the technical `package_root` locator.
+
+[The third external validation](../implementation/m3-domain-mutations-safe-persistence/VALIDATION.md)
+was scoped to that closure. It proved the range documentation-only from a full path
+inventory before relying on the second validation's executable gate, reproduced the gate
+anyway, checked each of the three substituted statements for truth against the shipped code,
+the checked-in schemas, the conformance fixtures, and `006`, and ran its own corpus sweep
+for a fourth dissenting document rather than trusting the settlement's claim — which is
+exactly the check the first settlement failed. All three hold; there is no fourth. One
+non-blocking finding is recorded against `010` for the owner's next touch of it: its
+`index.json` example omits the required `package_root`, where the governing prose is
+correct and the block predates M2's validated target.
+
+The [M3 acceptance record](../implementation/m3-domain-mutations-safe-persistence/ACCEPTANCE.md)
+carries the candidate and closing SHAs, the toolchains, every repository-required gate,
+the focused and integration suites, and the milestone-wide review with each disposition.
+Its counts, gates, and dependency claims reproduce independently at every validated
+target. The
+[M3 implementation milestone](../implementation/m3-domain-mutations-safe-persistence/README.md)
+holds the closed-ticket index and the one deferred, non-blocking follow-up.
+
+One owner decision is outstanding and did not block acceptance: `sha2` 0.11.0 is a new
+major under Cargo semver, which `AGENTS.md` reserves for the owner. It was not adopted.
+
+The bounded
+[M3-upgrade test harness ergonomics](../implementation/m3-upgrade-test-harness/README.md)
+milestone ran alongside M3's execution tickets and has one ticket left. It changes how
+the Rust suite is built and run, never what it asserts, and it did not close M3.
+
 Deliverables:
 
 - Package initialization at the newest metadata version with configurable Orders and Removed Orders paths and byte-preserving README behavior.
 - Order creation, explicit one-directory adoption, show/edit, Item list/add/edit/move/remove, README read/write, directory-name alignment, recoverable removal, and platform-trash disposition.
-- Vendor creation/show/edit/removal and Contact list/add/edit/move/remove, including guarded deletion while referenced.
+- Vendor creation/show/edit/hide/unhide and Contact list/add/edit/move/remove. Vendor *deletion* is superseded: by the project owner's decision, Vendors are hidden rather than deleted, so a Vendor ID stays permanently resolvable and no reference guard is needed. Ticket 019 delivered that change, including the optional version-1 `hidden` field on `vendors.json`.
 - Atomic assignment semantics, one-based ordered child positions, explicit optional-field clearing, canonical Reusable Free-Entry Value reuse/introduction reporting, and the `Ordered` status/date rule.
 - Complete dry-run mutation plans with no filesystem side effects, and typed committed/unchanged/rejected/committed-with-warning reports.
 - Exhaustive Package and scoped Order validation; explicit one-case repair operations; sequential resumable Metadata Upgrade; index status and rebuild.
 
 Acceptance gate:
 
-- Integration tests cover every accepted mutation, collision and rejection path, index-refresh failure after a committed canonical mutation, README preservation, Supporting Material preservation, and interruption/resumption of multi-version upgrades. No operation except explicit whole-Order removal moves or disposes of Supporting Material.
+- Integration tests cover every accepted mutation, collision and rejection path,
+  changed planning/destination evidence, index-refresh failure after a committed
+  canonical mutation, README preservation, Supporting Material preservation, a
+  non-default nested Orders layout, and interruption/resumption of an upgrade path.
+  No operation except explicit whole-Order removal moves or disposes of Supporting
+  Material.
 
 ## M4 — CLI and independently versioned machine contracts
 
@@ -249,6 +318,7 @@ Deliverables:
 - Concise default human output; `--quiet`, `--verbose`, and one-document `--json` modes; stdout/stderr discipline; color behavior; cancellation; and stable exit statuses `0`, `1`, and `2` plus platform signal conventions.
 - Independently versioned per-command JSON response contracts with stable codes, typed diagnostics/errors, absolute and relevant relative paths, present empty collections, and refreshed affected entities after successful mutations.
 - Generated help and version output, plus golden fixtures for every command's successful, warning, rejected, invalid, empty-result, and usage-error JSON response.
+- Adopt `sha2` `0.11.0`, the new major deferred at the M3 acceptance gate only so that milestone could close on an unchanged dependency graph. Adopting it also releases the `=0.14.7` `generic-array` pin `crypto-common` holds beneath it.
 
 Acceptance gate:
 
@@ -278,7 +348,7 @@ Deliverables:
 
 - Package open/reopen/initialize flows and one active-Package session in a Tauri 2 desktop shell.
 - Toolbar destinations for Orders, Vendors, and Package README; New Order; Package menu; and a persisted inspector toggle and width.
-- Dense Mantine-based Orders and Vendors tables with decided default columns, stable sorting, selection, compact inspectors, column customization/preferences, contextual actions, and keyboard navigation.
+- Dense Mantine-based Orders and Vendors tables with decided default columns, stable sorting, selection, compact inspectors, column customization/preferences, contextual actions, and keyboard navigation. The Vendors table omits Hidden Vendors by default and carries the show/hide control that reveals them, so they stay reachable for inspection; core returns every Vendor with its visibility rather than filtering, and a Hidden Vendor's facts still resolve for every Order referencing it. See Ticket 019.
 - Native-search and Spotlight peer modes with preserved query text, `Aa` behavior, result counts, Order-grouped Supporting Material results, and open/reveal actions.
 - Damaged Order placeholders and diagnostic summaries in the unfiltered Orders grid.
 - Plain-text Markdown editors with lightweight syntax highlighting for Package and Order READMEs.
@@ -298,7 +368,7 @@ Deliverables:
 - Spreadsheet-like Item editing with keyboard movement, drag ordering, pending deletion, undo, and calculated totals.
 - Align Directory Name, recoverable Remove Order, visually separated Move to Trash, macOS Delete-key confirmation, and collision/rejection presentation.
 - A separate diagnostic workspace showing evidence and only allowed repairs, exact dry-run review, revalidation, and the expert raw-JSON correction surface. There is no Fix All or inferred repair.
-- Equivalent dense table, inspector, and editor behavior for Vendors and Contacts, including referenced-Vendor removal protection.
+- Equivalent dense table, inspector, and editor behavior for Vendors and Contacts, including the hide/unhide toggle behind the M6 show/hide control. Hiding is reversible and permitted whether or not Orders reference the Vendor. Referenced-Vendor removal protection is superseded: Vendors are hidden rather than deleted, so there is nothing to protect against. See Ticket 019.
 
 Acceptance gate:
 
@@ -352,11 +422,75 @@ Do not create speculative shared crates, frontend packages, generic repair frame
 
 ## Recommended next execution slice
 
-Run only fresh external validation of
-[Integrate M2 acceptance and refresh the complete selected-major toolchain](../implementation/m2-package-read-model/tickets/006-integrate-m2-acceptance-and-refresh.md)
-at the exact completed target supplied by its handoff. Reproduce the complete M2
-gate in a target-pinned no-hardlink copy and run the project-local Standards and
-Spec reviews independently. Do not fix failures, change dependencies, reinterpret
-evidence, or begin M3. Only after every gate and review passes may the validation
-worker create or update M2 external-validation evidence and mark only M2's roadmap
-status externally validated.
+**M3 is externally validated at `d0fb5ee0107ab0871bcc0ee41c31d24b94c4df1b` and nothing on
+it is outstanding.** All three remediation tickets are closed and confirmed remediated, the
+owner edit that closed the fourth finding is landed, the third external validation has
+accepted it, and the shared worktree is free.
+
+**M4 is the next milestone, and starting it is the owner's call to make.** Nothing in M3
+gates it. Its dependency check inherits three routed items: `sha2` 0.11.0, a new major that
+`AGENTS.md` reserves for the owner and that the owner has already approved for adoption
+there; `@types/node`, pinned one patch behind the registry's `latest`; and the transitive
+`libredox` and `smallvec` locks. The first is a decision; the rest are the ordinary in-major
+refresh `AGENTS.md` applies by default.
+
+Two pieces of work are available now and neither is M4:
+
+- [Let a core test read as its assertions plus a named fixture](../implementation/m3-upgrade-test-harness/tickets/002-fixture-builders.md),
+  ready for agent, deliberately sequenced after M3's execution tickets because it edits the
+  test files they extend.
+- One non-blocking documentation finding against
+  [Define durable metadata schemas and version evolution](../wayfinder/spielorders-product-architecture/tickets/010-metadata-schemas.md):
+  its `index.json` example omits the required `package_root`, which the checked-in index
+  schema rejects and a checked-in negative fixture pins as a document that must fail. It is
+  a closed decision document, so it is the owner's to change and no ticket carries it. The
+  governing prose is correct and the block predates M2's validated target, so it blocks
+  nothing and can wait for the next edit to that document. The
+  [third external validation](../implementation/m3-domain-mutations-safe-persistence/VALIDATION.md)
+  carries the evidence.
+
+Finding V-3 is remediated. [Correct semantic Order repairs](../implementation/m3-domain-mutations-safe-persistence/tickets/013-resolve-order-repairs.md)
+closed at `8aabcf9`: the generated-identity precondition asks the read-only
+`inspect_canonical_package` instead of the rebuilding load, so deciding to refuse no
+longer rewrites the derived index — under a duplicate-identity conflict, where every
+participant is quarantined, that rewrite had been replacing an index naming three Orders
+with one naming none. The verdict is three-valued, and
+`SemanticRepairRejection::PackageEvidenceUnavailable` names a Package nobody can read
+under the same variant `metadata_repair` already used, so the refusal a fresh identity
+cannot resolve is no longer reported as one it could.
+`docs/architecture/durable-writes.md` gained the precondition rule both defects broke,
+scoped by its review to what it actually guarantees: deciding to refuse writes nothing,
+which is not the same as a rejection having changed nothing.
+
+Findings V-1 and V-2 are remediated. Tickets 022 and 010 closed together at `a67e03c`:
+the locator rewrite carries `DestinationExpectation::Equivalent` compared through the same
+normalized projection the plan came from — a raw parse would have refused a record with
+untrimmed stored text — and `OrderRemovalWarning::LocatorUpdateFailed` now carries the
+record path, the failure, and any orphaned stage, named only where one is genuinely left.
+No bare `replace_validated_file` remains in production.
+
+Finding V-1 is remediated. [Give single-file replacements destination evidence](../implementation/m3-domain-mutations-safe-persistence/tickets/020-single-file-destination-evidence.md)
+closed at `9e0d5fa`: both absent-destination sites now carry
+`DestinationExpectation::Absent`. Its review caught that absence cannot be inferred from
+carrying no bytes — an index that is a directory, and one whose read failed, carry none
+either and are plainly there — so absence is read from the assessed `Missing` state. Those
+two states keep `Unchecked`, disclosed in that ticket's closeout, because the expectation
+vocabulary cannot yet say "something I could not read".
+
+Finding V-4 is settled, in the decision and in every document it reached.
+`orders_path = "."` is not valid, which the shipped refusal always matched: making the Root
+its own Orders Directory contradicts the topology decision from the inside — the Package
+README becomes a disallowed direct-child file, `removed_path` overlaps the Orders Directory,
+and every unrelated root directory becomes a permanently damaged presumed Order. The topology
+decision records the supersession at the statement itself; the M2 audit ticket's supersession
+pointer, deleted in `a4b5cea` and replaced by a consistency claim that did not then hold, is
+restored; and `d0fb5ee` corrected the third document, which the first settlement missed while
+its commit message claimed "only that one sentence dissented". The third validation confirmed
+the settlement's reach by sweeping the corpus itself rather than trusting that claim.
+
+[Hoist the Package-valid Vendor check and narrow metadata repair's destination evidence](../implementation/m3-domain-mutations-safe-persistence/tickets/027-hoist-package-valid-vendors-and-narrow-repair-evidence.md)
+remains deferred out of the acceptance gate and blocks nothing. It was *not* the owner of
+validation finding V-3, which concerned a different site in the same file and is closed.
+
+Anything that wants the shared worktree takes it one at a time, and a validation wants a
+clean tree it did not write, so let one have its own target.

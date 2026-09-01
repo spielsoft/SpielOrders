@@ -5,12 +5,23 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 version.workspace = true
+# The integration tests are one target, declared below, rather than one per file.
+# A new tests/<name>.rs is only run once `mod <name>;` is added to tests/main.rs.
+autotests = false
 
 [lib]
 path = "src/lib.rs"
 
+[[test]]
+name = "core"
+path = "tests/main.rs"
+
 [dependencies]
-focaccia = "2.0.0"
+focaccia = "2.1.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+sha2 = "0.10.9"
 toml = "1.1.4"
+
+[dev-dependencies]
+libc = "0.2.189"

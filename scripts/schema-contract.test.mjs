@@ -55,6 +55,33 @@ const invalidVendor = {
 };
 assert.equal(validators.get("vendors")(invalidVendor), false, "missing required contacts");
 
+// Vendor visibility is optional and absent-means-visible, so every record written
+// before the field existed stays valid; the field itself stays a strict boolean and
+// the Vendor object stays closed.
+const vendorsValidator = validators.get("vendors");
+const vendorDocument = (vendor) => ({
+  schema_version: 1,
+  vendors: [{ vendor_id: "e0990d31-06aa-42e9-97c8-088e3e894822", name: "Vendor", contacts: [], ...vendor }]
+});
+assert.equal(vendorsValidator(vendorDocument({})), true, "absent visibility");
+assert.equal(vendorsValidator(vendorDocument({ hidden: true })), true, "hidden visibility");
+assert.equal(vendorsValidator(vendorDocument({ hidden: false })), true, "explicitly visible");
+assert.equal(vendorsValidator(vendorDocument({ hidden: null })), false, "null visibility");
+assert.equal(vendorsValidator(vendorDocument({ hidden: "true" })), false, "string visibility");
+assert.equal(vendorsValidator(vendorDocument({ visible: true })), false, "unknown vendor field");
+
+// The derived index carries the complete canonical Vendor objects, so its own Vendor
+// projection has to accept and constrain visibility identically.
+const indexValidator = validators.get("index");
+const validIndex = await json("contracts/examples/v1/full/index.json");
+const indexWithVisibility = (hidden) => ({
+  ...validIndex,
+  vendors: [{ ...validIndex.vendors[0], hidden }]
+});
+assert.equal(indexValidator(indexWithVisibility(true)), true, "index projects a Hidden Vendor");
+assert.equal(indexValidator(indexWithVisibility("true")), false, "index rejects string visibility");
+assert.equal(indexValidator(indexWithVisibility(null)), false, "index rejects null visibility");
+
 const invalidManifest = await json("contracts/fixtures/schema-invalid/manifest.json");
 for (const fixture of invalidManifest) {
   const data = await json(path.join("contracts/fixtures/schema-invalid", fixture.file));

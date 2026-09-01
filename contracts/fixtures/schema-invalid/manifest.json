@@ -13,6 +13,7 @@
   {"name":"vendors wrong collection type","artifact":"vendors","file":"vendors-wrong-collection-type.json","keyword":"type"},
   {"name":"vendor missing contacts","artifact":"vendors","file":"vendor-missing-contacts.json","keyword":"required"},
   {"name":"vendor invalid nested contact","artifact":"vendors","file":"vendor-invalid-contact.json","keyword":"required"},
+  {"name":"vendor non-boolean visibility","artifact":"vendors","file":"vendor-non-boolean-hidden.json","keyword":"type"},
   {"name":"index missing embedded package root","artifact":"index","file":"index-missing-package-root.json","keyword":"required"},
   {"name":"index package root has only one parent segment","artifact":"index","file":"index-package-root-one-parent.json","keyword":"pattern"},
   {"name":"index Windows absolute order directory","artifact":"index","file":"index-windows-absolute-order-directory.json","keyword":"pattern"},

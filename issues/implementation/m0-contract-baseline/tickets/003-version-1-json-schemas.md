@@ -31,7 +31,8 @@ Unblocked.
 - Publish separate schemas for `version.json`, `order.json`, `vendors.json`, and `index.json`.
 - Use JSON Schema Draft 2020-12 and reject unknown object fields with `additionalProperties: false` at every managed object level.
 - Encode the accepted required fields, optional fields, collection presence, enums, scalar representations, embedded Item and Contact shapes, and metadata/schema version constants.
-- Apply the later CLI refinement to version 1: every canonical Order object, including the complete Order projection embedded in `index.json`, requires the normalized relative `package_root` string.
+- Every canonical Order object, including the complete Order projection embedded
+  in `index.json`, requires the normalized relative `package_root` string.
 - Keep `config.toml` outside this ticket because it is unversioned TOML, and keep CLI response contracts outside because they evolve independently from metadata.
 
 ## Acceptance criteria

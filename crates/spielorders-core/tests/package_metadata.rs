@@ -190,7 +190,13 @@ fn validation_normalizes_vendor_and_contact_facts() {
       "role": "  Sales  ",
       "phone": " \t "
     }],
-    "purchasing_notes": "\r\nUse account.\rSecond line.\r\n"
+    "purchasing_notes": "\r\nUse account.\rSecond line.\r\n",
+    "hidden": false
+  }, {
+    "vendor_id": "3f1b8c22-5f4a-4a4c-9d0e-6d2e5a7c8b91",
+    "name": "Nethermoor",
+    "contacts": [],
+    "hidden": true
   }]
 }"#
         .as_bytes(),
@@ -201,7 +207,15 @@ fn validation_normalizes_vendor_and_contact_facts() {
         .validate()
         .expect("normalized Vendor facts are valid");
     let vendor = &validated.vendors().vendors[0];
+    let hidden = &validated.vendors().vendors[1];
 
+    // Visible is spelled one way: an explicit `false` normalizes to absence, so a
+    // no-op hide of an already-visible Vendor stays a no-op. A Hidden Vendor keeps
+    // its visibility exactly.
+    assert_eq!(vendor.hidden, None);
+    assert!(!vendor.is_hidden());
+    assert_eq!(hidden.hidden, Some(true));
+    assert!(hidden.is_hidden());
     assert_eq!(vendor.name.as_str(), "Tarnwick");
     assert_eq!(vendor.phone, None);
     assert_eq!(vendor.email.as_deref(), Some("sales@example.com"));

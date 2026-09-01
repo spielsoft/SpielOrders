@@ -110,6 +110,13 @@ pub(crate) fn normalize_optional_single_line(value: &mut Option<String>) {
         .filter(|text| !text.is_empty());
 }
 
+/// Visible has one canonical spelling: absence. An explicit `false` says the same thing
+/// and normalizes to it, so an aggregate comparison never reports a change that carries
+/// no meaning.
+pub(crate) fn normalize_optional_visibility(value: &mut Option<bool>) {
+    *value = value.filter(|hidden| *hidden);
+}
+
 pub(crate) fn normalize_optional_multiline(value: &mut Option<String>) {
     *value = value
         .take()
@@ -359,6 +366,23 @@ pub struct Vendor {
         skip_serializing_if = "Option::is_none"
     )]
     pub purchasing_notes: Option<String>,
+    /// Whether this Vendor is a Hidden Vendor: still resolvable for every Order that
+    /// references it, but no longer offered for new use. Absence means visible, which
+    /// is why every record written before the field existed stays valid unchanged.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present_optional",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub hidden: Option<bool>,
+}
+
+impl Vendor {
+    /// Whether this is a Hidden Vendor. Absent visibility means visible, so this is the
+    /// one place that reading has to be spelled out.
+    pub fn is_hidden(&self) -> bool {
+        self.hidden.unwrap_or(false)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -490,20 +514,6 @@ pub struct MetadataError {
 impl MetadataError {
     pub fn kind(&self) -> MetadataErrorKind {
         self.kind
-    }
-
-    pub(crate) fn non_deterministic() -> Self {
-        Self {
-            kind: MetadataErrorKind::Serialization,
-            message: "managed JSON is not deterministically serialized".into(),
-        }
-    }
-
-    pub(crate) fn invalid_semantics() -> Self {
-        Self {
-            kind: MetadataErrorKind::Shape,
-            message: "managed JSON has invalid embedded semantics".into(),
-        }
     }
 }
 
@@ -766,6 +776,7 @@ pub(crate) fn vendors_shape_field(bytes: &[u8]) -> Option<String> {
             "address",
             "contacts",
             "purchasing_notes",
+            "hidden",
         ];
         if let Some(field) = vendor
             .keys()
@@ -791,6 +802,12 @@ pub(crate) fn vendors_shape_field(bytes: &[u8]) -> Option<String> {
             if vendor.get(field).is_some_and(|value| !value.is_string()) {
                 return Some(format!("vendors[{vendor_index}].{field}"));
             }
+        }
+        if vendor
+            .get("hidden")
+            .is_some_and(|value| !value.is_boolean())
+        {
+            return Some(format!("vendors[{vendor_index}].hidden"));
         }
         let Some(contacts) = vendor["contacts"].as_array() else {
             return Some(format!("vendors[{vendor_index}].contacts"));

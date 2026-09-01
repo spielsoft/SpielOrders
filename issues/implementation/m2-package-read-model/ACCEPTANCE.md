@@ -1,6 +1,6 @@
 # M2 integrated acceptance
 
-Status: **passed; M2 reclosed and awaiting fresh external validation**
+Status: **passed; M2 externally validated**
 
 Original acceptance date: 2026-08-21
 
@@ -529,5 +529,6 @@ gate, and resolved fixed-point review all pass without waiver. The
 [integrated M2 acceptance and selected-major refresh](tickets/006-integrate-m2-acceptance-and-refresh.md)
 capability and M2 reclose on 2026-08-21 in transition
 `e280145ae8eff2b03a856562aa2338b0cebd263f` and stop at the implementation layer.
-Fresh validation-only external reproduction of the exact completed target is
-required before M2 may be marked externally validated or any M3 work may begin.
+Fresh validation-only external reproduction subsequently passed at exact target
+`18101a3c419d6794f7768b99820ac2d1976a836d`; see
+[M2 external validation](VALIDATION.md).

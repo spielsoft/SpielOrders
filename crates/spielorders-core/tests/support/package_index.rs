@@ -50,10 +50,10 @@ impl Effect {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReplacementBoundary {
     WriteStage,
-    ReadStage,
-    CandidateValidation,
     SyncStage,
     Replace,
+    /// Durability fails and the cleanup that follows fails too, so the retained
+    /// staging evidence is reported beside the initiating failure.
     RemoveStage,
 }
 
@@ -68,11 +68,14 @@ pub struct TestFileSystem {
     failed_canonicalizations: RefCell<Vec<PathBuf>>,
     failed_lists: RefCell<Vec<PathBuf>>,
     order_enumeration: RefCell<Option<Vec<String>>>,
-    stage_override: RefCell<Option<Vec<u8>>>,
     allowed_reads: RefCell<Option<BTreeSet<PathBuf>>>,
     change_evidence: RefCell<BTreeMap<PathBuf, (u64, u128)>>,
     change_kind_overrides: RefCell<BTreeMap<PathBuf, Option<FileSystemEntryKind>>>,
     failed_change_observations: RefCell<Vec<PathBuf>>,
+    /// A writer outside this load, replacing a file partway through the rebuild. It
+    /// fires at the staging write, which is after the load assessed the index and
+    /// before the rebuild renames over it.
+    edit_at_staging: RefCell<Option<(PathBuf, Vec<u8>)>>,
 }
 
 impl TestFileSystem {
@@ -99,6 +102,12 @@ impl TestFileSystem {
                 .insert(path.into(), bytes.to_vec());
         }
         filesystem
+    }
+
+    /// Schedules an outside writer's edit for the next staging write.
+    pub fn editing_at_staging(self, path: &str, bytes: &[u8]) -> Self {
+        *self.edit_at_staging.borrow_mut() = Some((path.into(), bytes.to_vec()));
+        self
     }
 
     pub fn put_file(&self, path: &str, bytes: &[u8]) {
@@ -151,10 +160,6 @@ impl TestFileSystem {
             Some(names.iter().map(|name| (*name).to_owned()).collect());
     }
 
-    pub fn override_staged_bytes(&self, bytes: Vec<u8>) {
-        *self.stage_override.borrow_mut() = Some(bytes);
-    }
-
     pub fn allow_reads(&self, paths: &[&str]) {
         *self.allowed_reads.borrow_mut() = Some(paths.iter().map(PathBuf::from).collect());
     }
@@ -199,12 +204,6 @@ impl FileSystem for TestFileSystem {
         {
             return Err("read exceeded strict budget");
         }
-        if self.fail_at.borrow().as_ref() == Some(&ReplacementBoundary::ReadStage)
-            && path.file_name().and_then(|name| name.to_str())
-                == Some(".index.json.spielorders-stage")
-        {
-            return Err("injected staging read failure");
-        }
         if self
             .failed_reads
             .borrow()
@@ -230,29 +229,31 @@ impl FileSystem for TestFileSystem {
         if self.fail_at.borrow().as_ref() == Some(&ReplacementBoundary::WriteStage) {
             return Err("injected staging write failure");
         }
+        // The outside writer lands here: after this load read and assessed the index,
+        // and before the rebuild renames its candidate over it.
+        if let Some((edited, bytes)) = self.edit_at_staging.borrow_mut().take() {
+            self.entries
+                .borrow_mut()
+                .insert(edited.clone(), FileSystemEntryKind::File);
+            self.files.borrow_mut().insert(edited, bytes);
+        }
         if self.files.borrow().contains_key(path) {
             return Err("staging file exists");
         }
         self.entries
             .borrow_mut()
             .insert(path.into(), FileSystemEntryKind::File);
-        let staged = if let Some(override_bytes) = self.stage_override.borrow().as_ref() {
-            override_bytes.clone()
-        } else if matches!(
-            self.fail_at.borrow().as_ref(),
-            Some(ReplacementBoundary::CandidateValidation | ReplacementBoundary::RemoveStage)
-        ) {
-            b"{ malformed".to_vec()
-        } else {
-            contents.to_vec()
-        };
+        let staged = contents.to_vec();
         self.files.borrow_mut().insert(path.into(), staged);
         Ok(())
     }
 
     fn sync_file(&self, path: &Path) -> Result<(), Self::Error> {
         self.effects.borrow_mut().push(Effect::Sync(path.into()));
-        if self.fail_at.borrow().as_ref() == Some(&ReplacementBoundary::SyncStage) {
+        if matches!(
+            self.fail_at.borrow().as_ref(),
+            Some(ReplacementBoundary::SyncStage | ReplacementBoundary::RemoveStage)
+        ) {
             Err("injected sync failure")
         } else {
             Ok(())

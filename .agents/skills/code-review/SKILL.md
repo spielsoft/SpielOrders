@@ -31,6 +31,12 @@ Look for the originating spec, in this order:
 3. A PRD/spec file under `docs/`, `specs/`, or `.scratch/` matching the branch name or feature.
 4. If nothing is found, ask the user where the spec is. If they say there isn't one, the **Spec** sub-agent will skip and report "no spec available".
 
+Load the narrowest authoritative spec set. For an implementation ticket, start
+with that ticket and only the linked decision sections governing changed behavior.
+The milestone index supplies shared scope and dependencies; closed sibling tickets
+and historical acceptance/validation records are not default review context.
+Expand only when the diff or a suspected contradiction requires it.
+
 ### 3. Identify the standards sources
 
 Anything in the repo that documents how code should be written, such as `CODING_STANDARDS.md` or `CONTRIBUTING.md`.
@@ -63,21 +69,49 @@ Send a single message with two `Agent` tool calls. Use the `general-purpose` sub
 
 - The full diff command and commit list.
 - The list of standards-source files you found in step 3, **plus the smell baseline from step 3** pasted in full — the sub-agent has no other access to it.
-- The brief: "Report — per file/hunk where relevant — (a) every place the diff violates a documented standard: cite the standard (file + the rule); and (b) any baseline smell you spot: name it and quote the hunk. Distinguish hard violations from judgement calls — documented-standard breaches can be hard, but baseline smells are always judgement calls, and a documented repo standard overrides the baseline. Skip anything tooling enforces. Under 400 words."
+- The brief: "Report — per file/hunk where relevant — (a) every place the diff violates a documented standard: cite the standard (file + the rule); and (b) any baseline smell you spot: name it and quote the hunk. Classify each finding as blocking or non-blocking using the severity boundary below. Distinguish hard violations from judgement calls — documented-standard breaches can be hard, but baseline smells are always judgement calls, and a documented repo standard overrides the baseline. Skip anything tooling enforces. Under 400 words."
 
 **Spec sub-agent prompt** — include:
 
 - The diff command and commit list.
 - The path or fetched contents of the spec.
-- The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. Under 400 words."
+- The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding and classify it as blocking or non-blocking using the severity boundary below. Under 400 words."
+
+### Severity boundary
+
+A **blocking** finding demonstrates at least one of:
+
+- incorrect or missing required behavior;
+- a safety, data-integrity, security, compatibility, architecture, dependency, or
+  explicit scope violation;
+- a failing required check; or
+- a normative documentation contradiction that makes the required implementation
+  false, ambiguous, or impossible to validate.
+
+A **non-blocking** finding is useful polish that does not change or obscure the
+contract: editorial wording, optional historical detail, a navigation improvement,
+or a judgment-call smell without concrete correctness impact. Record it, but do not
+reopen a completed ticket or milestone solely for it. Bare identifiers and link
+style are blocking only when the repository explicitly requires meaningful names
+and the changed text becomes materially untraceable.
+
+Install-script inventory output distinguishes authority from availability: a
+dependency whose lifecycle script is reported as blocked because no authority was
+granted is passing denial evidence, not a failure.
 
 If the spec is missing, skip the Spec sub-agent and note this in the final report.
 
 ### 5. Aggregate
 
-Present the two reports under `## Standards` and `## Spec` headings, verbatim or lightly cleaned. Do **not** merge or rerank findings — the two axes are deliberately separate (see _Why two axes_).
+Present the two reports under `## Standards` and `## Spec` headings, verbatim or lightly cleaned. Preserve each finding's blocking/non-blocking classification. Do **not** merge or rerank findings — the two axes are deliberately separate (see _Why two axes_).
 
-End with a one-line summary: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes — that's the reranking the separation exists to prevent.
+End with a one-line summary: blocking and non-blocking totals per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes — that's the reranking the separation exists to prevent.
+
+For a follow-up diff that changes only documentation/status/evidence, review those
+changed claims and their directly affected sources. Do not automatically replay a
+completed code review over the original implementation range. Require a full-range
+replay only when the follow-up changes the governing contract or casts doubt on the
+previous review's inputs.
 
 ## Why two axes
 

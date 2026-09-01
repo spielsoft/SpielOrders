@@ -14,3 +14,8 @@ version = "0.1.0"
 
 [workspace.dependencies]
 spielorders-core = { path = "crates/spielorders-core" }
+
+[profile.test]
+# Chosen on measurement rather than preference: line tables cut `target/debug/deps`
+# without costing a backtrace its `file:line`. See `docs/development/test-loop.md`.
+debug = "line-tables-only"

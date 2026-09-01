@@ -2,15 +2,13 @@
 //! Define the stable M2 diagnostic vocabulary and evidence contract; Define the complete M2
 //! Package read projection and load-state contract.
 
-mod support;
-
+use crate::support::package_index::{Effect, ReplacementBoundary, TestFileSystem};
 use spielorders_core::canonical::{
     PackageIndexRefresh, PackageIndexState, PackageLoad, open_package,
 };
 use spielorders_core::metadata::{IndexDocument, IndexOrder, IndexOrderDirectory, OrderDocument};
 use spielorders_core::ports::FileSystemEntryKind;
 use std::path::Path;
-use support::package_index::{Effect, ReplacementBoundary, TestFileSystem};
 
 const MINIMAL_INDEX: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -171,7 +169,7 @@ fn current_full_index_supplies_complete_order_vendor_paths_and_cached_readme() {
         order.paths().directory().package_relative_path(),
         Some("Orders/2026_07_19_Tarnwick_Laser_components")
     );
-    assert_eq!(order.index_readme_text(), "User-authored Markdown text");
+    assert_eq!(order.readme_text(), Some("User-authored Markdown text"));
     let [vendor] = package.vendors() else {
         panic!("the complete indexed Vendor is projected")
     };
@@ -576,8 +574,8 @@ fn fast_success_exposes_no_unexamined_diagnostics_or_supporting_material_evidenc
         Some("README.md")
     );
     assert_eq!(
-        package.healthy_orders()[0].index_readme_text(),
-        "User-authored Markdown text"
+        package.healthy_orders()[0].readme_text(),
+        Some("User-authored Markdown text")
     );
     let effects = filesystem.effects.borrow();
     assert!(

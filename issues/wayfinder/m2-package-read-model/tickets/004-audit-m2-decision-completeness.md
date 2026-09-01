@@ -42,11 +42,12 @@ The following three decisions are authoritative together:
   composes those contracts into the shared-core load results, current-Package
   projection, README reads, upgrade reporting, and exact evidence boundary.
 
-The older product-architecture statements that allowed `orders_path = "."` and
-Vendor Merge are not live contradictions. [Define the Rust CLI capability contract](../../spielorders-product-architecture/tickets/006-cli-contract.md)
-explicitly supersedes both, the implementation roadmap records those refinements,
-and externally validated M1 implements the refined configuration behavior and no
-Vendor Merge.
+[Define the Rust CLI capability contract](../../spielorders-product-architecture/tickets/006-cli-contract.md)
+supersedes the older product-architecture statements that allowed `orders_path = "."`
+and Vendor Merge. [Define the SpielOrders package topology](../../spielorders-product-architecture/tickets/002-package-topology.md)
+now records that supersession at the statement itself. The implementation roadmap
+records those refinements, and externally validated M1 implements the refined
+configuration behavior and no Vendor Merge.
 
 ### Evidence reviewed
 
@@ -222,5 +223,6 @@ Select exactly one next slice: **Decompose the decision-complete M2 read side in
 vertical implementation tickets**. That planning slice must create the ordered M2
 implementation ticket chain, trace every ticket to the three closed M2 decisions
 and governing architecture, include a final integrated acceptance/refresh gate,
-and end with the ready-to-paste prompt for the first implementation ticket. It must
-not implement any ticket.
+and end with a concise pointer to the first eligible implementation ticket. The
+fresh worker loads the milestone, ticket, and direct sources from the repository;
+the decomposition must not implement any ticket.

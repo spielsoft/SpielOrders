@@ -31,13 +31,14 @@ The canonical root `.spielorders/version.json` contains exactly:
 
 `metadata_version` is the authoritative steady-state version and is replaced last during an upgrade. Every `order.json`, `vendors.json`, and `index.json` repeats that value as `schema_version` so a reader can parse individual files and resume an interrupted upgrade. These per-file fields do not evolve independently.
 
-`.spielorders/config.toml` remains deliberately unversioned and user-editable. It permits only one optional key:
+`.spielorders/config.toml` remains deliberately unversioned and user-editable. It permits two optional keys:
 
 ```toml
 orders_path = "Orders"
+removed_path = "Removed"
 ```
 
-Omission means `Orders`. The value must be `.` or a nonempty `/`-separated relative descendant path. Absolute paths, `..`, empty components, and resolution through a filesystem link outside the SpielOrders Root are invalid. Unknown keys are invalid. Package-version information never appears in this file.
+Omitting `orders_path` means `Orders`; omitting `removed_path` means `Removed`. Each value must be a nonempty `/`-separated relative descendant path. `.` is **not** valid, superseded by [Define the Rust CLI capability contract](006-cli-contract.md). Absolute paths, `..`, empty components, and resolution through a filesystem link outside the SpielOrders Root are invalid. The two paths cannot overlap or occupy `.spielorders`, and `removed_path` must name an ordinary direct-child directory of the SpielOrders Root. Unknown keys are invalid. Package-version information never appears in this file.
 
 ### Common JSON representation
 
@@ -53,6 +54,7 @@ Omission means `Orders`. The value must be `.` or a nonempty `/`-separated relat
 ```json
 {
   "schema_version": 1,
+  "package_root": "../..",
   "order_id": "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
   "title": "Laser components",
   "date_ordered": "2026-07-19",
@@ -74,7 +76,10 @@ Omission means `Orders`. The value must be `.` or a nonempty `/`-separated relat
 }
 ```
 
-`schema_version`, `order_id`, nonblank `title`, `date_ordered`, `status`, and `items` are required. `date_ordered` is a real Gregorian calendar date in `YYYY-MM-DD` form. `status` is exactly `in_preparation`, `hold`, `ordered`, `received`, or `complete`. `vendor_id`, `orderer`, `ordering_institution`, `currency`, `project`, and `order_group` are optional. A present currency is exactly three uppercase ASCII letters; it decorates values without conversion.
+`schema_version`, `package_root`, `order_id`, nonblank `title`, `date_ordered`, `status`, and
+`items` are required. `package_root` is the technical locator added by
+[Define the Rust CLI capability contract](006-cli-contract.md): a normalized relative path
+from the Order Directory to its SpielOrders Root, never absolute and never a domain fact. `date_ordered` is a real Gregorian calendar date in `YYYY-MM-DD` form. `status` is exactly `in_preparation`, `hold`, `ordered`, `received`, or `complete`. `vendor_id`, `orderer`, `ordering_institution`, `currency`, `project`, and `order_group` are optional. A present currency is exactly three uppercase ASCII letters; it decorates values without conversion.
 
 Each item requires a nonblank `description`, finite JSON-number `quantity`, and finite JSON-number `unit_price`; `catalog_number` is optional. JSON cannot encode non-finite values, and implementations also reject values that cannot be represented as their supported floating-point type. The `items` array preserves user order and items have no independent IDs.
 
@@ -99,13 +104,16 @@ Each item requires a nonblank `description`, finite JSON-number `quantity`, and 
           "email": "grace@example.com"
         }
       ],
-      "purchasing_notes": "Use institutional account."
+      "purchasing_notes": "Use institutional account.",
+      "hidden": true
     }
   ]
 }
 ```
 
-`schema_version` and `vendors` are required. Each Vendor requires `vendor_id`, nonblank `name`, and `contacts`. `phone`, `email`, `website`, `address`, and `purchasing_notes` are optional. Each Vendor Contact requires a nonblank `name`; `role`, `phone`, and `email` are optional. Contacts are embedded, ordered, and have no independent IDs. Vendor array order is user-controlled presentation order, never identity.
+`schema_version` and `vendors` are required. Each Vendor requires `vendor_id`, nonblank `name`, and `contacts`. `phone`, `email`, `website`, `address`, `purchasing_notes`, and `hidden` are optional. Each Vendor Contact requires a nonblank `name`; `role`, `phone`, and `email` are optional. Contacts are embedded, ordered, and have no independent IDs. Vendor array order is user-controlled presentation order, never identity.
+
+`hidden` is the Vendor's visibility: a boolean whose presence and value of `true` make the Vendor a Hidden Vendor, no longer offered for new use. Its absence means visible, which is the one canonical spelling — an explicit `false` says the same thing and normalizes to absence — so every Vendor record written before the field existed remains valid and unchanged. Visibility never affects resolution: an Order's Vendor Reference resolves a Hidden Vendor exactly as it resolves any other, and a Vendor is never deleted.
 
 ### `index.json` version 1
 
