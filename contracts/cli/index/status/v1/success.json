@@ -1,0 +1,22 @@
+{
+  "contract": "spielorders.index.status",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>"
+  },
+  "data": {
+    "location": {
+      "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
+      "package_relative_path": ".spielorders/index.json"
+    },
+    "state": "current",
+    "refresh": "not_needed",
+    "malformed_reasons": [],
+    "stale_reasons": [],
+    "observed_version": null,
+    "expected_version": null
+  },
+  "diagnostics": [],
+  "error": null
+}

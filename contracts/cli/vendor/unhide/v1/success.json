@@ -1,0 +1,69 @@
+{
+  "contract": "spielorders.vendor.unhide",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>"
+  },
+  "data": {
+    "report": {
+      "committed": true,
+      "changed": true,
+      "outcome": "unhidden",
+      "operations": [
+        {
+          "operation": "replace_vendor_record",
+          "location": {
+            "absolute_path": "<PACKAGE_ROOT>/.spielorders/vendors.json",
+            "package_relative_path": ".spielorders/vendors.json"
+          }
+        },
+        {
+          "operation": "refresh_package_index",
+          "location": {
+            "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
+            "package_relative_path": ".spielorders/index.json"
+          }
+        }
+      ],
+      "index": {
+        "location": {
+          "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
+          "package_relative_path": ".spielorders/index.json"
+        },
+        "state": "current",
+        "refresh": "rebuilt",
+        "malformed_reasons": [],
+        "stale_reasons": [],
+        "observed_version": null,
+        "expected_version": null
+      },
+      "warnings": []
+    },
+    "vendor": {
+      "vendor_id": "1c9a5b7e-3d44-4f21-8a6c-9b0e2d7f4a13",
+      "name": "Nethermoor",
+      "phone": null,
+      "email": null,
+      "website": null,
+      "address": null,
+      "purchasing_notes": null,
+      "hidden": false,
+      "contacts": [],
+      "referencing_orders": [
+        {
+          "directory": {
+            "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace",
+            "package_relative_path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace"
+          },
+          "order_id": "3f2a1c05-7b19-4e63-9d84-5a0c6e8b2f71",
+          "title": "Mirror mounts",
+          "date_ordered": "2026-08-21",
+          "status": "in_preparation"
+        }
+      ]
+    }
+  },
+  "diagnostics": [],
+  "error": null
+}

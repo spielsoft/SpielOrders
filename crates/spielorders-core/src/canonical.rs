@@ -4,16 +4,18 @@
 use crate::{
     digest::ContentDigest,
     filesystem::{
-        DestinationExpectation, ValidatedReplacementFailure, replace_validated_file_expecting,
-        staging_path,
+        DestinationExpectation, ValidatedReplacementError, ValidatedReplacementFailure,
+        replace_validated_file_expecting, staging_path,
     },
     metadata::{
         Config, IndexDocument, IndexOrder, IndexOrderDirectory, MetadataErrorKind, OrderDocument,
-        OrderId, Vendor, VendorsDocument, Version1, VersionDocument, config_shape_field,
-        order_shape_field, vendors_shape_field, version_shape_field,
+        OrderId, PackageRoot, PackageRootLocator, Vendor, VendorsDocument, Version1,
+        VersionDocument, config_shape_field, order_shape_field, vendors_shape_field,
+        version_shape_field,
     },
-    operations::{FileSystemOperation, OperationFailure, PackageIndexReplacementPhase},
-    order::ValidatedOrder,
+    mutation::MutationReport,
+    operations::{FailedPath, FileSystemOperation, OperationFailure, PackageIndexReplacementPhase},
+    order::{OrderValidationFailure, ValidatedOrder},
     package::{PackageMetadata, PackageMetadataValidationFailure, index_semantics_are_valid},
     paths::{
         ConfiguredPath, ConfiguredPathFailure, DirectChildClassification, DirectChildObservation,
@@ -360,6 +362,20 @@ impl HealthyOrder {
         &self.document
     }
 
+    /// This Order's technical locator, which a healthy Order always carries.
+    ///
+    /// Not an `Option`, and not re-derived from the record by a caller: the record's own
+    /// field carries whether the locator parsed at all — see [`PackageRootLocator`] — and
+    /// being healthy is precisely the load having followed that locator from this
+    /// Directory to this Root. A caller reporting the locator therefore has one to report
+    /// without deciding what to do when there is none.
+    pub fn package_root(&self) -> &PackageRoot {
+        self.document
+            .package_root
+            .spelled()
+            .expect("a healthy Order is one whose locator was followed to its Package")
+    }
+
     pub fn item_totals(&self) -> &[f64] {
         &self.item_totals
     }
@@ -690,6 +706,7 @@ pub struct ExhaustiveValidationReport {
     valid: bool,
     diagnostic_groups: Vec<DiagnosticGroup>,
     package_readme: ReadmeRead,
+    examined_orders: Vec<OrderPaths>,
     order_readmes: Vec<ReadmeRead>,
     index: PackageIndexRecord,
 }
@@ -709,6 +726,17 @@ impl ExhaustiveValidationReport {
 
     pub fn package_readme(&self) -> &ReadmeRead {
         &self.package_readme
+    }
+
+    /// Every Order Directory this run examined, healthy or damaged, in one
+    /// deterministic order.
+    ///
+    /// **Reported rather than left to be derived from the READMEs beside it.** A caller
+    /// that took each README's parent directory would be a second place deciding where an
+    /// Order keeps its conventional document — and without this, a validation with no
+    /// findings cannot be told from one that examined nothing.
+    pub fn examined_orders(&self) -> &[OrderPaths] {
+        &self.examined_orders
     }
 
     pub fn order_readmes(&self) -> &[ReadmeRead] {
@@ -811,6 +839,7 @@ pub fn validate_package_exhaustively<F: FileSystem>(
         valid,
         diagnostic_groups,
         package_readme,
+        examined_orders: order_paths,
         order_readmes,
         index,
     })
@@ -1083,26 +1112,16 @@ fn open_package_canonically<F: FileSystem>(
             let observed_no_index = assessment.record.state == PackageIndexState::Missing;
             package.index = assessment.record;
             if package.index.state == PackageIndexState::NotAssessed {
-                let mut stale_reasons = stale_index_reasons(
-                    assessment
-                        .document
-                        .as_ref()
-                        .expect("a valid deterministic index remains available"),
-                    &package,
+                package.index.stale_reasons = merged_stale_reasons(
+                    stale_index_reasons(
+                        assessment
+                            .document
+                            .as_ref()
+                            .expect("a valid deterministic index remains available"),
+                        &package,
+                    ),
+                    fast_stale_reasons,
                 );
-                if !fast_stale_reasons.is_empty() {
-                    if !fast_stale_reasons
-                        .contains(&PackageIndexStaleReason::ChangeEvidenceUncertain)
-                    {
-                        stale_reasons.retain(|reason| {
-                            *reason != PackageIndexStaleReason::ChangeEvidenceUncertain
-                        });
-                    }
-                    stale_reasons.extend(fast_stale_reasons.iter().copied());
-                    stale_reasons.sort();
-                    stale_reasons.dedup();
-                }
-                package.index.stale_reasons = stale_reasons;
                 package.index.state = PackageIndexState::Stale;
             }
             // A load that could not read an Order README has nothing to cache for it,
@@ -1129,81 +1148,475 @@ fn open_package_canonically<F: FileSystem>(
             // "something I could not read", so that case carries no evidence, exactly
             // as it did before absence was distinguished from it. Claiming absence
             // instead would refuse the rebuild that heals it, permanently, and blame a
-            // concurrent writer for it. Ticket 020's closeout names this as the one
-            // remaining unevidenced index write.
-            let expectation = match old_index_bytes.as_deref() {
-                Some(bytes) => DestinationExpectation::Exactly(bytes),
-                None if observed_no_index => DestinationExpectation::Absent,
-                None => DestinationExpectation::Unchecked,
-            };
+            // concurrent writer for it. Give single-file replacements destination
+            // evidence names this as the one remaining unevidenced index write.
             let replacement = replace_validated_file_expecting(
                 &index_path,
                 &candidate,
-                expectation,
+                index_expectation(old_index_bytes.as_deref(), observed_no_index),
                 filesystem,
                 |_| Ok::<(), IndexCandidateFailure>(()),
             );
             if let Err(error) = replacement {
                 package.index.refresh = PackageIndexRefresh::ReplacementFailed;
-                let phase = match error.failure() {
-                    ValidatedReplacementFailure::StagingWrite(_) => {
-                        PackageIndexReplacementPhase::WriteStage
-                    }
-                    // Forced to stay because `error.failure()` hands back a reference,
-                    // and rustc wants a pattern for an uninhabited type matched behind
-                    // one. Discharged by an empty match on the dereferenced value,
-                    // which the compiler checks and which produces no phase — so the
-                    // rebuild has no spelled failure code that nothing can emit.
-                    ValidatedReplacementFailure::CandidateValidation(impossible) => {
-                        match *impossible {}
-                    }
-                    ValidatedReplacementFailure::Durability(_) => {
-                        PackageIndexReplacementPhase::SyncStage
-                    }
-                    ValidatedReplacementFailure::Replacement(_) => {
-                        PackageIndexReplacementPhase::Replace
-                    }
-                    // The rebuild carries the index this load assessed, so it can be
-                    // refused. A caller that cannot tell a concurrent writer from a
-                    // failed rename would retry the rebuild and discard their index,
-                    // which is the whole reason the evidence is carried.
-                    ValidatedReplacementFailure::DestinationChanged => {
-                        PackageIndexReplacementPhase::DestinationChanged
-                    }
-                    ValidatedReplacementFailure::DestinationUnreadable(_) => {
-                        PackageIndexReplacementPhase::DestinationUnreadable
-                    }
-                    ValidatedReplacementFailure::InvalidDestination => {
-                        PackageIndexReplacementPhase::WriteStage
-                    }
-                };
-                let cleanup_failure = error
-                    .cleanup_failure()
-                    .map(|_| PackageIndexReplacementPhase::RemoveStage);
-                let staging = staging_path(&index_path)
-                    .expect("the established Package Index has a staging path");
-                let staging_relative =
-                    relative_path(package.context.root.absolute_path(), &staging);
-                let related_locations = vec![managed_location(staging, staging_relative)];
-                let failure = OperationFailure::package_index_replacement(
-                    package.context.index.clone(),
-                    related_locations,
-                    phase,
-                    cleanup_failure,
-                );
+                let failure = index_replacement_failure(&package.context, &error);
                 return PackageLoad::IndexReplacementFailed(IndexReplacementFailedProjection {
                     canonical_evidence: package,
                     old_index_bytes,
                     failure,
                 });
             }
-            package.index.state = PackageIndexState::Current;
-            package.index.refresh = PackageIndexRefresh::Rebuilt;
-            package.index.malformed_reasons.clear();
-            package.index.stale_reasons.clear();
-            package.index.observed_version = None;
-            package.index.expected_version = None;
+            mark_index_rebuilt(&mut package.index);
             PackageLoad::Available(package)
+        }
+    }
+}
+
+/// The destination evidence a rebuild carries for the index it assessed.
+///
+/// Rebuilding over a different index would discard a concurrent writer's work; refusing
+/// lets the caller reload instead. Observing no index is an observation like any other,
+/// so an index appearing at the path since is a changed destination — checked by
+/// observing the path, because there are no bytes to compare.
+///
+/// An index that is there and could not be read as bytes is neither observation. This
+/// contract can say "these bytes" and "nothing", not "something I could not read", so
+/// that case carries no evidence. Claiming absence instead would refuse the rebuild that
+/// heals it, permanently, and blame a concurrent writer for it. Give single-file
+/// replacements destination evidence names this as the one remaining unevidenced index
+/// write.
+fn index_expectation(
+    stored_bytes: Option<&[u8]>,
+    observed_absent: bool,
+) -> DestinationExpectation<'_> {
+    match stored_bytes {
+        Some(bytes) => DestinationExpectation::Exactly(bytes),
+        None if observed_absent => DestinationExpectation::Absent,
+        None => DestinationExpectation::Unchecked,
+    }
+}
+
+/// One failed index replacement, as the typed operational failure it is.
+///
+/// Shared by the refresh that follows a canonical write and by a deliberate rebuild,
+/// because a rename that would not happen is the same failure however the rebuild was
+/// asked for — and two mappings would let one of them name a phase the other does not.
+fn index_replacement_failure<E>(
+    context: &ManagedContext,
+    error: &ValidatedReplacementError<E, IndexCandidateFailure>,
+) -> OperationFailure {
+    let phase = match error.failure() {
+        ValidatedReplacementFailure::StagingWrite(_) => PackageIndexReplacementPhase::WriteStage,
+        // Forced to stay because `error.failure()` hands back a reference, and rustc
+        // wants a pattern for an uninhabited type matched behind one. Discharged by an
+        // empty match on the dereferenced value, which the compiler checks and which
+        // produces no phase — so the rebuild has no spelled failure code that nothing
+        // can emit.
+        ValidatedReplacementFailure::CandidateValidation(impossible) => match *impossible {},
+        ValidatedReplacementFailure::Durability(_) => PackageIndexReplacementPhase::SyncStage,
+        ValidatedReplacementFailure::Replacement(_) => PackageIndexReplacementPhase::Replace,
+        // The rebuild carries the index it assessed, so it can be refused. A caller that
+        // cannot tell a concurrent writer from a failed rename would retry the rebuild
+        // and discard their index, which is the whole reason the evidence is carried.
+        ValidatedReplacementFailure::DestinationChanged => {
+            PackageIndexReplacementPhase::DestinationChanged
+        }
+        ValidatedReplacementFailure::DestinationUnreadable(_) => {
+            PackageIndexReplacementPhase::DestinationUnreadable
+        }
+        ValidatedReplacementFailure::InvalidDestination => PackageIndexReplacementPhase::WriteStage,
+    };
+    let cleanup_failure = error
+        .cleanup_failure()
+        .map(|_| PackageIndexReplacementPhase::RemoveStage);
+    let staging = staging_path(context.index.absolute_path())
+        .expect("the established Package Index has a staging path");
+    let staging_relative = relative_path(context.root.absolute_path(), &staging);
+    OperationFailure::package_index_replacement(
+        context.index.clone(),
+        vec![managed_location(staging, staging_relative)],
+        phase,
+        cleanup_failure,
+    )
+}
+
+/// The index record a completed rebuild leaves: current, rebuilt, and carrying none of
+/// the reasons it was rebuilt for.
+fn mark_index_rebuilt(record: &mut PackageIndexRecord) {
+    record.state = PackageIndexState::Current;
+    record.refresh = PackageIndexRefresh::Rebuilt;
+    record.malformed_reasons.clear();
+    record.stale_reasons.clear();
+    record.observed_version = None;
+    record.expected_version = None;
+}
+
+/// The one managed operation a deliberate Package Index rebuild performs.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum PackageIndexRebuildOperationKind {
+    RefreshPackageIndex,
+}
+
+impl PackageIndexRebuildOperationKind {
+    /// The same spelling every capability that refreshes the derived index reports — see
+    /// [`crate::order_edits::OrderEditOperationKind::as_str`].
+    ///
+    /// **One act, one name.** A deliberate rebuild replaces exactly the file the refresh
+    /// after a canonical write replaces, so a caller reading managed operations across
+    /// commands sees one operation rather than two that happen to do the same thing.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::RefreshPackageIndex => "refresh_package_index",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PackageIndexRebuildOperation {
+    kind: PackageIndexRebuildOperationKind,
+    location: Location,
+}
+
+impl PackageIndexRebuildOperation {
+    pub fn kind(&self) -> PackageIndexRebuildOperationKind {
+        self.kind
+    }
+
+    /// Where this operation acts, as this Package locates it — so a caller reporting it
+    /// carries the Package-relative spelling as well as the absolute path.
+    pub fn location(&self) -> &Location {
+        &self.location
+    }
+}
+
+/// What a deliberate Package Index rebuild would write, and the state it found.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PackageIndexRebuildPlan {
+    package: CurrentPackageCandidate,
+    candidate: Vec<u8>,
+    stored_bytes: Option<Vec<u8>>,
+    observed_absent: bool,
+    indexed_orders: Vec<Location>,
+    operations: Vec<PackageIndexRebuildOperation>,
+}
+
+impl PackageIndexRebuildPlan {
+    /// The Package this rebuild is of: its managed paths, its metadata version and
+    /// state, the index record carrying the state this plan found, and the diagnostic
+    /// groups carrying what the load observed on the way.
+    pub fn package(&self) -> &CurrentPackageCandidate {
+        &self.package
+    }
+
+    /// The bytes the rebuild would write.
+    ///
+    /// Deterministic: the projection is sorted by the rule the stored index is validated
+    /// against, and every fact in it comes from a record the load validated and
+    /// normalized — so the same healthy Package projects the same bytes.
+    pub fn candidate(&self) -> &[u8] {
+        &self.candidate
+    }
+
+    /// Whether those bytes differ from the index presently stored.
+    ///
+    /// A rebuild replaces the file either way, because replacing it is what makes the
+    /// derived index provably current again; this is what says whether the projection
+    /// itself moved.
+    pub fn changed(&self) -> bool {
+        self.stored_bytes.as_deref() != Some(self.candidate.as_slice())
+    }
+
+    /// The Order Directories the rebuilt index carries, in the projection's own order.
+    ///
+    /// A Damaged Order is absent — its record could not be read, so it has nothing to
+    /// project — and stays visible through `package().diagnostic_groups()`.
+    pub fn indexed_orders(&self) -> &[Location] {
+        &self.indexed_orders
+    }
+
+    /// The managed operations committing this plan performs, in the vocabulary every
+    /// mutating capability reports them in. Exactly one: the derived index is the only
+    /// file a rebuild touches.
+    pub fn operations(&self) -> &[PackageIndexRebuildOperation] {
+        &self.operations
+    }
+}
+
+/// Why no rebuild could be planned.
+///
+/// The four Package-load states travel as the core's own projections, so a caller
+/// classifies a Package exactly as any other capability does. The fifth is this
+/// capability's own.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PackageIndexRebuildPlanError {
+    Unmanaged(Box<UnmanagedPackage>),
+    DamagedPackage(Box<DamagedPackageProjection>),
+    UpgradePending(Box<UpgradeProjection>),
+    OperationFailed(Box<OperationFailedProjection>),
+    /// An Order README exists and its text was not established, so a version-1 index
+    /// entry has nothing truthful to record for it — see [`index_document`]. The Package
+    /// the refusal is about travels with it, carrying the observation behind it.
+    OrderReadmeTextUnavailable(Box<CurrentPackageCandidate>),
+}
+
+/// A rebuild has no committed-with-warnings outcome, and this states it in a form the
+/// compiler checks.
+///
+/// The warning other mutations carry is that their canonical write succeeded and the
+/// derived index refresh did not — and the derived index is this command's whole subject,
+/// so a rebuild that could not replace it wrote nothing and is a refusal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PackageIndexRebuildWarning {}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PackageIndexRebuildRejection {
+    /// The replacement did not happen. The stored index holds what it held.
+    ReplacementFailed { failure: OperationFailure },
+}
+
+pub type PackageIndexRebuildReport = MutationReport<
+    PackageIndexRebuildPlan,
+    CurrentPackageCandidate,
+    PackageIndexRebuildRejection,
+    PackageIndexRebuildWarning,
+>;
+
+/// Plans a deliberate replacement of the derived Package Index from healthy canonical
+/// records.
+///
+/// **The canonical records are the source, never the stored index.** The current-index
+/// path projects a Package *out of* the index, so a rebuild planned from it would rebuild
+/// the index from itself and could never correct one — which is why this takes the
+/// canonical load and asks the freshness question only for the state it reports.
+///
+/// Nothing here writes. [`commit_package_index_rebuild`] is what replaces the file, and a
+/// plan that is never committed is the dry run.
+pub fn plan_package_index_rebuild<F: FileSystem>(
+    selected_root: &Path,
+    filesystem: &F,
+) -> Result<PackageIndexRebuildPlan, PackageIndexRebuildPlanError> {
+    let filesystem = PackageOpenFileSystem::new(filesystem);
+    let package = match inspect_canonical_package(selected_root, &filesystem) {
+        CanonicalPackageLoad::CurrentCandidate(package) => package,
+        CanonicalPackageLoad::Unmanaged(package) => {
+            return Err(PackageIndexRebuildPlanError::Unmanaged(Box::new(package)));
+        }
+        // A Package whose canonical state cannot be trusted has no healthy records to
+        // project, and the index is never evidence for what they should have been. The
+        // index's own validity is still assessed, because that is what the refusal is
+        // about the index of.
+        CanonicalPackageLoad::DiagnosticOnly(mut package) => {
+            package.index = assess_index_without_freshness(package.index, &filesystem);
+            return Err(PackageIndexRebuildPlanError::DamagedPackage(Box::new(
+                package,
+            )));
+        }
+        CanonicalPackageLoad::UpgradePending(mut package) => {
+            package.index = assess_index_without_freshness(package.index, &filesystem);
+            return Err(PackageIndexRebuildPlanError::UpgradePending(Box::new(
+                package,
+            )));
+        }
+        CanonicalPackageLoad::OperationFailed(package) => {
+            return Err(PackageIndexRebuildPlanError::OperationFailed(Box::new(
+                package,
+            )));
+        }
+    };
+    let context = package.context.clone();
+    let StoredIndexAssessment {
+        package,
+        stored_bytes,
+        observed_absent,
+    } = assess_stored_index(selected_root, package, &filesystem).map_err(|failure| {
+        PackageIndexRebuildPlanError::OperationFailed(Box::new(OperationFailedProjection {
+            root: None,
+            context: Some(context),
+            failure,
+        }))
+    })?;
+    let Some(document) = index_document(&package) else {
+        return Err(PackageIndexRebuildPlanError::OrderReadmeTextUnavailable(
+            Box::new(package),
+        ));
+    };
+    // The healthy Orders in the order the load sorted them into, which is the order the
+    // projection carries and the one a stored index is validated against.
+    let indexed_orders = package
+        .healthy_orders
+        .iter()
+        .map(|order| order.paths.directory.clone())
+        .collect();
+    let candidate = document
+        .to_json_bytes()
+        .expect("validated canonical facts serialize as metadata version 1");
+    let operations = vec![PackageIndexRebuildOperation {
+        kind: PackageIndexRebuildOperationKind::RefreshPackageIndex,
+        location: package.context.index.clone(),
+    }];
+    Ok(PackageIndexRebuildPlan {
+        package,
+        candidate,
+        stored_bytes,
+        observed_absent,
+        indexed_orders,
+        operations,
+    })
+}
+
+/// Replaces the derived Package Index with the planned projection.
+///
+/// The replacement is the established beside-destination staging, durability, destination
+/// comparison, and atomic rename, against the index this plan assessed — so a writer that
+/// landed since is refused rather than overwritten. A refusal leaves the stored index
+/// exactly as it was.
+pub fn commit_package_index_rebuild<F: FileSystem>(
+    mut plan: PackageIndexRebuildPlan,
+    filesystem: &F,
+) -> PackageIndexRebuildReport {
+    let index_path = plan.package.context.index.absolute_path().to_path_buf();
+    let replacement = replace_validated_file_expecting(
+        &index_path,
+        &plan.candidate,
+        index_expectation(plan.stored_bytes.as_deref(), plan.observed_absent),
+        filesystem,
+        |_| Ok::<(), IndexCandidateFailure>(()),
+    );
+    match replacement {
+        Err(error) => {
+            let failure = index_replacement_failure(&plan.package.context, &error);
+            plan.package.index.refresh = PackageIndexRefresh::ReplacementFailed;
+            MutationReport::Rejected {
+                plan,
+                rejection: PackageIndexRebuildRejection::ReplacementFailed { failure },
+            }
+        }
+        Ok(()) => {
+            let mut result = plan.package.clone();
+            mark_index_rebuilt(&mut result.index);
+            MutationReport::Committed { plan, result }
+        }
+    }
+}
+
+/// Every reason one stored index is stale: what comparing it with the canonical records
+/// found, refined by what the change evidence proved.
+///
+/// **The evidence refines the comparison rather than replacing it.** Comparing content
+/// cannot prove that no input has been rewritten since the index was, so the canonical
+/// comparison always ends in `ChangeEvidenceUncertain`; where the evidence *is*
+/// comparable it names which input changed, and the uncertainty is no longer part of the
+/// answer. One home for that rule, because the opening load and the assessment that
+/// writes nothing owe the same reasons about the same Package.
+fn merged_stale_reasons(
+    mut compared: Vec<PackageIndexStaleReason>,
+    evidence: Vec<PackageIndexStaleReason>,
+) -> Vec<PackageIndexStaleReason> {
+    if evidence.is_empty() {
+        return compared;
+    }
+    if !evidence.contains(&PackageIndexStaleReason::ChangeEvidenceUncertain) {
+        compared.retain(|reason| *reason != PackageIndexStaleReason::ChangeEvidenceUncertain);
+    }
+    compared.extend(evidence);
+    compared.sort();
+    compared.dedup();
+    compared
+}
+
+/// One assessment of the stored derived Package Index, having written nothing.
+struct StoredIndexAssessment {
+    /// The canonical Package, its index record carrying the assessed state.
+    package: CurrentPackageCandidate,
+    /// The stored index bytes this assessment read, where it read any.
+    stored_bytes: Option<Vec<u8>>,
+    /// Whether it observed nothing at all at the index path. Not the same question as
+    /// carrying no bytes: an index that is a directory, or a file whose read failed,
+    /// carries none either and is plainly there.
+    observed_absent: bool,
+}
+
+/// Assesses the stored index of a Package whose canonical records have been loaded.
+///
+/// **Nothing here writes.** The opening load answers the same question and then durably
+/// replaces the index, which `docs/architecture/durable-writes.md` reserves for a place a
+/// canonical write has already happened — so a caller that only wants to know what state
+/// the index is in has no way to ask through it. This is that way, and it is shared by
+/// the assessment capability and by a deliberate rebuild's plan so the two cannot come to
+/// disagree about one Package's index.
+fn assess_stored_index<F: FileSystem>(
+    selected_root: &Path,
+    mut package: CurrentPackageCandidate,
+    filesystem: &F,
+) -> Result<StoredIndexAssessment, OperationFailure> {
+    let assessment = assess_index(package.index.clone(), filesystem)?;
+    let observed_absent = assessment.record.state == PackageIndexState::Missing;
+    let stored_bytes = assessment.bytes;
+    package.index = assessment.record;
+    if package.index.state == PackageIndexState::NotAssessed {
+        let compared = stale_index_reasons(
+            assessment
+                .document
+                .as_ref()
+                .expect("a valid deterministic index remains available"),
+            &package,
+        );
+        // The stored index is a valid, deterministic projection; whether it is *current*
+        // is the freshness question, and the current-index path is the one place that
+        // answers it — it proves every canonical input older than the index rather than
+        // comparing content, which content comparison cannot do.
+        let mut evidence = Vec::new();
+        if try_open_current_index(selected_root, filesystem, &mut evidence).is_some() {
+            package.index.state = PackageIndexState::Current;
+            package.index.refresh = PackageIndexRefresh::NotNeeded;
+        } else {
+            package.index.stale_reasons = merged_stale_reasons(compared, evidence);
+            package.index.state = PackageIndexState::Stale;
+        }
+    }
+    Ok(StoredIndexAssessment {
+        package,
+        stored_bytes,
+        observed_absent,
+    })
+}
+
+/// Reports what state the derived Package Index is in, without writing anything.
+///
+/// The reading load leaves the index `not_assessed` and the opening load rebuilds it, so
+/// before this there was no way to ask the question without answering it by writing. The
+/// answer is [`PackageLoad`] like any other load's, and the record under
+/// [`CurrentPackageCandidate::index`] is the assessment: `current`, `missing`,
+/// `malformed`, `wrong_version`, or `stale`, each with its own typed reasons.
+///
+/// [`PackageLoad::IndexReplacementFailed`] is unreachable from here, because nothing is
+/// replaced.
+pub fn assess_package_index<F: FileSystem>(selected_root: &Path, filesystem: &F) -> PackageLoad {
+    let filesystem = PackageOpenFileSystem::new(filesystem);
+    match inspect_canonical_package(selected_root, &filesystem) {
+        CanonicalPackageLoad::Unmanaged(package) => PackageLoad::Unmanaged(package),
+        // A Package whose canonical state cannot be trusted has no records to compare the
+        // index against, so the freshness half of the question is unanswerable and only
+        // the index's own validity is reported.
+        CanonicalPackageLoad::DiagnosticOnly(mut package) => {
+            package.index = assess_index_without_freshness(package.index, &filesystem);
+            PackageLoad::DiagnosticOnly(package)
+        }
+        CanonicalPackageLoad::UpgradePending(mut package) => {
+            package.index = assess_index_without_freshness(package.index, &filesystem);
+            PackageLoad::UpgradePending(package)
+        }
+        CanonicalPackageLoad::OperationFailed(package) => PackageLoad::OperationFailed(package),
+        CanonicalPackageLoad::CurrentCandidate(package) => {
+            let context = package.context.clone();
+            match assess_stored_index(selected_root, package, &filesystem) {
+                Ok(assessment) => PackageLoad::Available(assessment.package),
+                Err(failure) => PackageLoad::OperationFailed(OperationFailedProjection {
+                    root: None,
+                    context: Some(context),
+                    failure,
+                }),
+            }
         }
     }
 }
@@ -1716,14 +2129,16 @@ fn inspect_canonical_package_with_breadth<F: FileSystem>(
     let root = match filesystem.canonicalize(selected_root) {
         Ok(root) => root,
         Err(_) => {
-            let location = Location::absolute(selected_root.to_path_buf())
-                .expect("selected root must be absolute when canonicalization fails");
+            // The failure is the resolution, so the root is whatever the caller named
+            // and nothing more. A relative one has no `Location` at all; reporting it
+            // as the path it arrived as is the whole of what this load honestly knows.
+            let selected = FailedPath::of(selected_root);
             return operation_failed(
-                Some(location.clone()),
+                selected.location().cloned(),
                 None,
                 OperationFailure::filesystem(
                     FileSystemOperation::Canonicalize,
-                    location,
+                    selected,
                     Vec::new(),
                 ),
             );
@@ -2043,7 +2458,8 @@ fn inspect_canonical_package_with_breadth<F: FileSystem>(
         };
         let validated = match order.validate() {
             Ok(validated) => validated,
-            Err(_failures) => {
+            Err(failures) => {
+                let (field, reason) = semantic_evidence(&failures);
                 order_diagnostics.push(Diagnostic::new(
                     DiagnosticCode::OrderSemanticInvalid,
                     Severity::Error,
@@ -2052,8 +2468,8 @@ fn inspect_canonical_package_with_breadth<F: FileSystem>(
                     Vec::new(),
                     DiagnosticEvidence::OrderSemanticInvalid {
                         order_id: order.order_id.clone(),
-                        field: "date_ordered".into(),
-                        reason: OrderSemanticReason::InvalidGregorianDate,
+                        field: field.into(),
+                        reason,
                     },
                 ));
                 quarantine_order(
@@ -2078,16 +2494,22 @@ fn inspect_canonical_package_with_breadth<F: FileSystem>(
                 );
             }
         };
+        // The four damages the integrity decision calls repairable by recalculation, asked
+        // in one place so that all four earn the one diagnosis that offers that repair. A
+        // locator that is not there and one that is not a locator reach it here rather
+        // than failing the whole record: see `PackageRootLocator`.
         let locator_reason = if resolved_order_directory.parent() != Some(layout.orders_directory())
         {
             Some(OrderLocatorReason::NotActiveDirectChild)
         } else {
-            (!locator_resolves_to_root(
-                &resolved_order_directory,
-                &validated.order().package_root,
-                &root,
-            ))
-            .then_some(OrderLocatorReason::DoesNotResolveToPackage)
+            match &validated.order().package_root {
+                PackageRootLocator::Absent => Some(OrderLocatorReason::Absent),
+                PackageRootLocator::Malformed(_) => Some(OrderLocatorReason::Malformed),
+                PackageRootLocator::Spelled(locator) => {
+                    (!locator_resolves_to_root(&resolved_order_directory, locator, &root))
+                        .then_some(OrderLocatorReason::DoesNotResolveToPackage)
+                }
+            }
         };
         if let Some(reason) = locator_reason {
             order_diagnostics.push(Diagnostic::new(
@@ -2098,7 +2520,11 @@ fn inspect_canonical_package_with_breadth<F: FileSystem>(
                 vec![context.root.clone()],
                 DiagnosticEvidence::OrderPackageLocatorMismatch {
                     order_id: validated.order().order_id.clone(),
-                    package_root: validated.order().package_root.as_str().to_owned(),
+                    package_root: validated
+                        .order()
+                        .package_root
+                        .stored_text()
+                        .map(str::to_owned),
                     reason,
                 },
             ));
@@ -2199,6 +2625,29 @@ fn inspect_canonical_package_with_breadth<F: FileSystem>(
         diagnostic_groups,
         index,
     ))
+}
+
+/// Which field and which reason one Order-local semantic failure reports.
+///
+/// **The failure decides both**, which is the whole reason this exists: the site that
+/// raises the diagnostic used to spell `date_ordered` and the one date reason as
+/// literals, because a date was the only failure an Order could have. A second failure
+/// means the diagnostic has to carry which one occurred, and matching on the core's own
+/// [`OrderValidationFailure`] is what makes a third a compile error here rather than a
+/// diagnostic naming the wrong field.
+///
+/// `validate` returns on the first failure it finds, so the first is the whole answer;
+/// the empty case cannot arise, and reporting the date reason for it would be a claim
+/// about a record nothing objected to.
+fn semantic_evidence(failures: &[OrderValidationFailure]) -> (&'static str, OrderSemanticReason) {
+    match failures.first() {
+        Some(OrderValidationFailure::NonFiniteTotal { total }) => {
+            (total.as_str(), OrderSemanticReason::NonFiniteTotal)
+        }
+        Some(OrderValidationFailure::InvalidDateOrdered) | None => {
+            ("date_ordered", OrderSemanticReason::InvalidGregorianDate)
+        }
+    }
 }
 
 fn orders_directory_entry_disallowed_diagnostic(
@@ -2484,12 +2933,12 @@ fn layout_diagnostic<E>(root: &Path, config: &Config, error: PackagePathError<E>
             config_location,
             Vec::new(),
             DiagnosticEvidence::ConfigurationPathInvalid {
-                path: configuration_path_kind(path),
+                path: path.into(),
                 configured_value: match path {
                     ConfiguredPath::Orders => config.orders_path.clone(),
                     ConfiguredPath::Removed => config.removed_path.clone(),
                 },
-                reason: configuration_path_reason(failure),
+                reason: failure.into(),
             },
         ),
         PackagePathError::ManagedPathsOverlap => Diagnostic::new(
@@ -2557,25 +3006,6 @@ fn configured_directory_diagnostic(
             reason,
         },
     )
-}
-
-fn configuration_path_kind(path: ConfiguredPath) -> ConfigurationPathKind {
-    match path {
-        ConfiguredPath::Orders => ConfigurationPathKind::OrdersPath,
-        ConfiguredPath::Removed => ConfigurationPathKind::RemovedPath,
-    }
-}
-
-fn configuration_path_reason(reason: ConfiguredPathFailure) -> ConfigurationPathReason {
-    match reason {
-        ConfiguredPathFailure::Absolute => ConfigurationPathReason::Absolute,
-        ConfiguredPathFailure::CurrentDirectory => ConfigurationPathReason::CurrentDirectory,
-        ConfiguredPathFailure::ParentTraversal => ConfigurationPathReason::ParentTraversal,
-        ConfiguredPathFailure::EmptyComponent => ConfigurationPathReason::EmptyComponent,
-        ConfiguredPathFailure::PlatformSeparator => ConfigurationPathReason::PlatformSeparator,
-        ConfiguredPathFailure::ReservedMetadata => ConfigurationPathReason::ReservedMetadata,
-        ConfiguredPathFailure::NotDirectChild => ConfigurationPathReason::NotDirectChild,
-    }
 }
 
 struct PackageOpenFileSystem<'a, F> {

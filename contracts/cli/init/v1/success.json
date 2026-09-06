@@ -1,0 +1,80 @@
+{
+  "contract": "spielorders.init",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>"
+  },
+  "data": {
+    "report": {
+      "committed": true,
+      "changed": true,
+      "operations": [
+        {
+          "operation": "create",
+          "destination_kind": "directory",
+          "location": {
+            "absolute_path": "<PACKAGE_ROOT>/.spielorders",
+            "package_relative_path": ".spielorders"
+          }
+        },
+        {
+          "operation": "create",
+          "destination_kind": "directory",
+          "location": {
+            "absolute_path": "<PACKAGE_ROOT>/Orders",
+            "package_relative_path": "Orders"
+          }
+        },
+        {
+          "operation": "create",
+          "destination_kind": "file",
+          "location": {
+            "absolute_path": "<PACKAGE_ROOT>/.spielorders/config.toml",
+            "package_relative_path": ".spielorders/config.toml"
+          }
+        },
+        {
+          "operation": "create",
+          "destination_kind": "file",
+          "location": {
+            "absolute_path": "<PACKAGE_ROOT>/.spielorders/version.json",
+            "package_relative_path": ".spielorders/version.json"
+          }
+        },
+        {
+          "operation": "create",
+          "destination_kind": "file",
+          "location": {
+            "absolute_path": "<PACKAGE_ROOT>/.spielorders/vendors.json",
+            "package_relative_path": ".spielorders/vendors.json"
+          }
+        },
+        {
+          "operation": "create",
+          "destination_kind": "file",
+          "location": {
+            "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
+            "package_relative_path": ".spielorders/index.json"
+          }
+        },
+        {
+          "operation": "create",
+          "destination_kind": "file",
+          "location": {
+            "absolute_path": "<PACKAGE_ROOT>/README.md",
+            "package_relative_path": "README.md"
+          }
+        }
+      ],
+      "warnings": []
+    },
+    "package": {
+      "metadata_version": 1,
+      "orders_path": "Orders",
+      "removed_path": "Removed"
+    }
+  },
+  "diagnostics": [],
+  "error": null
+}

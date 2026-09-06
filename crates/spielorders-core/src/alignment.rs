@@ -12,9 +12,10 @@ use crate::{
     evidence::{EvidenceFingerprint, EvidenceOutcome},
     metadata::{OrderDocument, VendorId},
     mutation::MutationReport,
-    operations::OperationFailure,
+    operations::{FailedPath, OperationFailure},
     order_edits::{OrderResolutionFailure, resolve_order},
     ports::{DirectoryFileSystem, FileSystem, FileSystemEntryKind, NewDirectoryRenameOutcome},
+    readme::{Location, package_relative_path_text},
 };
 use std::path::{Path, PathBuf};
 
@@ -24,10 +25,24 @@ pub enum OrderAlignmentOperationKind {
     RefreshPackageIndex,
 }
 
+impl OrderAlignmentOperationKind {
+    /// This operation's one stable spelling.
+    ///
+    /// Beside the operation rather than in an adapter, so an operation reported by the CLI
+    /// and the same operation reported to the desktop shell cannot come to be named
+    /// differently.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::RenameOrderDirectory => "rename_order_directory",
+            Self::RefreshPackageIndex => "refresh_package_index",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OrderAlignmentOperation {
     kind: OrderAlignmentOperationKind,
-    path: PathBuf,
+    location: Location,
 }
 
 impl OrderAlignmentOperation {
@@ -35,8 +50,14 @@ impl OrderAlignmentOperation {
         self.kind
     }
 
+    /// Where this operation acts, as this Package locates it — so a caller reporting it
+    /// carries the Package-relative spelling as well as the absolute path.
+    pub fn location(&self) -> &Location {
+        &self.location
+    }
+
     pub fn path(&self) -> &Path {
-        &self.path
+        self.location.absolute_path()
     }
 }
 
@@ -44,8 +65,8 @@ impl OrderAlignmentOperation {
 #[derive(Clone, Debug, PartialEq)]
 pub struct OrderAlignmentPlan {
     root: PathBuf,
-    source: PathBuf,
-    destination: PathBuf,
+    source: Location,
+    destination: Location,
     basename: String,
     document: OrderDocument,
     readme_text: Option<String>,
@@ -59,13 +80,18 @@ impl OrderAlignmentPlan {
         &self.root
     }
 
-    /// The Order Directory as it stands now.
-    pub fn source(&self) -> &Path {
+    /// The Order Directory as it stands now, as this Package locates it.
+    ///
+    /// A `Location` rather than a path, for the reason
+    /// [`OrderAlignmentOperation::location`] carries one: a caller reporting where this
+    /// directory is carries the Package-relative spelling as well as the absolute path,
+    /// and the normalized Package-relative grammar is this crate's.
+    pub fn source(&self) -> &Location {
         &self.source
     }
 
-    /// The Order Directory this alignment would rename it to.
-    pub fn destination(&self) -> &Path {
+    /// The Order Directory this alignment would rename it to, as this Package locates it.
+    pub fn destination(&self) -> &Location {
         &self.destination
     }
 
@@ -82,10 +108,19 @@ impl OrderAlignmentPlan {
         &self.operations
     }
 
+    /// The derived Package Index as it stood when this alignment was planned.
+    ///
+    /// The state a run that never commits has to report: committing refreshes the index
+    /// and [`OrderAlignmentResult::index`] is that refreshed record, so a dry run has
+    /// none of its own and answers with what it observed instead.
+    pub fn prior_index(&self) -> &PackageIndexRecord {
+        &self.prior_index
+    }
+
     /// Whether committing this plan would rename the directory. Drift is ordinary
     /// allowed state, so an already aligned Order plans no operation at all.
     pub fn changes_directory_name(&self) -> bool {
-        self.source != self.destination
+        self.source.absolute_path() != self.destination.absolute_path()
     }
 }
 
@@ -106,14 +141,23 @@ pub enum OrderAlignmentPlanError<E> {
     EmptyProjectedComponent,
     /// Something already occupies the projected name. Alignment stops rather than
     /// inventing a suffix.
+    ///
+    /// **A `Location` rather than a `PathBuf`**, because the projected destination is a
+    /// path inside this Package and [`located`] has already established its
+    /// Package-relative spelling — which a refusal owes exactly as a success does.
     DestinationCollision {
-        path: PathBuf,
+        location: Location,
     },
     UnresolvedVendor {
         vendor_id: String,
     },
+    /// **A [`FailedPath`] rather than a `PathBuf`**, because the paths that reach here do
+    /// not agree about whether a Package surrounds them: an operation inside a Root this
+    /// capability established carries that Root's spelling, and one performed while
+    /// resolving the Order Directory up to its Package happens before there is a Root to
+    /// spell it against. The type is what tells them apart.
     FileSystem {
-        path: PathBuf,
+        path: FailedPath,
         error: E,
     },
 }
@@ -140,29 +184,33 @@ pub fn plan_order_alignment<F: FileSystem>(
     let document = order.document().clone();
     let basename = projected_basename(&document, &package)?;
 
-    let source = order.paths().directory().absolute_path().to_path_buf();
+    let root = package.context().root().absolute_path().to_path_buf();
+    let source = order.paths().directory().clone();
     let parent = source
+        .absolute_path()
         .parent()
         .ok_or_else(|| OrderAlignmentPlanError::OrderNotFound {
-            path: source.clone(),
+            path: source.absolute_path().to_path_buf(),
         })?
         .to_path_buf();
-    let destination = parent.join(&basename);
-    let index_path = package.context().index().absolute_path().to_path_buf();
+    let destination = located(&root, parent.join(&basename));
+    let index = package.context().index().clone();
 
-    let operations = if source == destination {
+    let operations = if source.absolute_path() == destination.absolute_path() {
         Vec::new()
     } else {
         // The projected name must be free. A collision stops alignment; it never
         // invents a suffix and never replaces whatever is already there.
-        match filesystem.symlink_metadata(&destination) {
+        match filesystem.symlink_metadata(destination.absolute_path()) {
             Ok(None) => {}
             Ok(Some(_)) => {
-                return Err(OrderAlignmentPlanError::DestinationCollision { path: destination });
+                return Err(OrderAlignmentPlanError::DestinationCollision {
+                    location: destination.clone(),
+                });
             }
             Err(error) => {
                 return Err(OrderAlignmentPlanError::FileSystem {
-                    path: destination,
+                    path: FailedPath::Located(destination.clone()),
                     error,
                 });
             }
@@ -170,18 +218,18 @@ pub fn plan_order_alignment<F: FileSystem>(
         vec![
             OrderAlignmentOperation {
                 kind: OrderAlignmentOperationKind::RenameOrderDirectory,
-                path: destination.clone(),
+                location: destination.clone(),
             },
             OrderAlignmentOperation {
                 kind: OrderAlignmentOperationKind::RefreshPackageIndex,
-                path: index_path,
+                location: index,
             },
         ]
     };
 
     let evidence = alignment_evidence(&package, &order);
     Ok(OrderAlignmentPlan {
-        root: package.context().root().absolute_path().to_path_buf(),
+        root,
         source,
         destination,
         basename,
@@ -343,8 +391,15 @@ impl OrderAlignmentResult {
 #[derive(Debug, PartialEq)]
 pub enum OrderAlignmentRejection<E> {
     /// The source or destination changed between planning and commit.
+    ///
+    /// **A `Location` rather than a `PathBuf`**, for the reason
+    /// [`OrderAlignmentPlanError::DestinationCollision`] carries one: this refusal happens
+    /// under a Root the plan established, about a path the plan itself derived inside it,
+    /// and a response owes that Root's spelling for what it names — in a refusal exactly as
+    /// in a success. Handing back a bare path is what left an adapter to re-derive the
+    /// spelling or drop it.
     PreconditionsChanged {
-        path: PathBuf,
+        location: Location,
     },
     /// The facts this alignment was authorized against no longer stand, so the plan no
     /// longer names the right Order or the right name to give it. The seam's own answer
@@ -355,10 +410,10 @@ pub enum OrderAlignmentRejection<E> {
     },
     /// The projected name was taken before the rename ran.
     DestinationCollision {
-        path: PathBuf,
+        location: Location,
     },
     RenameFailed {
-        path: PathBuf,
+        location: Location,
         error: E,
     },
 }
@@ -367,6 +422,21 @@ pub enum OrderAlignmentRejection<E> {
 pub enum OrderAlignmentWarning {
     IndexRefreshFailed(OperationFailure),
     RefreshUnavailable,
+}
+
+impl OrderAlignmentWarning {
+    /// This warning's one stable spelling.
+    ///
+    /// Beside the warning rather than in an adapter, and deliberately the same two words
+    /// `crate::creation` and `crate::adoption` use: a committed mutation whose derived
+    /// refresh failed is one condition, so a consumer branching on it reads one spelling
+    /// however the Package came to need refreshing.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::IndexRefreshFailed(_) => "index_refresh_failed",
+            Self::RefreshUnavailable => "refresh_unavailable",
+        }
+    }
 }
 
 pub type OrderAlignmentReport<E> = MutationReport<
@@ -380,24 +450,24 @@ pub fn commit_order_alignment<F: FileSystem + DirectoryFileSystem>(
     plan: OrderAlignmentPlan,
     filesystem: &F,
 ) -> OrderAlignmentReport<F::Error> {
-    match filesystem.symlink_metadata(&plan.source) {
+    match filesystem.symlink_metadata(plan.source.absolute_path()) {
         Ok(Some(FileSystemEntryKind::Directory)) => {}
         // A source that vanished or is no longer an ordinary directory is not the
         // Order this plan validated. Checked here rather than left to the resolution
         // below, which canonicalizes: a link standing where the directory was would
         // resolve to whatever it points at and then be renamed in its place.
         _ => {
-            let path = plan.source.clone();
-            return preconditions_changed(plan, path);
+            let source = plan.source.clone();
+            return preconditions_changed(plan, source);
         }
     }
 
     // Re-resolve the subject rather than settle for having found something there. A
     // source that no longer resolves to a healthy Order of its own Package is neither
     // this plan's Order nor identifiable as any other.
-    let Ok((package, order)) = resolve_order(&plan.source, filesystem) else {
-        let path = plan.source.clone();
-        return preconditions_changed(plan, path);
+    let Ok((package, order)) = resolve_order(plan.source.absolute_path(), filesystem) else {
+        let source = plan.source.clone();
+        return preconditions_changed(plan, source);
     };
 
     // Immediately before the first effect, which is the rename below or — for an
@@ -422,20 +492,23 @@ pub fn commit_order_alignment<F: FileSystem + DirectoryFileSystem>(
 
     // The whole directory moves as one opaque tree. Nothing enumerates, copies, or
     // rewrites its children, so README and Supporting Material bytes travel intact.
-    match filesystem.rename_new_directory(&plan.source, &plan.destination) {
+    match filesystem.rename_new_directory(
+        plan.source.absolute_path(),
+        plan.destination.absolute_path(),
+    ) {
         Ok(NewDirectoryRenameOutcome::Renamed) => {}
         Ok(NewDirectoryRenameOutcome::DestinationExists) => {
-            let path = plan.destination.clone();
+            let location = plan.destination.clone();
             return MutationReport::Rejected {
                 plan,
-                rejection: OrderAlignmentRejection::DestinationCollision { path },
+                rejection: OrderAlignmentRejection::DestinationCollision { location },
             };
         }
         Err(error) => {
-            let path = plan.destination.clone();
+            let location = plan.destination.clone();
             return MutationReport::Rejected {
                 plan,
-                rejection: OrderAlignmentRejection::RenameFailed { path, error },
+                rejection: OrderAlignmentRejection::RenameFailed { location, error },
             };
         }
     }
@@ -509,7 +582,7 @@ fn committed_with_warning<E>(
 ) -> OrderAlignmentReport<E> {
     let order = crate::canonical::project_committed_order(
         &plan.root,
-        &plan.destination,
+        plan.destination.absolute_path(),
         &plan.document,
         plan.readme_text.clone(),
     );
@@ -529,9 +602,24 @@ fn order_at(package: &CurrentPackageCandidate, plan: &OrderAlignmentPlan) -> Opt
         .cloned()
 }
 
-fn preconditions_changed<E>(plan: OrderAlignmentPlan, path: PathBuf) -> OrderAlignmentReport<E> {
+/// One planned path, as this Package locates it.
+///
+/// The Package-relative spelling holds by construction, as it does for a planned creation
+/// artifact: the source is a discovered Order Directory, whose own `Location` the load
+/// already carries, and the destination is that directory's parent joined with a
+/// projected basename `normalize_filename_component` has already stripped of separators.
+fn located(root: &Path, path: PathBuf) -> Location {
+    let relative = package_relative_path_text(root, &path)
+        .expect("a planned alignment path has a Package-relative spelling");
+    Location::within_package(path, relative).expect("a planned alignment path is normalized")
+}
+
+fn preconditions_changed<E>(
+    plan: OrderAlignmentPlan,
+    location: Location,
+) -> OrderAlignmentReport<E> {
     MutationReport::Rejected {
         plan,
-        rejection: OrderAlignmentRejection::PreconditionsChanged { path },
+        rejection: OrderAlignmentRejection::PreconditionsChanged { location },
     }
 }

@@ -63,6 +63,16 @@ impl PackageRoot {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// The locator this text spells, or `None` where it spells none.
+    ///
+    /// The rule in one place, because it is asked twice: of a member being deserialized on
+    /// its own, and of the member of an Order record, which carries the answer rather than
+    /// failing.
+    fn parse(text: &str) -> Option<Self> {
+        (text.split('/').count() >= 2 && text.split('/').all(|segment| segment == ".."))
+            .then(|| Self(text.to_owned()))
+    }
 }
 
 impl Serialize for PackageRoot {
@@ -80,14 +90,129 @@ impl<'de> Deserialize<'de> for PackageRoot {
         D: serde::Deserializer<'de>,
     {
         let text = String::deserialize(deserializer)?;
-        if text.split('/').count() >= 2 && text.split('/').all(|segment| segment == "..") {
-            Ok(Self(text))
-        } else {
-            Err(serde::de::Error::custom(
-                "expected two or more parent-only path segments",
-            ))
+        Self::parse(&text).ok_or_else(|| {
+            serde::de::Error::custom("expected two or more parent-only path segments")
+        })
+    }
+}
+
+/// A `package_root` member this build cannot read as a locator, kept exactly as written.
+///
+/// Opaque on purpose: nothing may interpret it — the decided repair recalculates the
+/// locator from where the Order Directory physically sits. It is kept because a reader
+/// is shown what the record actually stores, which is what tells a locator that leads
+/// somewhere wrong from one that is not a locator at all.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UninterpretableLocator(serde_json::Value);
+
+impl UninterpretableLocator {
+    /// The member's own text, where the member is text at all.
+    pub fn as_text(&self) -> Option<&str> {
+        self.0.as_str()
+    }
+}
+
+/// One Order record's technical `package_root` locator, and whether this build can follow
+/// it.
+///
+/// **The locator carries its own outcome rather than failing its record.** A damaged
+/// locator is the one Order-record damage the integrity decision calls repairable by
+/// recalculation, and a field that refused to deserialize took the whole record down with
+/// it: an Order whose locator was absent or malformed was diagnosed as an invalid managed
+/// artifact whose only offered action is authoring a complete replacement by hand, at
+/// error severity until someone did. Every other rule the record has still applies,
+/// because the record still parses through the same derive — and a consumer that needs
+/// the locator asks [`Self::spelled`] and handles its absence rather than assuming a
+/// record that loaded carries one.
+///
+/// The published version-1 schema is unchanged: a record with no usable locator is not a
+/// valid `order.json`, and the Package load quarantines its Order. What changed is which
+/// diagnosis it earns.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PackageRootLocator {
+    /// Two or more parent-only segments: a locator this build can follow.
+    Spelled(PackageRoot),
+    /// No `package_root` member at all.
+    Absent,
+    /// A member that is not such a path.
+    Malformed(UninterpretableLocator),
+}
+
+impl PackageRootLocator {
+    /// The locator, where this record carries one this build can follow.
+    pub fn spelled(&self) -> Option<&PackageRoot> {
+        match self {
+            Self::Spelled(root) => Some(root),
+            Self::Absent | Self::Malformed(_) => None,
         }
     }
+
+    /// The member's stored text, where the member is present and is text.
+    ///
+    /// What a reader is shown of a locator that led nowhere. An absent member and one
+    /// that is not text have none to show, and the diagnosed reason is what says which.
+    pub fn stored_text(&self) -> Option<&str> {
+        match self {
+            Self::Spelled(root) => Some(root.as_str()),
+            Self::Absent => None,
+            Self::Malformed(value) => value.as_text(),
+        }
+    }
+
+    fn absent() -> Self {
+        Self::Absent
+    }
+
+    fn is_absent(&self) -> bool {
+        matches!(self, Self::Absent)
+    }
+}
+
+impl Serialize for PackageRootLocator {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Spelled(root) => root.serialize(serializer),
+            Self::Malformed(value) => value.0.serialize(serializer),
+            // Absent within a record is the member's absence, which the record's own
+            // `skip_serializing_if` writes by omitting it. Alone it is a null.
+            Self::Absent => serializer.serialize_none(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for PackageRootLocator {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        match value.as_str().and_then(PackageRoot::parse) {
+            Some(root) => Ok(Self::Spelled(root)),
+            None => Ok(Self::Malformed(UninterpretableLocator(value))),
+        }
+    }
+}
+
+/// One Order record as a derived Package Index carries it: healthy, locator and all.
+///
+/// The index holds only Orders the load judged healthy, and a healthy Order has a locator
+/// this build can follow. A stored index naming one that does not is not this Package's
+/// derived index, so it is refused here rather than trusted by the fast path that reads a
+/// valid stored index instead of rebuilding it.
+fn deserialize_indexed_order<'de, D>(deserializer: D) -> Result<OrderDocument, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let document = OrderDocument::deserialize(deserializer)?;
+    if document.package_root.spelled().is_none() {
+        return Err(serde::de::Error::custom(
+            "expected an indexed Order to carry a usable package_root locator",
+        ));
+    }
+    Ok(document)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -421,6 +546,7 @@ pub struct IndexDocument {
 #[serde(deny_unknown_fields)]
 pub struct IndexOrder {
     pub order_directory: IndexOrderDirectory,
+    #[serde(deserialize_with = "deserialize_indexed_order")]
     pub order: OrderDocument,
     pub readme: String,
 }
@@ -429,7 +555,11 @@ pub struct IndexOrder {
 #[serde(deny_unknown_fields)]
 pub struct OrderDocument {
     pub schema_version: Version1,
-    pub package_root: PackageRoot,
+    #[serde(
+        default = "PackageRootLocator::absent",
+        skip_serializing_if = "PackageRootLocator::is_absent"
+    )]
+    pub package_root: PackageRootLocator,
     pub order_id: OrderId,
     pub title: NonBlankString,
     pub date_ordered: DateOrdered,
@@ -487,7 +617,7 @@ pub struct OrderItem {
     pub catalog_number: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OrderStatus {
     InPreparation,
@@ -495,6 +625,27 @@ pub enum OrderStatus {
     Ordered,
     Received,
     Complete,
+}
+
+impl OrderStatus {
+    /// This status's one stable spelling, which is also the one written to disk.
+    ///
+    /// Every other enum this crate reports carries an `as_str`, and an adapter that had
+    /// to invent a spelling for this one would be a second place deciding what a status
+    /// is called — so a code could mean one thing in the library and another in a
+    /// response. The spellings are the `rename_all` above, stated rather than derived so
+    /// that a reader can see them, and
+    /// [`tests::every_status_spelling_is_the_one_written_to_disk`] is what keeps the two
+    /// from drifting apart.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::InPreparation => "in_preparation",
+            Self::Hold => "hold",
+            Self::Ordered => "ordered",
+            Self::Received => "received",
+            Self::Complete => "complete",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -602,12 +753,16 @@ pub(crate) fn version_shape_field(bytes: &[u8]) -> Option<String> {
         .or_else(|| (!object["metadata_version"].is_u64()).then(|| "metadata_version".into()))
 }
 
+/// The field that stopped an Order record from parsing.
+///
+/// **`package_root` is not one of them.** The locator carries its own outcome — see
+/// [`PackageRootLocator`] — so a record never fails to parse for it, and naming it here
+/// would attribute another field's failure to the locator whenever both are wrong at once.
 pub(crate) fn order_shape_field(bytes: &[u8]) -> Option<String> {
     let value = serde_json::from_slice::<serde_json::Value>(bytes).ok()?;
     let object = value.as_object()?;
     let required = [
         "schema_version",
-        "package_root",
         "order_id",
         "title",
         "date_ordered",
@@ -637,7 +792,6 @@ pub(crate) fn order_shape_field(bytes: &[u8]) -> Option<String> {
     }
     for (field, valid) in [
         ("schema_version", object["schema_version"].is_u64()),
-        ("package_root", object["package_root"].is_string()),
         ("order_id", object["order_id"].is_string()),
         ("title", object["title"].is_string()),
         ("date_ordered", object["date_ordered"].is_string()),
@@ -704,10 +858,6 @@ pub(crate) fn order_shape_field(bytes: &[u8]) -> Option<String> {
         }
     }
     for (field, valid) in [
-        (
-            "package_root",
-            serde_json::from_value::<PackageRoot>(object["package_root"].clone()).is_ok(),
-        ),
         (
             "order_id",
             serde_json::from_value::<OrderId>(object["order_id"].clone()).is_ok(),

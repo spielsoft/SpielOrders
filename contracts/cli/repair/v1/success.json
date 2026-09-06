@@ -1,0 +1,54 @@
+{
+  "contract": "spielorders.repair",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>"
+  },
+  "data": {
+    "scope": "package",
+    "valid": true,
+    "cases": [
+      {
+        "case": "staging_artifact_present:.spielorders/.vendors.json.spielorders-stage:f371c9884600e983437cf461e55cdb8ca6503b3bfe42c915af40bfcde0cf52c3",
+        "code": "staging_artifact_present",
+        "location": {
+          "absolute_path": "<PACKAGE_ROOT>/.spielorders/.vendors.json.spielorders-stage",
+          "package_relative_path": ".spielorders/.vendors.json.spielorders-stage"
+        },
+        "actions": [
+          {
+            "action": "promote_staging_candidate",
+            "required_values": [],
+            "command": "spielorders repair --root <PACKAGE_ROOT> case=staging_artifact_present:.spielorders/.vendors.json.spielorders-stage:f371c9884600e983437cf461e55cdb8ca6503b3bfe42c915af40bfcde0cf52c3 action=promote_staging_candidate"
+          }
+        ]
+      }
+    ],
+    "unactionable": [],
+    "report": null,
+    "index": null
+  },
+  "diagnostics": [
+    {
+      "code": "staging_artifact_present",
+      "severity": "warning",
+      "scope": "package",
+      "primary_location": {
+        "absolute_path": "<PACKAGE_ROOT>/.spielorders/.vendors.json.spielorders-stage",
+        "package_relative_path": ".spielorders/.vendors.json.spielorders-stage"
+      },
+      "related_locations": [
+        {
+          "absolute_path": "<PACKAGE_ROOT>/.spielorders/vendors.json",
+          "package_relative_path": ".spielorders/vendors.json"
+        }
+      ],
+      "evidence": {
+        "destination_valid": true,
+        "candidate_digest": "3d9476718b61237075664c8d0a88aec0664ff3c04322a3602b1a77556c0678b7"
+      }
+    }
+  ],
+  "error": null
+}

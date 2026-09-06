@@ -8,7 +8,7 @@
 //! every reader reports through.
 
 pub use crate::operations::{
-    FileSystemOperation, OperationEvidence, OperationFailure, OperationFailureCode,
+    FailedPath, FileSystemOperation, OperationEvidence, OperationFailure, OperationFailureCode,
     PackageIndexReplacementPhase,
 };
 use crate::{
@@ -130,6 +130,53 @@ pub(crate) fn package_relative_path_text(root: &Path, path: &Path) -> Option<Str
         text.push('.');
     }
     is_normalized_package_relative(&text).then_some(text)
+}
+
+/// One path inside a Package, in the best spelling the Package has for it.
+///
+/// **The one place a capability turns a path it assembled into a reportable location.**
+/// A response owes the Package-relative spelling for every path it names inside a Package,
+/// and a caller deriving that spelling would be a second place deciding what a Package's
+/// layout is. The absolute fallback is the honest answer for a path this application
+/// cannot express relatively — it names the artifact rather than dropping it.
+pub(crate) fn located_in_package(root: &Path, path: PathBuf) -> Location {
+    package_relative_path_text(root, &path)
+        .and_then(|relative| Location::within_package(path.clone(), relative).ok())
+        .unwrap_or_else(|| {
+            Location::absolute(path).expect("a managed path under a resolved Root is absolute")
+        })
+}
+
+/// One location together with the Root a response names it under.
+///
+/// **Both facts or neither.** A capability that resolved a scope before refusing knows
+/// which Root it resolved and how that Root spells the path it is refusing about, and a
+/// response owes both — in a refusal exactly as in a success. Carrying them as one value
+/// is what stops a refusal from reporting one and dropping the other.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RootedLocation {
+    root: PathBuf,
+    location: Location,
+}
+
+impl RootedLocation {
+    /// The SpielOrders Root this location is named under.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// The location itself, in the best spelling that Root has for it.
+    pub fn location(&self) -> &Location {
+        &self.location
+    }
+}
+
+/// One path a capability resolved inside `root`, ready to be reported with it.
+pub(crate) fn rooted_at(root: &Path, path: PathBuf) -> RootedLocation {
+    RootedLocation {
+        root: root.to_path_buf(),
+        location: located_in_package(root, path),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -353,18 +400,33 @@ pub enum ConfiguredOrdersDirectoryReason {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum OrderSemanticReason {
     InvalidGregorianDate,
+    /// A calculated Item Total or Order Total is not a finite number.
+    ///
+    /// **Its own reason rather than a stored field's**, because overflow of two finite
+    /// stored numbers is the only route to one: a non-finite Quantity or Unit Price never
+    /// loads at all, so nothing stored is at fault and the `field` beside this reason is
+    /// the calculated total instead. See `order::CalculatedTotal`.
+    NonFiniteTotal,
 }
 
 impl OrderSemanticReason {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::InvalidGregorianDate => "invalid_gregorian_date",
+            Self::NonFiniteTotal => "non_finite_total",
         }
     }
 }
 
+/// Why one Order's technical locator is damaged.
+///
+/// The four the integrity decision names, each repairable by recalculation: a member that
+/// is not there, one that is not a locator, one that leads out of the active Orders
+/// Directory, and one that leads to a Package this Order is not in.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum OrderLocatorReason {
+    Absent,
+    Malformed,
     NotActiveDirectChild,
     DoesNotResolveToPackage,
 }
@@ -372,6 +434,8 @@ pub enum OrderLocatorReason {
 impl OrderLocatorReason {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Absent => "absent",
+            Self::Malformed => "malformed",
             Self::NotActiveDirectChild => "not_active_direct_child",
             Self::DoesNotResolveToPackage => "does_not_resolve_to_package",
         }
@@ -487,7 +551,10 @@ pub enum DiagnosticEvidence {
     },
     OrderPackageLocatorMismatch {
         order_id: OrderId,
-        package_root: String,
+        /// The locator as the record stores it, and `None` where the record stores no
+        /// text to quote back — an absent member, or one that is not text. The `reason`
+        /// is what says which.
+        package_root: Option<String>,
         reason: OrderLocatorReason,
     },
     OrderIdDuplicate {

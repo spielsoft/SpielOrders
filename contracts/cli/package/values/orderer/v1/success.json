@@ -1,0 +1,18 @@
+{
+  "contract": "spielorders.package.values.orderer",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>"
+  },
+  "data": {
+    "values": [
+      {
+        "value": "Ada Lovelace",
+        "usage_count": 2
+      }
+    ]
+  },
+  "diagnostics": [],
+  "error": null
+}

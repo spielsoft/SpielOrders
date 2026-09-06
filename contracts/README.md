@@ -19,6 +19,11 @@ target-language numeric representation, filesystem resolution, cross-record iden
 or Vendor Name uniqueness, live Vendor Reference resolution, Package-wide version
 agreement, or index ordering and freshness.
 
-`config.toml` is unversioned and is therefore not represented here. CLI response
-contracts have independent versions and must not reuse these schemas.
+`config.toml` is unversioned and is therefore not represented here.
+
+CLI response contracts must not reuse these schemas, and they are versioned one per
+command rather than together, so they live in their own subtree: `cli/<contract
+path>/v<contract_version>/`, holding one golden response document per response kind.
+`docs/development/traceability.md` records the convention and why the layout is
+separate.
 

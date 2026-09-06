@@ -1,0 +1,62 @@
+{
+  "contract": "spielorders.add_vendor",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>"
+  },
+  "data": {
+    "report": {
+      "committed": true,
+      "changed": true,
+      "outcome": "created",
+      "operations": [
+        {
+          "operation": "replace_vendor_record",
+          "location": {
+            "absolute_path": "<PACKAGE_ROOT>/.spielorders/vendors.json",
+            "package_relative_path": ".spielorders/vendors.json"
+          }
+        },
+        {
+          "operation": "refresh_package_index",
+          "location": {
+            "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
+            "package_relative_path": ".spielorders/index.json"
+          }
+        }
+      ],
+      "index": {
+        "location": {
+          "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
+          "package_relative_path": ".spielorders/index.json"
+        },
+        "state": "stale",
+        "refresh": "replacement_failed",
+        "malformed_reasons": [],
+        "stale_reasons": [
+          "vendors_changed"
+        ],
+        "observed_version": null,
+        "expected_version": null
+      },
+      "warnings": [
+        "index_refresh_failed"
+      ]
+    },
+    "vendor": {
+      "vendor_id": "<VENDOR_ID>",
+      "name": "Tarnwick",
+      "phone": null,
+      "email": null,
+      "website": null,
+      "address": null,
+      "purchasing_notes": null,
+      "hidden": false,
+      "contacts": [],
+      "referencing_orders": []
+    }
+  },
+  "diagnostics": [],
+  "error": null
+}

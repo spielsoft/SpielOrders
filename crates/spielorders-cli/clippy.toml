@@ -1,0 +1,30 @@
+# Boundaries this adapter claims about itself that clippy has no lint named after.
+#
+# Each entry is a path, not a shape: nothing here fences an open-ended surface and then
+# reads as though it did. `std::fs` is deliberately absent for that reason — see
+# `src/effects.rs`.
+disallowed-methods = [
+  # Every exit carries its status back to `main` as a value. `clippy::exit` names
+  # `std::process::exit`; these are the spellings it does not, and this crate links
+  # `libc` for the exclusive rename its port promises, so they are reachable here. See
+  # `src/exit.rs`.
+  { path = "std::process::abort", reason = "an exit is an `exit::Exit` returned to `main`" },
+  { path = "libc::exit", reason = "an exit is an `exit::Exit` returned to `main`" },
+  { path = "libc::_exit", reason = "an exit is an `exit::Exit` returned to `main`" },
+  { path = "libc::abort", reason = "an exit is an `exit::Exit` returned to `main`" },
+
+  # Ctrl-C keeps the platform's default disposition, which is what makes a shell report
+  # 130. Honoring that convention means not interfering with it. See `src/exit.rs`.
+  { path = "libc::signal", reason = "an interrupt keeps its default disposition" },
+  { path = "libc::sigaction", reason = "an interrupt keeps its default disposition" },
+
+  # The environment and the arguments are read at one boundary. Permitted there, one
+  # read at a time, so a second reason has to be argued for where it is taken. See
+  # `src/effects.rs`.
+  { path = "std::env::args", reason = "the process learns from outside itself in `effects`" },
+  { path = "std::env::args_os", reason = "the process learns from outside itself in `effects`" },
+  { path = "std::env::var", reason = "the process learns from outside itself in `effects`" },
+  { path = "std::env::var_os", reason = "the process learns from outside itself in `effects`" },
+  { path = "std::env::vars", reason = "the process learns from outside itself in `effects`" },
+  { path = "std::env::vars_os", reason = "the process learns from outside itself in `effects`" },
+]

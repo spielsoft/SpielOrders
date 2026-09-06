@@ -715,23 +715,23 @@ fn unknown_vendor_and_damaged_package_reject_every_contact_capability() {
     .unwrap();
     assert!(matches!(
         list_vendor_contacts(tree.path(), VENDOR_ID, &RealFileSystem),
-        Err(VendorCapabilityError::DamagedPackage)
+        Err(VendorCapabilityError::DamagedPackage { .. })
     ));
     assert!(matches!(
         plan_vendor_contact_add(tree.path(), VENDOR_ID, &assignments, None, &RealFileSystem),
-        Err(VendorCapabilityError::DamagedPackage)
+        Err(VendorCapabilityError::DamagedPackage { .. })
     ));
     assert!(matches!(
         plan_vendor_contact_edit(tree.path(), VENDOR_ID, 1, &assignments, &RealFileSystem),
-        Err(VendorCapabilityError::DamagedPackage)
+        Err(VendorCapabilityError::DamagedPackage { .. })
     ));
     assert!(matches!(
         plan_vendor_contact_move(tree.path(), VENDOR_ID, 1, 2, &RealFileSystem),
-        Err(VendorCapabilityError::DamagedPackage)
+        Err(VendorCapabilityError::DamagedPackage { .. })
     ));
     assert!(matches!(
         plan_vendor_contact_remove(tree.path(), VENDOR_ID, 1, &RealFileSystem),
-        Err(VendorCapabilityError::DamagedPackage)
+        Err(VendorCapabilityError::DamagedPackage { .. })
     ));
 }
 
@@ -759,10 +759,18 @@ fn concurrent_vendor_aggregate_change_rejects_before_contact_commit() {
     let MutationReport::Rejected { rejection, .. } = report else {
         panic!("a concurrent aggregate change rejects: {report:?}");
     };
-    let VendorMutationRejection::PreconditionsChanged { path } = rejection else {
+    let VendorMutationRejection::PreconditionsChanged { location } = rejection else {
         panic!("the changed Vendor record is identified: {rejection:?}");
     };
-    assert_eq!(path, fs::canonicalize(&vendors_path).unwrap());
+    assert_eq!(
+        location.absolute_path(),
+        fs::canonicalize(&vendors_path).unwrap()
+    );
+    assert_eq!(
+        location.package_relative_path(),
+        Some(".spielorders/vendors.json"),
+        "a refusal carries this Package's spelling of the record it names"
+    );
     assert_eq!(fs::read(&vendors_path).unwrap(), concurrent);
 }
 
@@ -933,7 +941,10 @@ fn contact_mutation_preserves_vendor_identity_orders_readmes_and_supporting_mate
     assert_eq!(result.vendor().vendor_id.as_str(), VENDOR_ID);
     assert_eq!(result.vendor().name.as_str(), "Tarnwick");
     assert_eq!(result.referencing_orders().len(), 1);
-    assert_eq!(result.referencing_orders()[0].directory(), order_directory);
+    assert_eq!(
+        result.referencing_orders()[0].directory().absolute_path(),
+        order_directory
+    );
     assert!(order_directory.is_dir());
     assert_eq!(fs::read(&order_path).unwrap(), order_before);
     assert_eq!(

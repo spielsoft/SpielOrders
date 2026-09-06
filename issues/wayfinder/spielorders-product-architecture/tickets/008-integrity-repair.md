@@ -7,38 +7,30 @@ labels:
 assignee: /root
 ---
 
-## Question
-
-Which inconsistencies must SpielOrders detect or repair across directory names, managed metadata, Vendor references, lifecycle fields, and user-controlled supporting files, while never treating arbitrary user content as application-owned?
-
-## Blocking
-
-Unblocked.
-
-## Resolution
+## Decision
 
 SpielOrders validates only the package structure and artifacts within its declared ownership boundary. It isolates damage to the narrowest canonical scope, preserves all suspect material for explicit review, and never treats repair as permission to infer domain facts or rewrite user-owned Supporting Material.
+
+The diagnosis and repair core is built; the core crate's public surface is the record of the findings it raises and the repairs it offers. What follows is what that core may never become.
 
 ### Diagnostic scopes and ordinary operation
 
 - A **Damaged Package** has untrustworthy package-wide canonical state, including missing, unreadable, malformed, unsupported-version, or semantically invalid `version.json`, `config.toml`, or `vendors.json`, or an inaccessible or invalid configured Orders Directory. It opens in diagnostic-only mode; ordinary package mutations and search are rejected until package-wide integrity is restored.
 - A **Damaged Order** is isolated to its containing Order Directory. Missing, unreadable, malformed, unsupported-version, or semantically invalid `order.json`; an unresolved Vendor Reference; or a duplicate Order ID quarantines the affected directory without preventing healthy Orders in the same current-version package from being viewed or changed. A Damaged Order encountered while an older package is upgrading instead pauses ordinary package use until the user resolves it.
 - Validation reports the package as invalid while any Damaged Order exists, even though healthy Orders remain usable.
-- The unfiltered main Orders view retains a clearly marked placeholder for every Damaged Order Directory. Duplicate-ID conflicts keep every conflicting row visible and prominently identify the invalid identity field, following the BibDesk precedent discussed during resolution. Damaged placeholders are removed whenever a native search query is applied and never participate in Spotlight results.
+- The unfiltered main Orders view retains a clearly marked placeholder for every Damaged Order Directory. Duplicate-ID conflicts keep every conflicting row visible and prominently identify the invalid identity field. Damaged placeholders are removed whenever a native search query is applied and never participate in Spotlight results.
 - Warnings identify noncanonical but usable structure and never block ordinary work. Rejected mutations are failed operations that leave the prior canonical state unchanged.
 
 ### Order discovery and directory names
 
-- Every non-hidden ordinary direct-child directory of the configured Orders Directory receives a main-view presence as either a healthy Order or a Damaged Order. A missing, unreadable, malformed, or wrongly typed immediate `.spielorders/order.json` produces a Damaged Order.
-- Non-hidden direct-child files, aliases, and symlinks are ignored with a structural warning; links are never followed. Hidden direct children remain ignored without diagnostics.
-- An Order Directory basename that differs from the current `YYYY_MM_DD[_Vendor]_Title[_Orderer]` projection is ordinary allowed state, not a warning or integrity failure. SpielOrders continues to identify the Order by its embedded Order ID.
-- **Align Directory Name** remains an optional explicit organization action. Validation and repair never rename for drift. A destination collision or failed rename rejects alignment and leaves the current directory and metadata unchanged.
+- [Define the SpielOrders package topology](002-package-topology.md) owns discovery. Every directory it presumes to be an Order Directory receives a main-view presence as either a healthy Order or a Damaged Order, and a missing, unreadable, malformed, or wrongly typed immediate `.spielorders/order.json` produces a Damaged Order. Entries it ignores stay ignored, and the entries it disallows are reported as structural warnings rather than damage.
+- Directory-name drift is ordinary allowed state, not a warning or integrity failure; SpielOrders identifies the Order by its embedded Order ID, and validation and repair never rename for drift. A destination collision or failed rename rejects the explicit **Align Directory Name** action and leaves the current directory and metadata unchanged.
 
 ### Managed metadata and validation
 
 - Outside a supported Metadata Upgrade, `.spielorders/index.json` is the only managed artifact SpielOrders may replace or rebuild automatically because it is wholly derived from canonical records.
 - SpielOrders never automatically reconstructs, replaces, or guesses canonical `version.json`, `config.toml`, `vendors.json`, or `order.json`. Opening automatically performs a supported, deterministic, resumable Metadata Upgrade to the running build's newest version; upgrade remains distinct from repair because every source artifact must already be valid under its declared schema.
-- Within a supported schema, validation rejects malformed syntax, unknown fields, wrong types, missing or blank required facts, invalid calendar dates, invalid Order Status values, malformed three-letter Order Currency codes, duplicate IDs, package-duplicate Vendor Names under their case-insensitive comparison, and unresolved Vendor References.
+- Within a supported schema, validation is strict rather than tolerant: unknown fields, wrong types, and blank required facts are rejected, not ignored. `contracts/schemas/v1` and the core crate's diagnosis surface are the record of the individual checks.
 - Validation accepts contract-valid but unusual facts: future or provisional Date Ordered values, any direct Order Status transition, zero Order Items, negative or zero Quantity and Unit Price, and absent optional facts. It emits no status-dependent completeness or plausibility warnings.
 - An edit that would introduce invalid canonical state is rejected before replacement and preserves the previous canonical file.
 - Unexpected content inside a reserved `.spielorders/` directory produces a warning when required canonical artifacts remain intact. If an unexpected entry occupies a required canonical path, the applicable Package or Order is damaged. SpielOrders never deletes, moves, follows, or silently adopts unexpected entries.
@@ -58,6 +50,7 @@ SpielOrders validates only the package structure and artifacts within its declar
 - When a canonical file parses under a supported schema, repair may prefill recognized facts, identify invalid or unsupported facts, and write only a user-confirmed fully valid replacement. Unknown fields may be removed only through that confirmation.
 - SpielOrders does not partially salvage syntactically malformed JSON or interpret unsupported schema versions. It may offer confirmed recovery from a validated staging artifact or an external-correction surface. The desktop GUI's expert raw-JSON editor is one such surface: it writes the user's text without GUI or core-repair interpretation and then revalidates; invalid text remains damaged.
 - A missing `order.json` is not reconstructed by integrity repair. Deliberately adopting that directory as a new Order belongs to the legacy-adoption contract.
+- A damaged technical `package_root` locator — missing, malformed, stale, or resolving to something that is not this Package — damages only its Order and is explicitly repairable by recalculation. The correct value follows from where the Order Directory physically sits relative to the Package containing it, with that Package found by walking the directory's own ancestors for a marker, so the repair reads no stored value, infers no domain fact, and cannot move an Order between Packages. Recalculation is admissible here, where inference is refused everywhere else, because the locator is a technical field with exactly one correct value rather than a domain fact only the user knows.
 
 ### User-authored files and search
 

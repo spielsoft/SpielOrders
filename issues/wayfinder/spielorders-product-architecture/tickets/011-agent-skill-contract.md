@@ -7,15 +7,7 @@ labels:
 assignee: /root
 ---
 
-## Question
-
-How should SpielOrders provide and maintain a versioned agent skill, comparable in role to SpielGantt's Agent Ready bundle, so agents can inspect a SpielOrder Package and safely use the CLI to initialize or adopt Packages; create and update Orders, Order Items, Vendors, and Vendor Contacts; search and validate their work; respond to diagnostics; and preserve Supporting Material without directly editing managed metadata—and what generated files, setup and refresh commands, readiness/runtime/snapshot contracts, opt-in behavior, JSON-first operating protocol, approval boundaries, and skill-version compatibility rules are required?
-
-## Blocking
-
-Unblocked. [Define the Rust CLI capability contract](006-cli-contract.md) and [Define legacy Order adoption and metadata bootstrapping](009-legacy-adoption.md) are both closed.
-
-## Resolution
+## Decision
 
 SpielOrders provides a package-local agent skill only. It does not install or maintain a global skill. The app and CLI ship the source material used to prepare a copy inside a SpielOrder Package, so the guidance travels with the Package an agent is operating on.
 
@@ -86,4 +78,4 @@ The skill carries two compact, non-negotiable facts:
 - Never directly edit SpielOrders-managed metadata when a CLI operation exists. Use the CLI so validation, atomic writes, cross-record rules, and Package Index refresh remain consistent. `.spielorders` configuration and JSON are managed metadata; Package and Order READMEs are ordinary user-authored content. Diagnostics may identify damage for which no supported CLI mutation exists, but the skill does not invent an unsupported metadata edit.
 - Supporting Material is opaque user-owned content inside an Order Directory, outside SpielOrders-managed metadata and without a required internal layout. Metadata editing, validation, repair, alignment, upgrade, and index operations preserve it. Only an explicit whole-Order removal moves or trashes the complete Order Directory containing it. `search supporting-material` provides OS-indexed lookup without making Supporting Material managed data.
 
-This resolution specifies the future generated guidance and its CLI contract only. It does not scaffold or implement the skill.
+This decision specifies the future generated guidance and its CLI contract only. It does not scaffold or implement the skill.

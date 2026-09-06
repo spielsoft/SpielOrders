@@ -5,15 +5,19 @@ use crate::{
         CanonicalPackageLoad, HealthyOrder, PackageIndexRecord, PackageLoad,
         inspect_canonical_package, open_package, order_readme_text, project_committed_order,
     },
-    metadata::{OrderDocument, OrderStatus},
+    metadata::{OrderDocument, OrderStatus, Vendor},
     mutation::MutationReport,
-    operations::OperationFailure,
+    operations::{FailedPath, OperationFailure},
+    order_edits::{
+        ItemAssignments, NewItemAssignmentFailure, NewOrderAssignmentFailure, NewOrderFacts,
+        OrderAssignments, new_order_item,
+    },
     package::{ReusableValue, canonicalize_reusable_value},
     ports::{
         DirectoryFileSystem, FileChangeEvidence, FileChangeObservation, FileSystem,
         FileSystemEntryKind, NewFileLinkOutcome, UuidGenerator,
     },
-    readme::package_relative_path_text,
+    readme::{Location, located_in_package, package_relative_path_text},
 };
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -31,6 +35,23 @@ pub struct OrderItemInput {
 }
 
 impl OrderItemInput {
+    /// The Item one canonical assignment set names, or every reason it names none.
+    ///
+    /// Adjudicated against the one list of Item fields every Item mutation uses — see
+    /// [`new_order_item`]. **Adoption is the only capability that gives an Order Items
+    /// before it has a record**, because an Order created from nothing starts with none.
+    pub fn from_assignments(
+        assignments: &ItemAssignments,
+    ) -> Result<Self, NewItemAssignmentFailure> {
+        let item = new_order_item(assignments)?;
+        Ok(Self {
+            description: item.description.as_str().to_owned(),
+            quantity: item.quantity.get(),
+            unit_price: item.unit_price.get(),
+            catalog_number: item.catalog_number,
+        })
+    }
+
     pub fn new(description: impl Into<String>, quantity: f64, unit_price: f64) -> Self {
         Self {
             description: description.into(),
@@ -61,6 +82,34 @@ pub struct OrderAdoptionInput {
 }
 
 impl OrderAdoptionInput {
+    /// The facts one canonical assignment set names, or every reason it named none.
+    ///
+    /// Adjudicated by the core for the reason [`OrderCreationInput::from_assignments`] is,
+    /// and against the same one list of assignable fields. What differs is what adoption
+    /// requires: an adopted Order's Title, Date Ordered, and Status are supplied
+    /// explicitly, because a candidate's name is evidence for a human and never a field
+    /// grammar — nothing here parses a basename or inspects a directory's contents to
+    /// propose one.
+    pub fn from_assignments(
+        assignments: &OrderAssignments,
+    ) -> Result<Self, NewOrderAssignmentFailure> {
+        let facts = NewOrderFacts::of(assignments)?;
+        // All three asked for at once, so a command line naming none of them is told about
+        // all three rather than made to discover them one round trip at a time.
+        let [title, date_ordered, _] = facts.required(["title", "date_ordered", "status"])?;
+        let status = facts
+            .status()
+            .expect("the required Order Status was found above");
+        let mut input = Self::new(title, date_ordered, status);
+        input.vendor_id = facts.optional("vendor_id");
+        input.orderer = facts.optional("orderer");
+        input.ordering_institution = facts.optional("ordering_institution");
+        input.currency = facts.optional("currency");
+        input.project = facts.optional("project");
+        input.order_group = facts.optional("order_group");
+        Ok(input)
+    }
+
     pub fn new(
         title: impl Into<String>,
         date_ordered: impl Into<String>,
@@ -158,10 +207,29 @@ pub enum OrderAdoptionOperationKind {
     RefreshPackageIndex,
 }
 
+impl OrderAdoptionOperationKind {
+    /// This operation's one stable spelling.
+    ///
+    /// Beside the operation rather than in an adapter, so an operation reported by the CLI
+    /// and the same operation reported to the desktop shell cannot come to be named
+    /// differently.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CreateMetadataDirectory => "create_metadata_directory",
+            Self::StageOrderRecord => "stage_order_record",
+            Self::StageReadme => "stage_readme",
+            Self::CommitReadme => "commit_readme",
+            Self::CommitOrderRecord => "commit_order_record",
+            Self::RemoveStaging => "remove_staging",
+            Self::RefreshPackageIndex => "refresh_package_index",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OrderAdoptionOperation {
     kind: OrderAdoptionOperationKind,
-    path: PathBuf,
+    location: Location,
 }
 
 impl OrderAdoptionOperation {
@@ -169,8 +237,14 @@ impl OrderAdoptionOperation {
         self.kind
     }
 
+    /// Where this operation writes, as this Package locates it — so a caller reporting it
+    /// carries the Package-relative spelling as well as the absolute path.
+    pub fn location(&self) -> &Location {
+        &self.location
+    }
+
     pub fn path(&self) -> &Path {
-        &self.path
+        self.location.absolute_path()
     }
 }
 
@@ -180,6 +254,8 @@ pub struct OrderAdoptionPlan {
     directory: PathBuf,
     package_root_locator: String,
     document: OrderDocument,
+    projected_order: HealthyOrder,
+    vendor: Option<Vendor>,
     reusable_values: OrderAdoptionReusableValues,
     candidate_observation: FileChangeObservation,
     readme_kind: Option<FileSystemEntryKind>,
@@ -208,12 +284,47 @@ impl OrderAdoptionPlan {
         &self.document
     }
 
+    /// The complete Order this plan would leave behind, as a caller reporting an Order
+    /// reports one: its managed paths, its record, its calculated totals, and the text of
+    /// the README the candidate holds or the empty one the commit will create.
+    ///
+    /// **The Order this plan would leave, not one that exists.** Its record carries the
+    /// planning identity rather than an Order ID, because the identity is minted at the
+    /// commit — see [`crate::creation::OrderCreationPlan::projected_order`], whose
+    /// reasoning this shares.
+    pub fn projected_order(&self) -> &HealthyOrder {
+        &self.projected_order
+    }
+
+    /// The Vendor this Order's reference resolves to, Hidden Vendors included. `None` when
+    /// it references none. See [`crate::creation::OrderCreationPlan::vendor`].
+    pub fn vendor(&self) -> Option<&Vendor> {
+        self.vendor.as_ref()
+    }
+
+    /// What committing this plan does to the canonical Order records.
+    ///
+    /// Read off the plan so that a dry run and the commit of the same plan cannot disagree
+    /// about what the mutation was.
+    pub fn canonical_outcome(&self) -> CanonicalAdoptionOutcome {
+        CanonicalAdoptionOutcome::Adopted
+    }
+
     pub fn reusable_values(&self) -> &OrderAdoptionReusableValues {
         &self.reusable_values
     }
 
     pub fn operations(&self) -> &[OrderAdoptionOperation] {
         &self.operations
+    }
+
+    /// The derived Package Index as it stood when this adoption was planned.
+    ///
+    /// The state a run that never commits has to report: committing refreshes the index and
+    /// [`OrderAdoptionResult::index`] is that refreshed record, so a dry run has none of its
+    /// own and answers with what it observed instead.
+    pub fn prior_index(&self) -> &PackageIndexRecord {
+        &self.prior_index
     }
 }
 
@@ -223,9 +334,17 @@ pub enum OrderAdoptionPlanError<E> {
     DamagedPackage,
     UpgradePending,
     PackageOperationFailed,
+    /// The candidate resolved, and it is not an entry of the Orders Directory. It may
+    /// still stand inside the Package — a directory beside the Orders Directory is the
+    /// ordinary case — so the `Location` carries this Package's spelling for it where
+    /// there is one and the path alone for a candidate outside the Package entirely.
     NotDirectChild {
-        path: PathBuf,
+        location: Location,
     },
+    /// The two refusals below name the caller's own selected path, refused before
+    /// anything resolved it: a name beginning with a dot is outside discovery, and a
+    /// candidate that is not an ordinary directory is nothing to adopt. Nothing has
+    /// placed either inside a Package, so they carry the path exactly as it arrived.
     HiddenCandidate {
         path: PathBuf,
     },
@@ -236,24 +355,39 @@ pub enum OrderAdoptionPlanError<E> {
     /// The selected directory's name has no normalized Package-relative spelling,
     /// so an adopted Order there could be named by neither its own record's
     /// locator nor the Package Index. The directory is left exactly as it is.
+    ///
+    /// A `Location` like its neighbours, and the one whose spelling is *always* absent:
+    /// having no name this Package can express is what the refusal reports, so the type
+    /// states it rather than a caller asserting it.
     NameUnusableCandidate {
-        path: PathBuf,
+        location: Location,
     },
+    /// The two refusals below name a path inside the Package.
+    ///
+    /// **A `Location` rather than a `PathBuf`**, because each is raised only after the
+    /// candidate has been shown to be a direct child of the Orders Directory whose name
+    /// this Package can express — so a Package-relative spelling exists for it, and a
+    /// refusal owes that spelling exactly as a success does.
     AlreadyManaged {
-        path: PathBuf,
+        location: Location,
     },
     ConflictingReservedState {
-        path: PathBuf,
+        location: Location,
     },
     InvalidFacts,
     UnknownVendor {
         vendor_id: String,
     },
     StagingCollision {
-        path: PathBuf,
+        location: Location,
     },
+    /// **A [`FailedPath`] rather than a `PathBuf`**, because the paths that reach here do
+    /// not agree about whether a Package surrounds them: an operation on a candidate this
+    /// Package has already established is a direct child of its Orders Directory carries
+    /// that Package's spelling, and resolving the caller's own selected path is the one
+    /// operation that fails before there is anything to name. The type tells them apart.
     FileSystem {
-        path: PathBuf,
+        path: FailedPath,
         error: E,
     },
 }
@@ -263,10 +397,19 @@ pub enum CanonicalAdoptionOutcome {
     Adopted,
 }
 
+impl CanonicalAdoptionOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Adopted => "adopted",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct OrderAdoptionResult {
     canonical_outcome: CanonicalAdoptionOutcome,
     order: HealthyOrder,
+    vendor: Option<Vendor>,
     index: PackageIndexRecord,
 }
 
@@ -277,6 +420,12 @@ impl OrderAdoptionResult {
 
     pub fn order(&self) -> &HealthyOrder {
         &self.order
+    }
+
+    /// The Vendor the adopted Order's reference resolves to, Hidden Vendors included.
+    /// `None` when it references none. See [`OrderAdoptionPlan::vendor`].
+    pub fn vendor(&self) -> Option<&Vendor> {
+        self.vendor.as_ref()
     }
 
     pub fn index(&self) -> &PackageIndexRecord {
@@ -298,6 +447,24 @@ pub enum OrderAdoptionCommitPhase {
     CommitOrderRecord,
 }
 
+impl OrderAdoptionCommitPhase {
+    /// This phase's one stable spelling, for a caller reporting where a commit stopped.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ObservePreconditions => "observe_preconditions",
+            Self::CreateMetadataDirectory => "create_metadata_directory",
+            Self::WriteOrderRecord => "write_order_record",
+            Self::ReadOrderRecord => "read_order_record",
+            Self::ValidateOrderRecord => "validate_order_record",
+            Self::SyncOrderRecord => "sync_order_record",
+            Self::WriteReadme => "write_readme",
+            Self::SyncReadme => "sync_readme",
+            Self::CommitReadme => "commit_readme",
+            Self::CommitOrderRecord => "commit_order_record",
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum OrderAdoptionCommitFailureCause<E> {
     FileSystem(E),
@@ -308,7 +475,7 @@ pub enum OrderAdoptionCommitFailureCause<E> {
 #[derive(Debug, PartialEq)]
 pub struct OrderAdoptionCommitFailure<E> {
     phase: OrderAdoptionCommitPhase,
-    path: PathBuf,
+    location: Location,
     cause: OrderAdoptionCommitFailureCause<E>,
 }
 
@@ -317,8 +484,15 @@ impl<E> OrderAdoptionCommitFailure<E> {
         self.phase
     }
 
-    pub fn path(&self) -> &Path {
-        &self.path
+    /// The path this commit stopped on, as this Package locates it.
+    ///
+    /// A `Location` rather than a path, for the reason
+    /// [`OrderAdoptionOperation::location`] carries one: an adoption writes inside a
+    /// candidate the Package has already established is one of its own direct children,
+    /// and a refusal owes that Package's spelling for what it names exactly as a success
+    /// does.
+    pub fn location(&self) -> &Location {
+        &self.location
     }
 
     pub fn cause(&self) -> &OrderAdoptionCommitFailureCause<E> {
@@ -328,13 +502,15 @@ impl<E> OrderAdoptionCommitFailure<E> {
 
 #[derive(Debug, PartialEq)]
 pub struct OrderAdoptionCleanupFailure<E> {
-    path: PathBuf,
+    location: Location,
     error: E,
 }
 
 impl<E> OrderAdoptionCleanupFailure<E> {
-    pub fn path(&self) -> &Path {
-        &self.path
+    /// What this rollback left behind, as this Package locates it. See
+    /// [`OrderAdoptionCommitFailure::location`].
+    pub fn location(&self) -> &Location {
+        &self.location
     }
 
     pub fn error(&self) -> &E {
@@ -344,8 +520,12 @@ impl<E> OrderAdoptionCleanupFailure<E> {
 
 #[derive(Debug, PartialEq)]
 pub enum OrderAdoptionRejection<E> {
+    /// **A `Location` rather than a `PathBuf`**, because this refusal happens under a Root
+    /// the plan established, about the Root itself or a path the plan derived inside it,
+    /// and a response owes that Root's spelling for what it names — in a refusal exactly as
+    /// in a success.
     PreconditionsChanged {
-        path: PathBuf,
+        location: Location,
     },
     InvalidGeneratedIdentity {
         generated: String,
@@ -364,6 +544,20 @@ pub enum OrderAdoptionWarning<E> {
     StagingCleanupFailed(OrderAdoptionCleanupFailure<E>),
     IndexRefreshFailed(OperationFailure),
     RefreshUnavailable,
+}
+
+impl<E> OrderAdoptionWarning<E> {
+    /// This warning's one stable spelling.
+    ///
+    /// Beside the warning rather than in an adapter, so a committed adoption's warnings are
+    /// named the same way in every surface that reports one.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::StagingCleanupFailed(_) => "staging_cleanup_failed",
+            Self::IndexRefreshFailed(_) => "index_refresh_failed",
+            Self::RefreshUnavailable => "refresh_unavailable",
+        }
+    }
 }
 
 pub type OrderAdoptionReport<E> = MutationReport<
@@ -405,7 +599,7 @@ pub fn plan_order_adoption<F: FileSystem>(
             path: selected_directory.to_path_buf(),
         });
     }
-    match observe(selected_directory, filesystem)? {
+    match observe(&root, selected_directory, filesystem)? {
         Some(FileSystemEntryKind::Directory) => {}
         kind => {
             return Err(OrderAdoptionPlanError::IneligibleCandidate {
@@ -417,52 +611,62 @@ pub fn plan_order_adoption<F: FileSystem>(
     let directory = filesystem
         .canonicalize(selected_directory)
         .map_err(|error| OrderAdoptionPlanError::FileSystem {
-            path: selected_directory.to_path_buf(),
+            // Resolving the caller's own selected path is the operation that failed, so
+            // nothing here located it and no Package spells it.
+            path: FailedPath::of(selected_directory),
             error,
         })?;
     if directory.parent() != Some(orders.absolute_path()) {
-        return Err(OrderAdoptionPlanError::NotDirectChild { path: directory });
+        return Err(OrderAdoptionPlanError::NotDirectChild {
+            location: located_in_package(&root, directory),
+        });
     }
     // Adoption is the one capability that names an Order Directory instead of
     // discovering it, so the classification that protects every reader does not
     // protect this. Asking the same question here keeps a directory the Package
     // declines to index from being adopted into it.
     if package_relative_path_text(&root, &directory).is_none() {
-        return Err(OrderAdoptionPlanError::NameUnusableCandidate { path: directory });
+        return Err(OrderAdoptionPlanError::NameUnusableCandidate {
+            location: located_in_package(&root, directory),
+        });
     }
     let candidate_observation = filesystem
         .observe_file_change(&directory)
         .map_err(|error| OrderAdoptionPlanError::FileSystem {
-            path: directory.clone(),
+            path: FailedPath::inside(&root, directory.clone()),
             error,
         })?;
 
     let metadata_directory = directory.join(".spielorders");
-    if let Some(kind) = observe(&metadata_directory, filesystem)? {
+    if let Some(kind) = observe(&root, &metadata_directory, filesystem)? {
         let order_path = metadata_directory.join("order.json");
         let already_managed = kind == FileSystemEntryKind::Directory
-            && observe(&order_path, filesystem)? == Some(FileSystemEntryKind::File)
+            && observe(&root, &order_path, filesystem)? == Some(FileSystemEntryKind::File)
             && filesystem
                 .read(&order_path)
                 .ok()
                 .and_then(|bytes| OrderDocument::from_json_bytes(&bytes).ok())
                 .is_some();
         return Err(if already_managed {
-            OrderAdoptionPlanError::AlreadyManaged { path: order_path }
+            OrderAdoptionPlanError::AlreadyManaged {
+                location: located(&root, order_path),
+            }
         } else {
             OrderAdoptionPlanError::ConflictingReservedState {
-                path: metadata_directory,
+                location: located(&root, metadata_directory),
             }
         });
     }
 
     let readme_path = directory.join("README.md");
-    let readme_kind = observe(&readme_path, filesystem)?;
+    let readme_kind = observe(&root, &readme_path, filesystem)?;
     let order_staging = metadata_directory.join(ORDER_STAGING_NAME);
     let readme_staging = directory.join(README_STAGING_NAME);
     for path in [&order_staging, &readme_staging] {
-        if observe(path, filesystem)?.is_some() {
-            return Err(OrderAdoptionPlanError::StagingCollision { path: path.clone() });
+        if observe(&root, path, filesystem)?.is_some() {
+            return Err(OrderAdoptionPlanError::StagingCollision {
+                location: located(&root, path.clone()),
+            });
         }
     }
 
@@ -561,10 +765,12 @@ pub fn plan_order_adoption<F: FileSystem>(
 
     let mut operations = vec![
         operation(
+            &root,
             OrderAdoptionOperationKind::CreateMetadataDirectory,
             metadata_directory,
         ),
         operation(
+            &root,
             OrderAdoptionOperationKind::StageOrderRecord,
             order_staging.clone(),
         ),
@@ -572,31 +778,60 @@ pub fn plan_order_adoption<F: FileSystem>(
     if readme_kind.is_none() {
         operations.extend([
             operation(
+                &root,
                 OrderAdoptionOperationKind::StageReadme,
                 readme_staging.clone(),
             ),
-            operation(OrderAdoptionOperationKind::CommitReadme, readme_path),
+            operation(&root, OrderAdoptionOperationKind::CommitReadme, readme_path),
         ]);
     }
     operations.push(operation(
+        &root,
         OrderAdoptionOperationKind::CommitOrderRecord,
         directory.join(".spielorders/order.json"),
     ));
     if readme_kind.is_none() {
         operations.push(operation(
+            &root,
             OrderAdoptionOperationKind::RemoveStaging,
             readme_staging,
         ));
     }
     operations.extend([
-        operation(OrderAdoptionOperationKind::RemoveStaging, order_staging),
         operation(
+            &root,
+            OrderAdoptionOperationKind::RemoveStaging,
+            order_staging,
+        ),
+        operation(
+            &root,
             OrderAdoptionOperationKind::RefreshPackageIndex,
             package.context().index().absolute_path().to_path_buf(),
         ),
     ]);
 
     Ok(OrderAdoptionPlan {
+        // The Order this plan would leave, in the shape every caller reports an Order in.
+        // Adoption preserves the README the candidate already holds, so the projected
+        // Order's text is read the way a load reads it; a candidate with none holds the
+        // empty document the commit creates.
+        projected_order: project_committed_order(
+            &root,
+            &directory,
+            &document,
+            match readme_kind {
+                Some(_) => order_readme_text(&root, &directory, filesystem),
+                None => Some(String::new()),
+            },
+        ),
+        vendor: vendor_id
+            .and_then(|vendor_id| {
+                package
+                    .vendors()
+                    .iter()
+                    .find(|vendor| vendor.vendor_id.as_str() == vendor_id)
+            })
+            .cloned(),
         root,
         directory,
         package_root_locator,
@@ -827,7 +1062,7 @@ pub fn commit_order_adoption<F: DirectoryFileSystem>(
                 if let Err(error) = filesystem.remove_file(path) {
                     warnings.push(OrderAdoptionWarning::StagingCleanupFailed(
                         OrderAdoptionCleanupFailure {
-                            path: path.clone(),
+                            location: located(&plan.root, path.clone()),
                             error,
                         },
                     ));
@@ -835,7 +1070,7 @@ pub fn commit_order_adoption<F: DirectoryFileSystem>(
             }
             Err(error) => warnings.push(OrderAdoptionWarning::StagingCleanupFailed(
                 OrderAdoptionCleanupFailure {
-                    path: path.clone(),
+                    location: located(&plan.root, path.clone()),
                     error,
                 },
             )),
@@ -877,14 +1112,30 @@ pub fn commit_order_adoption<F: DirectoryFileSystem>(
     }
 }
 
+/// One path inside the candidate, in the Package's own spelling for it.
+///
+/// The Package-relative spelling holds by construction: every caller is below the check
+/// that refuses a candidate whose own name this Package cannot express, and each path is
+/// that directory joined with one of this module's literal managed names.
+fn located(root: &Path, path: PathBuf) -> Location {
+    let relative = package_relative_path_text(root, &path)
+        .expect("a planned adoption path has a Package-relative spelling");
+    Location::within_package(path, relative).expect("a planned adoption path is normalized")
+}
+
+/// One observation, with the Root this adoption resolved so a failure can name where it
+/// happened in the Package's own spelling. The Root is carried rather than derived because
+/// the first observation is of the caller's own selected path, which may be outside the
+/// Package entirely — and `FailedPath::inside` is what answers both cases.
 fn observe<F: FileSystem>(
+    root: &Path,
     path: &Path,
     filesystem: &F,
 ) -> Result<Option<FileSystemEntryKind>, OrderAdoptionPlanError<F::Error>> {
     filesystem
         .symlink_metadata(path)
         .map_err(|error| OrderAdoptionPlanError::FileSystem {
-            path: path.to_path_buf(),
+            path: FailedPath::inside(root, path.to_path_buf()),
             error,
         })
 }
@@ -953,8 +1204,24 @@ fn insert_optional(
     }
 }
 
-fn operation(kind: OrderAdoptionOperationKind, path: PathBuf) -> OrderAdoptionOperation {
-    OrderAdoptionOperation { kind, path }
+/// One planned operation, at a path this Package can name.
+///
+/// The Package-relative spelling holds by construction: the candidate's own directory is
+/// refused outright when its name has none — [`OrderAdoptionPlanError::NameUnusableCandidate`]
+/// — and every path here is that directory joined with one of this module's own literal
+/// managed names.
+fn operation(
+    root: &Path,
+    kind: OrderAdoptionOperationKind,
+    path: PathBuf,
+) -> OrderAdoptionOperation {
+    let relative = package_relative_path_text(root, &path)
+        .expect("a planned adoption path has a Package-relative spelling");
+    OrderAdoptionOperation {
+        kind,
+        location: Location::within_package(path, relative)
+            .expect("a planned adoption path is normalized"),
+    }
 }
 
 fn committed_document(planned: &OrderDocument, order_id: &str) -> Option<OrderDocument> {
@@ -970,10 +1237,12 @@ fn committed_document(planned: &OrderDocument, order_id: &str) -> Option<OrderDo
         .map(|validated| validated.order().clone())
 }
 
+/// One path this plan named inside its own Package, as that Package locates it.
 fn preconditions_changed<E>(plan: OrderAdoptionPlan, path: PathBuf) -> OrderAdoptionReport<E> {
+    let location = located(&plan.root, path);
     MutationReport::Rejected {
         plan,
-        rejection: OrderAdoptionRejection::PreconditionsChanged { path },
+        rejection: OrderAdoptionRejection::PreconditionsChanged { location },
     }
 }
 
@@ -984,12 +1253,13 @@ fn commit_failure<E>(
     error: E,
     rollback_failures: Vec<OrderAdoptionCleanupFailure<E>>,
 ) -> OrderAdoptionReport<E> {
+    let location = located(&plan.root, path);
     MutationReport::Rejected {
         plan,
         rejection: OrderAdoptionRejection::CommitFailed {
             failure: OrderAdoptionCommitFailure {
                 phase,
-                path,
+                location,
                 cause: OrderAdoptionCommitFailureCause::FileSystem(error),
             },
             rollback_failures,
@@ -1038,24 +1308,35 @@ fn rollback_failure_cause<F: DirectoryFileSystem>(
             Ok(None) => {}
             Ok(Some(_)) => {
                 if let Err(error) = filesystem.remove_file(&path) {
-                    rollback_failures.push(OrderAdoptionCleanupFailure { path, error });
+                    rollback_failures.push(OrderAdoptionCleanupFailure {
+                        location: located(&plan.root, path),
+                        error,
+                    });
                 }
             }
             Err(error) => {
-                rollback_failures.push(OrderAdoptionCleanupFailure { path, error });
+                rollback_failures.push(OrderAdoptionCleanupFailure {
+                    location: located(&plan.root, path),
+                    error,
+                });
             }
         }
     }
     if metadata_created && let Err(error) = filesystem.remove_directory(&metadata_directory) {
         rollback_failures.push(OrderAdoptionCleanupFailure {
-            path: metadata_directory,
+            location: located(&plan.root, metadata_directory),
             error,
         });
     }
+    let location = located(&plan.root, path);
     MutationReport::Rejected {
         plan,
         rejection: OrderAdoptionRejection::CommitFailed {
-            failure: OrderAdoptionCommitFailure { phase, path, cause },
+            failure: OrderAdoptionCommitFailure {
+                phase,
+                location,
+                cause,
+            },
             rollback_failures,
         },
     }
@@ -1069,13 +1350,14 @@ fn result_from_package(
     order: &OrderDocument,
     package: &crate::canonical::CurrentPackageCandidate,
 ) -> Option<OrderAdoptionResult> {
-    let refreshed = package
+    let position = package
         .healthy_orders()
         .iter()
-        .find(|candidate| candidate.document().order_id == order.order_id)?;
+        .position(|candidate| candidate.document().order_id == order.order_id)?;
     Some(OrderAdoptionResult {
         canonical_outcome: CanonicalAdoptionOutcome::Adopted,
-        order: refreshed.clone(),
+        order: package.healthy_orders()[position].clone(),
+        vendor: package.vendor_for_order(position).cloned(),
         index: package.index().clone(),
     })
 }
@@ -1092,6 +1374,10 @@ fn result_without_refresh<F: FileSystem>(
     OrderAdoptionResult {
         canonical_outcome: CanonicalAdoptionOutcome::Adopted,
         order: project_committed_order(&plan.root, &plan.directory, order, readme_text),
+        // The Vendor the plan resolved. Every arm reaching here has no refreshed Package to
+        // resolve one against, and the commit's own precondition check confirmed this
+        // Vendor is still in the Package.
+        vendor: plan.vendor.clone(),
         index: plan
             .prior_index
             .after_committed_membership_change_without_refresh(),

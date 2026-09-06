@@ -10,7 +10,6 @@ Two-axis review of the diff between `HEAD` and a fixed point the user supplies:
 
 Both axes run as **parallel sub-agents** so they don't pollute each other's context, then this skill aggregates their findings.
 
-The issue tracker should have been provided to you — run `/setup-matt-pocock-skills` if `docs/agents/issue-tracker.md` is missing.
 
 ## Process
 
@@ -69,13 +68,13 @@ Send a single message with two `Agent` tool calls. Use the `general-purpose` sub
 
 - The full diff command and commit list.
 - The list of standards-source files you found in step 3, **plus the smell baseline from step 3** pasted in full — the sub-agent has no other access to it.
-- The brief: "Report — per file/hunk where relevant — (a) every place the diff violates a documented standard: cite the standard (file + the rule); and (b) any baseline smell you spot: name it and quote the hunk. Classify each finding as blocking or non-blocking using the severity boundary below. Distinguish hard violations from judgement calls — documented-standard breaches can be hard, but baseline smells are always judgement calls, and a documented repo standard overrides the baseline. Skip anything tooling enforces. Under 400 words."
+- The brief: "Report — per file/hunk where relevant — (a) every place the diff violates a documented standard: cite the standard (file + the rule); and (b) any baseline smell you spot: name it and quote the hunk. Classify each finding as blocking or non-blocking using the severity boundary below. Distinguish hard violations from judgement calls — documented-standard breaches can be hard, but baseline smells are always judgement calls, and a documented repo standard overrides the baseline. Skip anything tooling enforces. Under 250 words. Report only findings that change behavior, break a contract, violate a documented standard, or make a documented claim false. Do not report wording, comment phrasing, over-claiming adjectives, or file-organization preferences. You share the worktree with another reviewer. Never edit, mutate, or run commands that write to the tree. If you need a mutation to prove a test is non-vacuous, describe it and let the aggregator decide."
 
 **Spec sub-agent prompt** — include:
 
 - The diff command and commit list.
 - The path or fetched contents of the spec.
-- The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding and classify it as blocking or non-blocking using the severity boundary below. Under 400 words."
+- The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding and classify it as blocking or non-blocking using the severity boundary below. Under 250 words. Report only findings that change behavior, break a contract, violate a documented standard, or make a documented claim false. Do not report wording, comment phrasing, over-claiming adjectives, or file-organization preferences. You share the worktree with another reviewer. Never edit, mutate, or run commands that write to the tree. If you need a mutation to prove a test is non-vacuous, describe it and let the aggregator decide. Where a decision document and the built surface disagree, report which one is right and the sentence to rewrite; a document is corrected by rewriting its sentence, never by appending an amendment."
 
 ### Severity boundary
 

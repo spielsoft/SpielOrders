@@ -79,12 +79,23 @@ the reading load. The rebuilding load belongs after the canonical write, where i
 failure is a warning beside a commit that already happened, and that is the only place
 any capability calls it.
 
+`commit_package_index_rebuild` is the one durable index replacement with no canonical
+write in front of it, because replacing the derived index is the whole operation the
+caller asked for rather than a refresh that follows one. Its plan is
+`plan_package_index_rebuild`, which reads: it takes the canonical load, assesses the
+stored index, and writes nothing — so the dry run is a plan never committed, and
+`assess_package_index` answers what state the index is in without changing it. The
+freshness question stays where it was: the current-index path is the only thing that
+answers it, and it reads.
+
 The guarantee this buys is narrow and worth stating exactly: deciding to refuse writes
 nothing. It is not "a rejection changed nothing". A rejection can still report a write
 that was attempted and rolled back, and step 6 above requires every restoration failure
 to travel with it — `MultiFileReplacementError` carries them into
-`SemanticRepairRejection::ReplacementFailed`, and other capabilities carry a
-`cleanup_failure` the same way.
+`SemanticRepairRejection::ReplacementFailed`, which names every destination that could not
+be put back as it was, and other capabilities carry a `cleanup_failure` the same way. The
+two repair capabilities carry the leftover staging file's own location beside it, because
+which file remains on disk is what a response owes and what a caller acts on.
 
 A load that cannot answer is its own refusal, never the answer it could not reach.
 Treating "nothing can show this identity is free" as "this identity is taken" is
@@ -120,6 +131,11 @@ Callers choose evidence according to the subject:
 - `DestinationExpectation::Exactly` for READMEs, upgrade transformation inputs, the
   derived Package Index, and metadata repair, where exact bytes are the subject.
 - `DestinationExpectation::Absent` where the caller observed nothing at the destination.
+- `DestinationExpectation::Unchecked` where the caller found something at the destination
+  and could not read it. This contract can say "these bytes" and "nothing", not "something
+  I could not read", and claiming absence instead would permanently refuse the rebuild that
+  heals such a destination and blame a concurrent writer for it. The derived Package Index
+  is the one subject that reaches it.
 
 No evidence means no changed-destination protection. Every capability must make that
 choice explicitly; raw destination replacement is not a substitute.

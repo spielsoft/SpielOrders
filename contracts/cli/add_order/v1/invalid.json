@@ -1,0 +1,45 @@
+{
+  "contract": "spielorders.add_order",
+  "contract_version": 1,
+  "ok": false,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>",
+    "order_root": null
+  },
+  "data": null,
+  "diagnostics": [
+    {
+      "code": "vendor_name_duplicate",
+      "severity": "error",
+      "scope": "package",
+      "primary_location": {
+        "absolute_path": "<PACKAGE_ROOT>/.spielorders/vendors.json",
+        "package_relative_path": ".spielorders/vendors.json"
+      },
+      "related_locations": [],
+      "evidence": {
+        "vendor_ids": [
+          "e0990d31-06aa-42e9-97c8-088e3e894822",
+          "1c9a5b7e-3d44-4f21-8a6c-9b0e2d7f4a13"
+        ],
+        "observed_names": [
+          "Tarnwick",
+          "tarnwick"
+        ]
+      }
+    }
+  ],
+  "error": {
+    "code": "package_root_damaged",
+    "message": "the Package at <PACKAGE_ROOT> is damaged and its contents cannot be reported. The diagnostics below are the diagnosis; this build offers no repair for them, and correcting them is work outside this application.",
+    "scope": "package",
+    "paths": [
+      {
+        "spelling": "resolved",
+        "path": "<PACKAGE_ROOT>",
+        "package_relative_path": "."
+      }
+    ],
+    "identities": []
+  }
+}

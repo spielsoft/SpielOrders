@@ -8,20 +8,11 @@ labels:
 assignee: /root
 ---
 
-## Question
+## Decision
 
-Which stable diagnostic codes, severities, scopes, evidence fields, path facts, and
-ordering rules must M2 expose for package, Order, README, configuration, identity,
-Vendor Reference, reserved-content, staging-artifact, and Package Index conditions?
-
-## Blocking
-
-Unblocked. [Decide how Package Index freshness is proven without canonical rereads](001-index-freshness-fast-path.md)
-now supplies the stable index states, refresh outcomes, filesystem evidence
-boundary, and blocking replacement-failure condition that this diagnostic contract
-must describe.
-
-## Resolution
+The vocabulary is built. The core crate's public surface is the record of every code,
+its severity, its default scope, and the evidence it requires; what follows is what
+that vocabulary may never become.
 
 ### MVP boundary and compatibility
 
@@ -79,8 +70,16 @@ diagnostics.
 
 Every diagnostic has `code`, `severity`, `scope`, `primary_location`,
 `related_locations`, and one typed `evidence` variant. Every operation failure has
-`code`, operation scope, `primary_location`, `related_locations`, and typed
+`code`, operation scope, the path it failed on, `related_locations`, and typed
 operation evidence. Collections are present even when empty.
+
+A failure's path is a `primary_location` wherever this application can express it as
+one, and the caller's own text where the failure was the resolution itself;
+`primary_location` is absent in exactly that case, and nowhere else. Resolving a
+caller-supplied path is an operation that can fail before there is anything to locate,
+and a path that cannot be resolved cannot be stated as an absolute location — so it is
+never asserted as one. Every diagnostic still carries a `primary_location`, because a
+diagnostic describes something already located.
 
 Each location carries an absolute path and, when an established SpielOrders Root
 contains that path, its normalized Package-relative path. The absolute path names
@@ -113,32 +112,9 @@ behavior never depend on it.
 
 ### Stable diagnostic codes
 
-The stable diagnostic vocabulary is:
-
-| Code | Severity and scope | Required typed evidence |
-| --- | --- | --- |
-| `managed_artifact_missing` | `error`; Package or Order | artifact kind `config`, `version`, `vendors`, or `order`; expected location |
-| `managed_artifact_wrong_kind` | `error`; Package or Order | artifact kind; observed no-follow entry kind; location |
-| `managed_artifact_unreadable` | `error`; Package or Order | artifact kind; attempted `read`; location |
-| `managed_artifact_invalid_encoding` | `error`; Package or Order | artifact kind; location |
-| `managed_artifact_invalid_syntax` | `error`; Package or Order | artifact kind; location |
-| `managed_artifact_invalid_shape` | `error`; Package or Order | artifact kind; optional stable field path when known; location |
-| `managed_artifact_wrong_version` | `error`; Package or Order | artifact kind; recognizable observed version when available; expected/current version when available; location |
-| `configuration_path_invalid` | `error`; Package | `orders_path` or `removed_path`; the existing stable M1 reason; config location |
-| `configuration_paths_overlap` | `error`; Package | both configured values; config location |
-| `configured_orders_directory_unavailable` | `error`; Package | configured value; existing stable M1 reason `not_directory`, `outside_package`, or `reserved_metadata`; directory location |
-| `configured_orders_directory_name_unusable` | `error`; Package | configured value; configured directory location |
-| `order_semantic_invalid` | `error`; Order | trustworthy Order ID when available; field path; stable reason, initially `invalid_gregorian_date`; order location |
-| `order_package_locator_mismatch` | `error`; Order | trustworthy Order ID when available; `package_root`; reason `not_active_direct_child` or `does_not_resolve_to_package`; Order and Package locations |
-| `order_id_duplicate` | `error`; Order | duplicated trustworthy Order ID; complete conflict-set locations |
-| `vendor_id_duplicate` | `error`; Package | duplicated trustworthy Vendor ID; `vendors` location |
-| `vendor_name_duplicate` | `error`; Package | complete trustworthy Vendor-ID set; conflicting observed names; `vendors` location |
-| `vendor_reference_unresolved` | `error`; Order | trustworthy Order ID and referenced Vendor ID; Order location |
-| `orders_directory_entry_disallowed` | `warning`; Package | observed no-follow kind `file`, `symbolic_link`, or `other`; entry location |
-| `orders_directory_entry_name_unusable` | `warning`; Package | observed no-follow kind; absolute entry location with no Package-relative spelling |
-| `reserved_content_unexpected` | `warning`; Package or Order | observed no-follow kind; unexpected entry location |
-| `staging_artifact_present` | `warning`; Package or Order | staging and canonical-destination locations; destination validity when already known |
-| `readme_unavailable` | `warning`; document | document kind `package_readme` or `order_readme`; reason `wrong_kind`, `unreadable`, or `invalid_encoding`; exact README location |
+The stable diagnostic vocabulary is a closed set of compositional condition codes,
+recorded in the core crate beside the typed evidence each one requires. The rules
+below govern what belongs in it.
 
 `orders_directory_entry_name_unusable` reports a direct Orders Directory child
 whose filesystem name has no normalized Package-relative spelling. A name
@@ -151,7 +127,7 @@ paths. The existing `configured_orders_directory_unavailable` reasons remain
 `managed_artifact_invalid_shape` covers requiredness, unknown fields, wrong types,
 invalid enumerations, malformed UUID shape, invalid currency shape, invalid local
 path shape, and other strict version-1 decode constraints. It does not hide the
-cross-record and identity conditions that have their own codes above. Configuration
+cross-record and identity conditions that have their own codes. Configuration
 encoding, syntax, and shape failures use the corresponding `managed_artifact_*`
 code with artifact kind `config`; its path-resolution semantics use the explicit
 configuration codes.
@@ -208,38 +184,20 @@ warning merely because automatic rebuilding was needed.
 ### Operation failures and index replacement
 
 The general stable operation-failure code is `filesystem_operation_failed`. Its
-evidence requires the attempted operation—`canonicalize`, `observe_kind`,
-`list_directory`, `read`, `write_stage`, `read_stage`, `sync_stage`, `replace`, or
-`remove_stage`—and the exact primary and related locations. Platform or test-double
-error detail remains optional and non-contractual. A persistent failure to read a
-required canonical artifact is instead represented by the applicable canonical
-diagnostic; the same event is not duplicated as an operation failure.
+evidence requires the attempted filesystem operation and the exact primary and
+related locations; the core crate spells the operations it can report. Platform or
+test-double error detail remains optional and non-contractual. A persistent failure
+to read a required canonical artifact is instead represented by the applicable
+canonical diagnostic; the same event is not duplicated as an operation failure.
 
 A required Package Index replacement failure uses the more specific stable code
-`package_index_replacement_failed`. It is an operation-scoped blocking result with:
-
-- absolute and Package-relative `index.json` location;
-- the pre-refresh index assessment;
-- refresh outcome `replacement_failed`;
-- phase `write_stage`, `read_stage`, `candidate_validation`, `sync_stage`,
-  `replace`, or `remove_stage`; and
-
-  > **Two of those phases have since been removed, and this decision's text is left
-  > as it stood.** `read_stage` went with Ticket 021, which removed the staging
-  > read-back, and `candidate_validation` went with Ticket 023, which removed the
-  > index rebuild's candidate guard. Both were removed for the same stated reason —
-  > a public, spelled failure code that nothing can emit is worse than no code — and
-  > `PackageIndexReplacementPhase` now spells `write_stage`, `sync_stage`, `replace`,
-  > `remove_stage`, `destination_changed`, and `destination_unreadable`.
-  >
-  > Recorded here rather than settled silently, per
-  > [`docs/development/traceability.md`](../../../../docs/development/traceability.md),
-  > "Contradictions". The enumeration above is not edited, because it is what this
-  > decision decided on 2026-08-13 and a closed record should not be made to describe
-  > a later moment. **No new decision ticket is opened**: the narrowing was the
-  > project owner's decision of 2026-08-29 and Ticket 021's review before it, so
-  > there is no open question here — only a record that needed to point forward.
-- cleanup failure as related operation evidence when one also occurred.
+`package_index_replacement_failed`. It is an operation-scoped blocking result
+carrying the absolute and Package-relative `index.json` location, the pre-refresh
+index assessment, refresh outcome `replacement_failed`, the phase that failed, and a
+cleanup failure as related operation evidence when one also occurred. The phases the
+core spells are exactly the ones it can reach: a public, spelled failure code that
+nothing can emit is worse than no code, so a phase that becomes unreachable is
+removed rather than retained.
 
 It blocks Package opening, leaves the old index bytes and original assessment
 visible, and does not emit or imply Damaged Package, Damaged Order, or canonical

@@ -163,7 +163,10 @@ fn index_kind_observation_failure_is_an_operation_failure_without_replacement() 
         }
     );
     assert_eq!(
-        failed.failure().primary_location().package_relative_path(),
+        failed
+            .failure()
+            .primary_location()
+            .and_then(|location| location.package_relative_path()),
         Some(".spielorders/index.json")
     );
     assert!(!filesystem.effects.borrow().iter().any(|effect| matches!(
@@ -202,7 +205,10 @@ fn staging_write_failure_blocks_opening_and_preserves_missing_assessment() {
         }
     );
     assert_eq!(
-        failed.failure().primary_location().package_relative_path(),
+        failed
+            .failure()
+            .primary_location()
+            .and_then(|location| location.package_relative_path()),
         Some(".spielorders/index.json")
     );
     assert_eq!(

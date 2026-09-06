@@ -1,0 +1,32 @@
+{
+  "contract": "spielorders.add_vendor",
+  "contract_version": 1,
+  "ok": false,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>"
+  },
+  "data": null,
+  "diagnostics": [],
+  "error": {
+    "code": "vendor_assignment_rejected",
+    "message": "no assignment was applied, because an assignment set is one atomic mutation and some of them were refused: `colour` (unknown_field), `contacts` (ordered_collection).",
+    "scope": "package",
+    "paths": [
+      {
+        "spelling": "resolved",
+        "path": "<PACKAGE_ROOT>/.spielorders/vendors.json",
+        "package_relative_path": ".spielorders/vendors.json"
+      }
+    ],
+    "identities": [
+      {
+        "kind": "unknown_field",
+        "value": "colour"
+      },
+      {
+        "kind": "ordered_collection",
+        "value": "contacts"
+      }
+    ]
+  }
+}

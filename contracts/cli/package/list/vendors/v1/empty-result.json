@@ -1,0 +1,14 @@
+{
+  "contract": "spielorders.package.list.vendors",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>"
+  },
+  "data": {
+    "vendors": [],
+    "hidden_vendors_included": false
+  },
+  "diagnostics": [],
+  "error": null
+}

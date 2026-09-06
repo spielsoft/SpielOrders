@@ -3,7 +3,7 @@
 use crate::{
     metadata::{Config, PackageRoot},
     ports::{FileSystem, FileSystemEntryKind},
-    readme::package_relative_path_text,
+    readme::{ConfigurationPathKind, ConfigurationPathReason, package_relative_path_text},
 };
 use std::path::{Component, Path, PathBuf};
 
@@ -22,6 +22,38 @@ pub enum ConfiguredPathFailure {
     PlatformSeparator,
     ReservedMetadata,
     NotDirectChild,
+}
+
+/// The reported spelling of the configured key this is about.
+///
+/// One conversion rather than a mapping in each caller, because a configured key that a
+/// loaded Package spells one way and a refused initialization another is one fact with
+/// two names. [`ConfigurationPathKind::as_str`] stays the one place the spelling exists.
+impl From<ConfiguredPath> for ConfigurationPathKind {
+    fn from(path: ConfiguredPath) -> Self {
+        match path {
+            ConfiguredPath::Orders => Self::OrdersPath,
+            ConfiguredPath::Removed => Self::RemovedPath,
+        }
+    }
+}
+
+/// The reported spelling of the rule this configured value broke, for the same reason.
+///
+/// [`ConfigurationPathReason`] carries one variant this cannot produce — a `removed_path`
+/// that is not an ordinary directory, which only a resolved Package observes.
+impl From<ConfiguredPathFailure> for ConfigurationPathReason {
+    fn from(failure: ConfiguredPathFailure) -> Self {
+        match failure {
+            ConfiguredPathFailure::Absolute => Self::Absolute,
+            ConfiguredPathFailure::CurrentDirectory => Self::CurrentDirectory,
+            ConfiguredPathFailure::ParentTraversal => Self::ParentTraversal,
+            ConfiguredPathFailure::EmptyComponent => Self::EmptyComponent,
+            ConfiguredPathFailure::PlatformSeparator => Self::PlatformSeparator,
+            ConfiguredPathFailure::ReservedMetadata => Self::ReservedMetadata,
+            ConfiguredPathFailure::NotDirectChild => Self::NotDirectChild,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

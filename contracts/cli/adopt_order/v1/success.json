@@ -1,0 +1,127 @@
+{
+  "contract": "spielorders.adopt_order",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>",
+    "order_root": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber"
+  },
+  "data": {
+    "report": {
+      "committed": true,
+      "changed": true,
+      "outcome": "adopted",
+      "reusable_values": {
+        "ordering_institution": {
+          "outcome": "reused",
+          "value": "Northwind"
+        },
+        "orderer": {
+          "outcome": "reused",
+          "value": "Ada Lovelace"
+        },
+        "project": {
+          "outcome": "reused",
+          "value": "Telescope"
+        },
+        "order_group": {
+          "outcome": "absent",
+          "value": null
+        }
+      },
+      "operations": [
+        {
+          "operation": "create_metadata_directory",
+          "location": {
+            "absolute_path": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber/.spielorders",
+            "package_relative_path": "Orders/2009_04_31_Lcom_Fiber/.spielorders"
+          }
+        },
+        {
+          "operation": "stage_order_record",
+          "location": {
+            "absolute_path": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber/.spielorders/.order.json.spielorders-stage",
+            "package_relative_path": "Orders/2009_04_31_Lcom_Fiber/.spielorders/.order.json.spielorders-stage"
+          }
+        },
+        {
+          "operation": "commit_order_record",
+          "location": {
+            "absolute_path": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber/.spielorders/order.json",
+            "package_relative_path": "Orders/2009_04_31_Lcom_Fiber/.spielorders/order.json"
+          }
+        },
+        {
+          "operation": "remove_staging",
+          "location": {
+            "absolute_path": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber/.spielorders/.order.json.spielorders-stage",
+            "package_relative_path": "Orders/2009_04_31_Lcom_Fiber/.spielorders/.order.json.spielorders-stage"
+          }
+        },
+        {
+          "operation": "refresh_package_index",
+          "location": {
+            "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
+            "package_relative_path": ".spielorders/index.json"
+          }
+        }
+      ],
+      "index": {
+        "location": {
+          "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
+          "package_relative_path": ".spielorders/index.json"
+        },
+        "state": "current",
+        "refresh": "rebuilt",
+        "malformed_reasons": [],
+        "stale_reasons": [],
+        "observed_version": null,
+        "expected_version": null
+      },
+      "warnings": []
+    },
+    "order": {
+      "paths": {
+        "directory": {
+          "absolute_path": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber",
+          "package_relative_path": "Orders/2009_04_31_Lcom_Fiber"
+        },
+        "metadata_directory": {
+          "absolute_path": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber/.spielorders",
+          "package_relative_path": "Orders/2009_04_31_Lcom_Fiber/.spielorders"
+        },
+        "order": {
+          "absolute_path": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber/.spielorders/order.json",
+          "package_relative_path": "Orders/2009_04_31_Lcom_Fiber/.spielorders/order.json"
+        },
+        "readme": {
+          "absolute_path": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber/README.md",
+          "package_relative_path": "Orders/2009_04_31_Lcom_Fiber/README.md"
+        }
+      },
+      "schema_version": 1,
+      "package_root": "../..",
+      "order_id": "<ORDER_ID>",
+      "title": "Fiber patch cable",
+      "date_ordered": "2009-04-30",
+      "status": "complete",
+      "vendor_id": "e0990d31-06aa-42e9-97c8-088e3e894822",
+      "vendor": {
+        "vendor_id": "e0990d31-06aa-42e9-97c8-088e3e894822",
+        "name": "Tarnwick",
+        "hidden": false
+      },
+      "orderer": "Ada Lovelace",
+      "ordering_institution": "Northwind",
+      "currency": null,
+      "project": "Telescope",
+      "order_group": null,
+      "items": [],
+      "order_total": -0.0,
+      "readme_exists": true,
+      "readme_text": "Ordered by telephone. Invoice in the quotes folder.\n"
+    }
+  },
+  "diagnostics": [],
+  "error": null
+}

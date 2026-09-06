@@ -19,9 +19,11 @@ use crate::{
     metadata::{OrderDocument, OrderId, VendorId},
     mutation::MutationReport,
     operations::OperationFailure,
-    order_diagnosis::{OrderDiagnosis, OrderDiagnosisError, RepairAction, diagnose_order},
+    order_diagnosis::{OrderDiagnosis, OrderDiagnosisError, diagnose_order},
     paths::locator_resolves_to_root,
     ports::FileSystem,
+    readme::{Location, RootedLocation, located_in_package, rooted_at},
+    repair_cases::RepairAction,
 };
 use std::path::{Path, PathBuf};
 
@@ -81,6 +83,16 @@ pub enum PackageConstraint {
     PackageRootMismatch,
 }
 
+impl PackageConstraint {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OrderIdentityTaken => "order_identity_taken",
+            Self::VendorReferenceUnresolved => "vendor_reference_unresolved",
+            Self::PackageRootMismatch => "package_root_mismatch",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MetadataRepairOperationKind {
     ReplaceManagedArtifact,
@@ -88,10 +100,20 @@ pub enum MetadataRepairOperationKind {
     RefreshPackageIndex,
 }
 
+impl MetadataRepairOperationKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ReplaceManagedArtifact => "replace_managed_artifact",
+            Self::PromoteStagingCandidate => "promote_staging_candidate",
+            Self::RefreshPackageIndex => "refresh_package_index",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MetadataRepairOperation {
     kind: MetadataRepairOperationKind,
-    path: PathBuf,
+    location: Location,
 }
 
 impl MetadataRepairOperation {
@@ -99,8 +121,14 @@ impl MetadataRepairOperation {
         self.kind
     }
 
+    /// Where this operation writes, as the Package that holds it names it — so a caller
+    /// reporting it carries the Package-relative spelling as well as the absolute path.
+    pub fn location(&self) -> &Location {
+        &self.location
+    }
+
     pub fn path(&self) -> &Path {
-        &self.path
+        self.location.absolute_path()
     }
 }
 
@@ -150,6 +178,14 @@ impl MetadataRepairPlan {
         &self.directory
     }
 
+    /// The SpielOrders Root the Order scope belongs to.
+    ///
+    /// Planning resolved it, so every refusal raised from this plan onward has a Root to
+    /// name whether or not the value it refuses over carries one of its own.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     /// The exact diagnosed case this repair carries out.
     pub fn handle(&self) -> &str {
         &self.handle
@@ -175,6 +211,13 @@ impl MetadataRepairPlan {
     }
 }
 
+/// Why no managed-record repair could be planned.
+///
+/// **Every refusal below the diagnosis carries a [`RootedLocation`]**, because every one of
+/// them is raised after [`diagnose_order`] established the Package and the Order Directory
+/// inside it: the scope was resolved, so the response owes both the Root it was resolved
+/// under and the Package's own spelling of whatever the refusal is about. Only
+/// [`Self::Diagnosis`] is raised before there is a Package to name.
 #[derive(Debug, PartialEq)]
 pub enum MetadataRepairError<E> {
     /// The scope could not be diagnosed at all.
@@ -183,56 +226,63 @@ pub enum MetadataRepairError<E> {
     /// condition stops appearing, so a handle from an older diagnosis lands here.
     UnknownCase {
         handle: String,
+        scope: RootedLocation,
     },
     /// The named case exists but does not authorize this action.
     UnauthorizedAction {
         handle: String,
         action: RepairAction,
+        scope: RootedLocation,
     },
     /// This capability applies only the managed-metadata and staging repairs; the
     /// semantic resolutions belong to their own capability.
     UnsupportedAction {
         action: RepairAction,
+        scope: RootedLocation,
     },
     /// The supplied resolution does not match what the action requires.
     InvalidResolution {
         action: RepairAction,
+        scope: RootedLocation,
     },
     /// A supplied replacement is not a fully valid record under its declared schema
     /// and its own Order semantics. Nothing is written; a partial salvage is never
     /// made.
-    InvalidReplacement,
+    InvalidReplacement {
+        scope: RootedLocation,
+    },
     /// A supplied replacement is a valid Order on its own, and would still leave this
     /// Package damaged. Nothing is written.
     ReplacementDamagesPackage {
         constraint: PackageConstraint,
+        scope: RootedLocation,
     },
     /// The diagnosed staging candidate is not itself a fully valid record, so it is
     /// never promoted.
     InvalidStagingCandidate {
-        path: PathBuf,
+        staged: RootedLocation,
     },
     /// The diagnosed staging candidate is a valid Order on its own, and would still
     /// leave this Package damaged, so it is never promoted.
     StagingCandidateDamagesPackage {
-        path: PathBuf,
+        staged: RootedLocation,
         constraint: PackageConstraint,
     },
     /// The Package could not be read as a current Package while the candidate was
     /// being judged against it. Nothing shows the candidate is safe, so it is refused
     /// rather than written against evidence nobody has.
     PackageEvidenceUnavailable {
-        root: PathBuf,
+        root: RootedLocation,
     },
     /// A replacement stages beside its destination, and abandoned staging evidence
     /// already occupies that path. Writing there would destroy evidence this core is
     /// forbidden to overwrite or silently clean, so the staging case is resolved
     /// first and the replacement is refused until then.
     StagingEvidencePresent {
-        path: PathBuf,
+        staged: RootedLocation,
     },
     FileSystem {
-        path: PathBuf,
+        subject: RootedLocation,
         error: E,
     },
 }
@@ -247,48 +297,55 @@ pub fn plan_metadata_repair<F: FileSystem>(
 ) -> Result<MetadataRepairPlan, MetadataRepairError<F::Error>> {
     let diagnosis =
         diagnose_order(order_directory, filesystem).map_err(MetadataRepairError::Diagnosis)?;
-    let case = current_case(&diagnosis, confirmation)?;
-    let artifact = case.location().absolute_path().to_path_buf();
     let directory = diagnosis.directory().to_path_buf();
     // The Package the diagnosis was taken against, never one inferred by counting
     // parents: the Orders Directory is configured and may sit at any depth.
     let root = diagnosis.package_root().to_path_buf();
+    let scope = || rooted_at(&root, directory.clone());
+    let case = current_case(&diagnosis, confirmation, &scope)?;
+    let artifact = case.location().absolute_path().to_path_buf();
 
     let write = match confirmation.action() {
         RepairAction::ReplaceManagedRecord => {
             let RepairResolution::ReplacementRecord(record) = resolution else {
                 return Err(MetadataRepairError::InvalidResolution {
                     action: confirmation.action(),
+                    scope: scope(),
                 });
             };
             // A replacement is accepted only as a complete, fully valid record.
             // Unknown or invalid facts disappear only because the user confirmed a
             // record without them, never because this core removed them.
-            let (document, candidate) =
-                validated_record(record).ok_or(MetadataRepairError::InvalidReplacement)?;
+            let (document, candidate) = validated_record(record)
+                .ok_or_else(|| MetadataRepairError::InvalidReplacement { scope: scope() })?;
             // Valid as an Order says nothing about the Package it lands in. A record
             // whose identity, Vendor Reference, or locator breaks a cross-record
             // constraint would answer this diagnosed condition by creating another.
             if let Some(constraint) =
                 package_evidence(&root, &directory, filesystem)?.broken_by(&document)
             {
-                return Err(MetadataRepairError::ReplacementDamagesPackage { constraint });
+                return Err(MetadataRepairError::ReplacementDamagesPackage {
+                    constraint,
+                    scope: scope(),
+                });
             }
             let staging = staging_path_of(&artifact);
             match filesystem.symlink_metadata(&staging) {
                 Ok(None) => {}
                 Ok(Some(_)) => {
-                    return Err(MetadataRepairError::StagingEvidencePresent { path: staging });
+                    return Err(MetadataRepairError::StagingEvidencePresent {
+                        staged: rooted_at(&root, staging),
+                    });
                 }
                 Err(error) => {
                     return Err(MetadataRepairError::FileSystem {
-                        path: staging,
+                        subject: rooted_at(&root, staging),
                         error,
                     });
                 }
             }
             PlannedWrite {
-                destination: diagnosed_destination(&artifact, filesystem)?,
+                destination: diagnosed_destination(&root, &artifact, filesystem)?,
                 artifact,
                 candidate,
                 source: None,
@@ -299,44 +356,46 @@ pub fn plan_metadata_repair<F: FileSystem>(
             if resolution != &RepairResolution::None {
                 return Err(MetadataRepairError::InvalidResolution {
                     action: confirmation.action(),
+                    scope: scope(),
                 });
             }
             // The diagnosed candidate is the only one that may be promoted, and it is
             // reread and validated now rather than trusted from the diagnosis.
             let staged = artifact.clone();
-            let destination = promoted_destination(&staged).ok_or(
-                MetadataRepairError::InvalidStagingCandidate {
-                    path: staged.clone(),
-                },
-            )?;
+            let invalid_candidate = || MetadataRepairError::InvalidStagingCandidate {
+                staged: rooted_at(&root, staged.clone()),
+            };
+            let destination = promoted_destination(&staged).ok_or_else(invalid_candidate)?;
             let bytes =
                 filesystem
                     .read(&staged)
                     .map_err(|error| MetadataRepairError::FileSystem {
-                        path: staged.clone(),
+                        subject: rooted_at(&root, staged.clone()),
                         error,
                     })?;
-            let (document, candidate) =
-                validated_record(&bytes).ok_or(MetadataRepairError::InvalidStagingCandidate {
-                    path: staged.clone(),
-                })?;
+            let (document, candidate) = validated_record(&bytes).ok_or_else(invalid_candidate)?;
             if let Some(constraint) =
                 package_evidence(&root, &directory, filesystem)?.broken_by(&document)
             {
                 return Err(MetadataRepairError::StagingCandidateDamagesPackage {
-                    path: staged,
+                    staged: rooted_at(&root, staged),
                     constraint,
                 });
             }
             PlannedWrite {
-                destination: diagnosed_destination(&destination, filesystem)?,
+                destination: diagnosed_destination(&root, &destination, filesystem)?,
                 artifact: destination,
                 candidate,
                 source: Some(staged),
                 kind: MetadataRepairOperationKind::PromoteStagingCandidate,
             }
         }
-        action => return Err(MetadataRepairError::UnsupportedAction { action }),
+        action => {
+            return Err(MetadataRepairError::UnsupportedAction {
+                action,
+                scope: scope(),
+            });
+        }
     };
 
     Ok(plan_for(directory, root, confirmation, write))
@@ -364,11 +423,11 @@ fn plan_for(
     let operations = vec![
         MetadataRepairOperation {
             kind: write.kind,
-            path: write.artifact.clone(),
+            location: located_in_package(&root, write.artifact.clone()),
         },
         MetadataRepairOperation {
             kind: MetadataRepairOperationKind::RefreshPackageIndex,
-            path: root.join(".spielorders").join("index.json"),
+            location: located_in_package(&root, root.join(".spielorders").join("index.json")),
         },
     ];
     MetadataRepairPlan {
@@ -386,24 +445,23 @@ fn plan_for(
 
 /// Exactly what stands at the destination now, so the write can refuse anything else.
 fn diagnosed_destination<F: FileSystem>(
+    root: &Path,
     destination: &Path,
     filesystem: &F,
 ) -> Result<DiagnosedDestination, MetadataRepairError<F::Error>> {
-    let observed = filesystem.symlink_metadata(destination).map_err(|error| {
-        MetadataRepairError::FileSystem {
-            path: destination.to_path_buf(),
-            error,
-        }
-    })?;
+    let unreadable = |error| MetadataRepairError::FileSystem {
+        subject: rooted_at(root, destination.to_path_buf()),
+        error,
+    };
+    let observed = filesystem
+        .symlink_metadata(destination)
+        .map_err(unreadable)?;
     match observed {
         None => Ok(DiagnosedDestination::Absent),
         Some(_) => filesystem
             .read(destination)
             .map(DiagnosedDestination::Content)
-            .map_err(|error| MetadataRepairError::FileSystem {
-                path: destination.to_path_buf(),
-                error,
-            }),
+            .map_err(unreadable),
     }
 }
 
@@ -413,17 +471,20 @@ fn diagnosed_destination<F: FileSystem>(
 fn current_case<'a, E>(
     diagnosis: &'a OrderDiagnosis,
     confirmation: &RepairConfirmation,
-) -> Result<&'a crate::order_diagnosis::RepairCase, MetadataRepairError<E>> {
+    scope: &impl Fn() -> RootedLocation,
+) -> Result<&'a crate::repair_cases::RepairCase, MetadataRepairError<E>> {
     let case =
         diagnosis
             .case(confirmation.handle())
             .ok_or_else(|| MetadataRepairError::UnknownCase {
                 handle: confirmation.handle().to_owned(),
+                scope: scope(),
             })?;
     if !case.actions().contains(&confirmation.action()) {
         return Err(MetadataRepairError::UnauthorizedAction {
             handle: confirmation.handle().to_owned(),
             action: confirmation.action(),
+            scope: scope(),
         });
     }
     Ok(case)
@@ -484,7 +545,7 @@ fn package_evidence<F: FileSystem>(
         // ago. Reaching here means that stopped holding, and a candidate no evidence
         // can clear is refused rather than written.
         return Err(MetadataRepairError::PackageEvidenceUnavailable {
-            root: root.to_path_buf(),
+            root: rooted_at(root, root.to_path_buf()),
         });
     };
     let another_order = |paths: &OrderPaths| paths.directory().absolute_path() != directory;
@@ -529,8 +590,14 @@ impl PackageEvidence {
             return Some(PackageConstraint::VendorReferenceUnresolved);
         }
         // Asked through the same predicate the Package loader applies to a stored
-        // record, so a candidate cannot be accepted on terms the loader would reject.
-        if !locator_resolves_to_root(&self.directory, &candidate.package_root, &self.root) {
+        // record, so a candidate cannot be accepted on terms the loader would reject —
+        // including a candidate carrying no locator this build can follow, which the
+        // loader diagnoses as the same mismatch.
+        let follows_this_package = candidate
+            .package_root
+            .spelled()
+            .is_some_and(|locator| locator_resolves_to_root(&self.directory, locator, &self.root));
+        if !follows_this_package {
             return Some(PackageConstraint::PackageRootMismatch);
         }
         None
@@ -567,26 +634,35 @@ impl MetadataRepairResult {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RepairCandidateFailure {}
 
+/// Why a planned repair was refused at the write, or failed there.
+///
+/// **Every one carries a [`RootedLocation`]**, for the same reason
+/// [`MetadataRepairError`] does: a rejection is raised with the plan in hand, so the Root
+/// and the Package's own spelling of the path are both known and a response owes both.
 #[derive(Debug, PartialEq)]
 pub enum MetadataRepairRejection<E> {
     /// The staging candidate this repair was confirmed to promote changed between
     /// planning and commit, so it is no longer the candidate that was diagnosed.
-    EvidenceChanged {
-        path: PathBuf,
-    },
+    EvidenceChanged { evidence: RootedLocation },
     /// The destination stopped holding what the diagnosis observed there, so someone
     /// wrote it after this repair was authorized. Nothing was written and their work
     /// stands. Distinct from a write failure: nothing here failed.
     DestinationChanged {
-        path: PathBuf,
-        /// A staging file this refusal created and could not remove afterwards.
-        cleanup_failure: Option<E>,
+        destination: RootedLocation,
+        /// The staging file this refusal created and could not remove again, which is
+        /// what remains on disk — the destination holds exactly what it held. `None`
+        /// where the refusal left nothing behind.
+        uncleaned_stage: Option<RootedLocation>,
     },
     ReplacementFailed {
+        destination: RootedLocation,
+        /// The staging file this failure created and could not remove again, exactly as
+        /// on a refusal.
+        uncleaned_stage: Option<RootedLocation>,
         error: ValidatedReplacementError<E, RepairCandidateFailure>,
     },
     PromotionFailed {
-        path: PathBuf,
+        destination: RootedLocation,
         error: E,
     },
 }
@@ -619,10 +695,10 @@ pub fn commit_metadata_repair<F: FileSystem>(
                 if validated_record(&bytes)
                     .is_some_and(|(_, candidate)| candidate == plan.candidate) => {}
             _ => {
-                let path = source.clone();
+                let evidence = rooted_at(&plan.root, source.clone());
                 return MutationReport::Rejected {
                     plan,
-                    rejection: MetadataRepairRejection::EvidenceChanged { path },
+                    rejection: MetadataRepairRejection::EvidenceChanged { evidence },
                 };
             }
         }
@@ -640,22 +716,22 @@ pub fn commit_metadata_repair<F: FileSystem>(
                 plan.destination.expectation(),
                 filesystem,
             ) {
-                let path = plan.artifact.clone();
+                let destination = rooted_at(&plan.root, plan.artifact.clone());
                 let rejection = match failure {
                     // Nothing failed: the destination stopped being the one this
                     // promotion was authorized against, and it is left alone.
                     StagedPromotionFailure::DestinationChanged => {
                         MetadataRepairRejection::DestinationChanged {
-                            path,
+                            destination,
                             // A promotion writes no staging file of its own, so this
-                            // refusal has none to clean up.
-                            cleanup_failure: None,
+                            // refusal has none left over.
+                            uncleaned_stage: None,
                         }
                     }
                     StagedPromotionFailure::DestinationUnreadable(error)
                     | StagedPromotionFailure::Durability(error)
                     | StagedPromotionFailure::Replacement(error) => {
-                        MetadataRepairRejection::PromotionFailed { path, error }
+                        MetadataRepairRejection::PromotionFailed { destination, error }
                     }
                 };
                 return MutationReport::Rejected { plan, rejection };
@@ -670,16 +746,24 @@ pub fn commit_metadata_repair<F: FileSystem>(
                 filesystem,
                 |_| Ok::<(), RepairCandidateFailure>(()),
             ) {
+                let destination = rooted_at(&plan.root, plan.artifact.clone());
+                let uncleaned_stage = error
+                    .cleanup_failure()
+                    .map(|_| rooted_at(&plan.root, staging_path_of(&plan.artifact)));
                 let rejection = if matches!(
                     error.failure(),
                     ValidatedReplacementFailure::DestinationChanged
                 ) {
                     MetadataRepairRejection::DestinationChanged {
-                        path: plan.artifact.clone(),
-                        cleanup_failure: error.into_cleanup_failure(),
+                        destination,
+                        uncleaned_stage,
                     }
                 } else {
-                    MetadataRepairRejection::ReplacementFailed { error }
+                    MetadataRepairRejection::ReplacementFailed {
+                        destination,
+                        uncleaned_stage,
+                        error,
+                    }
                 };
                 return MutationReport::Rejected { plan, rejection };
             }

@@ -12,13 +12,18 @@ use crate::{
         CanonicalPackageLoad, PackageIndexRecord, PackageLoad, inspect_canonical_package,
         open_package,
     },
-    filesystem::{FileReplacement, MultiFileReplacementError, replace_validated_files},
-    metadata::{OrderDocument, Vendor, VendorsDocument, Version1, VersionDocument},
+    filesystem::{
+        FileReplacement, MultiFileReplacementError, RefusedRollback, RollbackFailure,
+        replace_validated_files,
+    },
+    metadata::{OrderDocument, Vendor, VendorsDocument},
     mutation::MutationReport,
     operations::OperationFailure,
-    order_diagnosis::{OrderDiagnosis, OrderDiagnosisError, RepairAction, diagnose_order},
-    package::PackageMetadata,
+    order_diagnosis::{OrderDiagnosis, OrderDiagnosisError, diagnose_order},
+    package::vendor_aggregate_is_package_valid,
     ports::{FileSystem, UuidGenerator},
+    readme::{Location, RootedLocation, located_in_package, rooted_at},
+    repair_cases::RepairAction,
 };
 use std::path::{Path, PathBuf};
 
@@ -60,10 +65,20 @@ pub enum SemanticRepairOperationKind {
     RefreshPackageIndex,
 }
 
+impl SemanticRepairOperationKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ReplaceOrderRecord => "replace_order_record",
+            Self::ReplaceVendorRecord => "replace_vendor_record",
+            Self::RefreshPackageIndex => "refresh_package_index",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SemanticRepairOperation {
     kind: SemanticRepairOperationKind,
-    path: PathBuf,
+    location: Location,
 }
 
 impl SemanticRepairOperation {
@@ -71,8 +86,14 @@ impl SemanticRepairOperation {
         self.kind
     }
 
+    /// Where this operation writes, as the Package that holds it names it — so a caller
+    /// reporting it carries the Package-relative spelling as well as the absolute path.
+    pub fn location(&self) -> &Location {
+        &self.location
+    }
+
     pub fn path(&self) -> &Path {
-        &self.path
+        self.location.absolute_path()
     }
 }
 
@@ -106,6 +127,14 @@ impl SemanticRepairPlan {
         &self.directory
     }
 
+    /// The SpielOrders Root the Order scope belongs to.
+    ///
+    /// Planning resolved it, so every refusal raised from this plan onward has a Root to
+    /// name — including the two a minted identity reaches, whose own values carry none.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     pub fn handle(&self) -> &str {
         &self.handle
     }
@@ -129,35 +158,59 @@ impl SemanticRepairPlan {
     }
 }
 
+/// Why no semantic repair could be planned.
+///
+/// **Every refusal below the diagnosis carries a [`RootedLocation`]**, because every one of
+/// them is raised after [`diagnose_order`] established the Package and the Order Directory
+/// inside it: the scope was resolved, so the response owes both the Root it was resolved
+/// under and the Package's own spelling of whatever the refusal is about. Only
+/// [`Self::Diagnosis`] is raised before there is a Package to name.
 #[derive(Debug, PartialEq)]
 pub enum SemanticRepairError<E> {
     Diagnosis(OrderDiagnosisError<E>),
     /// No currently diagnosed case answers to this handle.
     UnknownCase {
         handle: String,
+        scope: RootedLocation,
     },
     /// The named case does not authorize this resolution.
     UnauthorizedAction {
         handle: String,
         action: RepairAction,
+        scope: RootedLocation,
     },
     /// The chosen Vendor is not one this Package has.
     UnknownVendor {
         vendor_id: String,
+        scope: RootedLocation,
     },
     /// A deliberately created Vendor must carry a Name no existing Vendor already
     /// uses; this core never merges two Vendors or redirects one to another.
     VendorNameCollision {
         name: String,
+        scope: RootedLocation,
     },
     /// A created Vendor needs a real Name. A placeholder is not a Vendor.
-    MissingVendorName,
-    InvalidRepairedOrder,
+    MissingVendorName {
+        scope: RootedLocation,
+    },
+    InvalidRepairedOrder {
+        scope: RootedLocation,
+    },
     FileSystem {
-        path: PathBuf,
+        subject: RootedLocation,
         error: E,
     },
 }
+
+/// The one refusal the record-shaping helpers can reach, before the scope that reports it
+/// is attached.
+///
+/// They rebuild an Order record from its own fields, so the only way any of them fails is
+/// that the record this resolution would leave behind is not a valid Order. Carrying the
+/// scope through each of them instead would thread it through four helpers to say one
+/// thing.
+struct UnshapableOrder;
 
 /// Plans exactly one explicit semantic resolution against current evidence.
 pub fn plan_semantic_repair<F: FileSystem>(
@@ -168,34 +221,38 @@ pub fn plan_semantic_repair<F: FileSystem>(
 ) -> Result<SemanticRepairPlan, SemanticRepairError<F::Error>> {
     let diagnosis =
         diagnose_order(order_directory, filesystem).map_err(SemanticRepairError::Diagnosis)?;
-    let case = diagnosis
-        .case(handle)
-        .ok_or_else(|| SemanticRepairError::UnknownCase {
-            handle: handle.to_owned(),
-        })?;
-    if !case.actions().contains(&resolution.action()) {
-        return Err(SemanticRepairError::UnauthorizedAction {
-            handle: handle.to_owned(),
-            action: resolution.action(),
-        });
-    }
-
     let directory = diagnosis.directory().to_path_buf();
     // The Package the diagnosis was taken against, never one inferred by counting
     // parents: the Orders Directory is configured and may sit at any depth, so two
     // levels up from an Order Directory names an ordinary folder of the user's.
     let root = diagnosis.package_root().to_path_buf();
+    let scope = || rooted_at(&root, directory.clone());
+    let unshapable = |UnshapableOrder| SemanticRepairError::InvalidRepairedOrder { scope: scope() };
+    let case = diagnosis
+        .case(handle)
+        .ok_or_else(|| SemanticRepairError::UnknownCase {
+            handle: handle.to_owned(),
+            scope: scope(),
+        })?;
+    if !case.actions().contains(&resolution.action()) {
+        return Err(SemanticRepairError::UnauthorizedAction {
+            handle: handle.to_owned(),
+            action: resolution.action(),
+            scope: scope(),
+        });
+    }
+
     let order_path = directory.join(".spielorders").join("order.json");
     let vendors_path = root.join(".spielorders").join("vendors.json");
-    let prior_order = read_document::<OrderDocument, F>(&order_path, filesystem)?;
-    let prior_vendors = read_document::<VendorsDocument, F>(&vendors_path, filesystem)?;
+    let prior_order = read_document::<OrderDocument, F>(&root, &order_path, filesystem)?;
+    let prior_vendors = read_document::<VendorsDocument, F>(&root, &vendors_path, filesystem)?;
 
     let mut repaired = prior_order.clone();
     let mut created_vendor = PlannedVendorIdentity::None;
     let mut generates_order_id = false;
     let mut operations = vec![SemanticRepairOperation {
         kind: SemanticRepairOperationKind::ReplaceOrderRecord,
-        path: order_path.clone(),
+        location: located_in_package(&root, order_path.clone()),
     }];
 
     match resolution {
@@ -209,14 +266,15 @@ pub fn plan_semantic_repair<F: FileSystem>(
             {
                 return Err(SemanticRepairError::UnknownVendor {
                     vendor_id: vendor_id.clone(),
+                    scope: scope(),
                 });
             }
-            set_vendor(&mut repaired, Some(vendor_id))?;
+            set_vendor(&mut repaired, Some(vendor_id)).map_err(unshapable)?;
         }
         SemanticResolution::CreateAndAssignVendor { name } => {
             let trimmed = name.trim();
             if trimmed.is_empty() {
-                return Err(SemanticRepairError::MissingVendorName);
+                return Err(SemanticRepairError::MissingVendorName { scope: scope() });
             }
             // A deliberately distinct Vendor, never a merge: a Name an existing
             // Vendor already uses would be that Vendor, so it is refused.
@@ -227,6 +285,7 @@ pub fn plan_semantic_repair<F: FileSystem>(
             {
                 return Err(SemanticRepairError::VendorNameCollision {
                     name: existing.name.as_str().to_owned(),
+                    scope: scope(),
                 });
             }
             created_vendor = PlannedVendorIdentity::GeneratedAtCommit {
@@ -234,11 +293,11 @@ pub fn plan_semantic_repair<F: FileSystem>(
             };
             operations.push(SemanticRepairOperation {
                 kind: SemanticRepairOperationKind::ReplaceVendorRecord,
-                path: vendors_path.clone(),
+                location: located_in_package(&root, vendors_path.clone()),
             });
         }
         SemanticResolution::ClearVendorReference => {
-            set_vendor(&mut repaired, None)?;
+            set_vendor(&mut repaired, None).map_err(unshapable)?;
         }
         SemanticResolution::AdoptNewOrderIdentity => {
             generates_order_id = true;
@@ -255,13 +314,13 @@ pub fn plan_semantic_repair<F: FileSystem>(
                 .expect("the diagnosed Order Directory is inside its Package")
                 .components()
                 .count();
-            set_locator(&mut repaired, &vec![".."; depth].join("/"))?;
+            set_locator(&mut repaired, &vec![".."; depth].join("/")).map_err(unshapable)?;
         }
     }
 
     operations.push(SemanticRepairOperation {
         kind: SemanticRepairOperationKind::RefreshPackageIndex,
-        path: root.join(".spielorders").join("index.json"),
+        location: located_in_package(&root, root.join(".spielorders").join("index.json")),
     });
 
     Ok(SemanticRepairPlan {
@@ -281,38 +340,41 @@ pub fn plan_semantic_repair<F: FileSystem>(
 }
 
 fn read_document<T: serde::de::DeserializeOwned, F: FileSystem>(
+    root: &Path,
     path: &Path,
     filesystem: &F,
 ) -> Result<T, SemanticRepairError<F::Error>> {
-    read_document_bytes(path, filesystem).map(|(document, _)| document)
+    read_document_bytes(root, path, filesystem).map(|(document, _)| document)
 }
 
 /// The parsed document and the exact bytes it was parsed from. The bytes are the
 /// evidence this commit was authorized against, and they are what the replacement
 /// refuses to write over if anyone else changes the file first.
 fn read_document_bytes<T: serde::de::DeserializeOwned, F: FileSystem>(
+    root: &Path,
     path: &Path,
     filesystem: &F,
 ) -> Result<(T, Vec<u8>), SemanticRepairError<F::Error>> {
+    let subject = || rooted_at(root, path.to_path_buf());
     let bytes = filesystem
         .read(path)
         .map_err(|error| SemanticRepairError::FileSystem {
-            path: path.to_path_buf(),
+            subject: subject(),
             error,
         })?;
-    let document =
-        serde_json::from_slice(&bytes).map_err(|_| SemanticRepairError::InvalidRepairedOrder)?;
+    let document = serde_json::from_slice(&bytes)
+        .map_err(|_| SemanticRepairError::InvalidRepairedOrder { scope: subject() })?;
     Ok((document, bytes))
 }
 
-fn set_vendor<E>(
+fn set_vendor(
     document: &mut OrderDocument,
     vendor_id: Option<&str>,
-) -> Result<(), SemanticRepairError<E>> {
+) -> Result<(), UnshapableOrder> {
     let mut object = serde_json::to_value(&*document)
         .ok()
         .and_then(|value| value.as_object().cloned())
-        .ok_or(SemanticRepairError::InvalidRepairedOrder)?;
+        .ok_or(UnshapableOrder)?;
     match vendor_id {
         Some(vendor_id) => {
             object.insert(
@@ -328,14 +390,11 @@ fn set_vendor<E>(
     Ok(())
 }
 
-fn set_locator<E>(
-    document: &mut OrderDocument,
-    locator: &str,
-) -> Result<(), SemanticRepairError<E>> {
+fn set_locator(document: &mut OrderDocument, locator: &str) -> Result<(), UnshapableOrder> {
     let mut object = serde_json::to_value(&*document)
         .ok()
         .and_then(|value| value.as_object().cloned())
-        .ok_or(SemanticRepairError::InvalidRepairedOrder)?;
+        .ok_or(UnshapableOrder)?;
     object.insert(
         "package_root".into(),
         serde_json::Value::String(locator.to_owned()),
@@ -344,13 +403,13 @@ fn set_locator<E>(
     Ok(())
 }
 
-fn rebuilt<E>(
+fn rebuilt(
     object: serde_json::Map<String, serde_json::Value>,
-) -> Result<OrderDocument, SemanticRepairError<E>> {
+) -> Result<OrderDocument, UnshapableOrder> {
     serde_json::to_vec(&serde_json::Value::Object(object))
         .ok()
         .and_then(|bytes| OrderDocument::from_json_bytes(&bytes).ok())
-        .ok_or(SemanticRepairError::InvalidRepairedOrder)
+        .ok_or(UnshapableOrder)
 }
 
 /// Whether two Vendor Names are the same Name in one Package.
@@ -399,10 +458,15 @@ pub enum SemanticCandidateFailure {
     InvalidSemantics,
 }
 
+/// Why a planned semantic repair was refused at the write, or failed there.
+///
+/// **Every one that is about a path carries a [`RootedLocation`]**, for the same reason
+/// [`SemanticRepairError`] does: a rejection is raised with the plan in hand, so the Root
+/// and the Package's own spelling of the path are both known and a response owes both.
 #[derive(Debug, PartialEq)]
 pub enum SemanticRepairRejection<E> {
     /// The conflict set or the record changed between planning and commit.
-    EvidenceChanged { path: PathBuf },
+    EvidenceChanged { evidence: RootedLocation },
     /// A freshly generated identity already exists in this Package.
     GeneratedIdentityCollision { order_id: String },
     /// The Package could not be read as a current Package while a generated identity
@@ -413,11 +477,19 @@ pub enum SemanticRepairRejection<E> {
     /// another identity; this is not answered by any identity at all, and reporting it
     /// as one would send a caller to retry forever. `metadata_repair` refuses the same
     /// state under the same name.
-    PackageEvidenceUnavailable { root: PathBuf },
+    PackageEvidenceUnavailable { root: RootedLocation },
     /// A freshly generated Vendor identity already exists in this Package, so the
     /// aggregate this repair assembled is not a valid Package Vendor set.
     GeneratedVendorIdentityCollision { vendor_id: String },
     ReplacementFailed {
+        /// Every managed file this repair wrote that did not go back to what it held,
+        /// in the order the plan named them. **Empty is the ordinary case** and is what
+        /// lets a refusal say every managed file still holds what it held; a non-empty
+        /// one is the restoration failures and the restorations declined because
+        /// someone else had since written the destination, which
+        /// [`MultiFileReplacementError`] retains and which a response must name rather
+        /// than summarize.
+        unrestored: Vec<RootedLocation>,
         error: MultiFileReplacementError<E, SemanticCandidateFailure>,
     },
 }
@@ -443,7 +515,7 @@ pub fn commit_semantic_repair<F: FileSystem>(
 ) -> SemanticRepairReport<F::Error> {
     // The evidence this plan was built from must still stand.
     let Ok((current_order, observed_order)) =
-        read_document_bytes::<OrderDocument, F>(&plan.order_path, filesystem)
+        read_document_bytes::<OrderDocument, F>(&plan.root, &plan.order_path, filesystem)
     else {
         let path = plan.order_path.clone();
         return evidence_changed(plan, path);
@@ -453,7 +525,7 @@ pub fn commit_semantic_repair<F: FileSystem>(
         return evidence_changed(plan, path);
     }
     let Ok((current_vendors, observed_vendors)) =
-        read_document_bytes::<VendorsDocument, F>(&plan.vendors_path, filesystem)
+        read_document_bytes::<VendorsDocument, F>(&plan.root, &plan.vendors_path, filesystem)
     else {
         let path = plan.vendors_path.clone();
         return evidence_changed(plan, path);
@@ -479,14 +551,14 @@ pub fn commit_semantic_repair<F: FileSystem>(
                 };
             }
             GeneratedIdentityVerdict::PackageEvidenceUnavailable => {
-                let root = plan.root.clone();
+                let root = rooted_at(&plan.root, plan.root.clone());
                 return MutationReport::Rejected {
                     plan,
                     rejection: SemanticRepairRejection::PackageEvidenceUnavailable { root },
                 };
             }
         }
-        if set_identity::<F::Error>(&mut repaired, &order_id).is_err() {
+        if set_identity(&mut repaired, &order_id).is_err() {
             let path = plan.order_path.clone();
             return evidence_changed(plan, path);
         }
@@ -502,7 +574,7 @@ pub fn commit_semantic_repair<F: FileSystem>(
             let path = plan.vendors_path.clone();
             return evidence_changed(plan, path);
         };
-        if set_vendor::<F::Error>(&mut repaired, Some(vendor.vendor_id.as_str())).is_err() {
+        if set_vendor(&mut repaired, Some(vendor.vendor_id.as_str())).is_err() {
             let path = plan.order_path.clone();
             return evidence_changed(plan, path);
         }
@@ -520,6 +592,10 @@ pub fn commit_semantic_repair<F: FileSystem>(
         // revalidation above proves it. The identity is the one fact here the plan
         // could not judge, because it is generated at commit, so that is what a
         // failure here reports.
+        //
+        // The caller's own aggregate is what goes on to be written, not a normalized
+        // copy: a created Vendor carries a Name already trimmed while planning and no
+        // other field, which is all Vendor normalization touches.
         if !vendor_aggregate_is_package_valid(&vendors) {
             let vendor_id = vendor.vendor_id.as_str().to_owned();
             return MutationReport::Rejected {
@@ -570,6 +646,12 @@ pub fn commit_semantic_repair<F: FileSystem>(
                 // `a_damaged_order_with_an_unreal_date_is_refused_at_the_candidate_guard`.
                 OrderDocument::from_json_bytes(candidate)
                     .ok()
+                    // The locator carries its own outcome rather than failing the
+                    // record, so a candidate that would leave one this build cannot
+                    // follow is refused here: a repair writes a record valid under the
+                    // version it declares, and the locator's own repair is what
+                    // corrects that damage.
+                    .filter(|document| document.package_root.spelled().is_some())
                     .and_then(|document| document.validate().ok())
                     .map(|_| ())
                     .ok_or(SemanticCandidateFailure::InvalidSemantics)
@@ -592,9 +674,10 @@ pub fn commit_semantic_repair<F: FileSystem>(
             }
         })
     {
+        let unrestored = unrestored_destinations(&plan.root, &error);
         return MutationReport::Rejected {
             plan,
-            rejection: SemanticRepairRejection::ReplacementFailed { error },
+            rejection: SemanticRepairRejection::ReplacementFailed { unrestored, error },
         };
     }
 
@@ -641,29 +724,6 @@ pub fn commit_semantic_repair<F: FileSystem>(
             warnings,
         }
     }
-}
-
-/// Whether this candidate Vendor aggregate is a valid Package Vendor set.
-///
-/// Asked through the Package-wide validator rather than a local scan, so a candidate
-/// cannot be accepted on terms canonical validation would reject. The empty Orders
-/// slice is the same call `canonical` makes when it decides whether a Package's stored
-/// `vendors.json` damages the Package: the aggregate answers for itself — duplicate
-/// Vendor IDs and package-duplicate Vendor Names — while the Order this repair writes
-/// is judged as an Order by its own candidate guard, and the reference it carries names
-/// a Vendor present in this aggregate by construction.
-///
-/// The verdict is taken and the caller's own aggregate is written, rather than the
-/// normalized one this returns on success. The two are the same bytes here: a created
-/// Vendor carries a Name already trimmed while planning and no other field, which is
-/// all Vendor normalization touches.
-fn vendor_aggregate_is_package_valid(vendors: &VendorsDocument) -> bool {
-    let version = VersionDocument {
-        metadata_version: Version1,
-    };
-    PackageMetadata::new(&version, &[], vendors)
-        .validate()
-        .is_ok()
 }
 
 /// What this Package can say about a freshly generated Order identity.
@@ -719,14 +779,11 @@ fn generated_identity_verdict<F: FileSystem>(
     }
 }
 
-fn set_identity<E>(
-    document: &mut OrderDocument,
-    order_id: &str,
-) -> Result<(), SemanticRepairError<E>> {
+fn set_identity(document: &mut OrderDocument, order_id: &str) -> Result<(), UnshapableOrder> {
     let mut object = serde_json::to_value(&*document)
         .ok()
         .and_then(|value| value.as_object().cloned())
-        .ok_or(SemanticRepairError::InvalidRepairedOrder)?;
+        .ok_or(UnshapableOrder)?;
     object.insert(
         "order_id".into(),
         serde_json::Value::String(order_id.to_owned()),
@@ -735,9 +792,35 @@ fn set_identity<E>(
     Ok(())
 }
 
+/// Every destination a failed multi-file replacement did not put back.
+///
+/// Two ways a file can be left holding something other than what it held: a restoration
+/// that was attempted and failed, and one this core declined because the destination had
+/// since been written by someone else. Both are the same fact to a reader — this file is
+/// not as it was — so both are named, and a refusal that reports neither is entitled to
+/// say every managed file holds what it held.
+fn unrestored_destinations<E, V>(
+    root: &Path,
+    error: &MultiFileReplacementError<E, V>,
+) -> Vec<RootedLocation> {
+    error
+        .rollback_failures()
+        .iter()
+        .map(RollbackFailure::destination)
+        .chain(
+            error
+                .refused_rollbacks()
+                .iter()
+                .map(RefusedRollback::destination),
+        )
+        .map(|destination| rooted_at(root, destination.to_path_buf()))
+        .collect()
+}
+
 fn evidence_changed<E>(plan: SemanticRepairPlan, path: PathBuf) -> SemanticRepairReport<E> {
+    let evidence = rooted_at(&plan.root, path);
     MutationReport::Rejected {
         plan,
-        rejection: SemanticRepairRejection::EvidenceChanged { path },
+        rejection: SemanticRepairRejection::EvidenceChanged { evidence },
     }
 }

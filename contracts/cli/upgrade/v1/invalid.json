@@ -1,0 +1,23 @@
+{
+  "contract": "spielorders.upgrade",
+  "contract_version": 1,
+  "ok": false,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>"
+  },
+  "data": null,
+  "diagnostics": [],
+  "error": {
+    "code": "package_metadata_unsupported",
+    "message": "this Package declares metadata version 999 and this build reads version 1. It is left untouched: a newer build reads it, and nothing here downgrades a Package.",
+    "scope": "package",
+    "paths": [
+      {
+        "spelling": "resolved",
+        "path": "<PACKAGE_ROOT>",
+        "package_relative_path": "."
+      }
+    ],
+    "identities": []
+  }
+}

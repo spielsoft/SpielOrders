@@ -1,0 +1,45 @@
+{
+  "contract": "spielorders.order.item.edit",
+  "contract_version": 1,
+  "ok": false,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>",
+    "order_root": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace"
+  },
+  "data": null,
+  "diagnostics": [
+    {
+      "code": "order_semantic_invalid",
+      "severity": "error",
+      "scope": "order",
+      "primary_location": {
+        "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/order.json",
+        "package_relative_path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/order.json"
+      },
+      "related_locations": [],
+      "evidence": {
+        "order_id": "3f2a1c05-7b19-4e63-9d84-5a0c6e8b2f71",
+        "field": "date_ordered",
+        "reason": "invalid_gregorian_date"
+      }
+    }
+  ],
+  "error": {
+    "code": "order_record_damaged",
+    "message": "the Order at <PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace is damaged, so it has no facts to report. The diagnostics below are the diagnosis; `spielorders order repair` offers the actions.",
+    "scope": "order",
+    "paths": [
+      {
+        "spelling": "resolved",
+        "path": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace",
+        "package_relative_path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace"
+      }
+    ],
+    "identities": [
+      {
+        "kind": "order",
+        "value": "3f2a1c05-7b19-4e63-9d84-5a0c6e8b2f71"
+      }
+    ]
+  }
+}

@@ -16,6 +16,28 @@ pub enum ReusableValue {
     New(String),
 }
 
+/// Whether this Vendor aggregate is a valid Package Vendor set on its own.
+///
+/// **The one place that judgement is made**, so a repair, an upgrade, and a canonical load
+/// cannot come to accept aggregates on different terms. Three decisions live here and
+/// nowhere else: the aggregate is asked of the Package-wide validator rather than scanned
+/// locally, so nothing is accepted on terms canonical validation would reject; the marker
+/// it is judged against is the version this build writes; and the Orders slice is empty
+/// deliberately, because the constraints an aggregate answers for — duplicate Vendor IDs
+/// and package-duplicate Vendor Names — are the ones that live in `vendors.json` itself,
+/// while an Order's own record and the reference it carries are judged as an Order.
+///
+/// The verdict alone is returned. A caller that must publish bytes writes the document it
+/// was given, canonicalized by that document's own serialization.
+pub(crate) fn vendor_aggregate_is_package_valid(vendors: &VendorsDocument) -> bool {
+    let version = VersionDocument {
+        metadata_version: Version1,
+    };
+    PackageMetadata::new(&version, &[], vendors)
+        .validate()
+        .is_ok()
+}
+
 pub(crate) fn index_semantics_are_valid(index: &IndexDocument) -> bool {
     let version = VersionDocument {
         metadata_version: Version1,
@@ -43,8 +65,9 @@ pub(crate) fn index_semantics_are_valid(index: &IndexDocument) -> bool {
         .len()
         == index.orders.len();
     let locators_match_directories = index.orders.iter().all(|entry| {
-        entry.order.package_root.as_str().split('/').count()
-            == entry.order_directory.as_str().split('/').count()
+        entry.order.package_root.spelled().is_some_and(|locator| {
+            locator.as_str().split('/').count() == entry.order_directory.as_str().split('/').count()
+        })
     });
     let orders_are_sorted = index
         .orders

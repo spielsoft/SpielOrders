@@ -1,0 +1,58 @@
+{
+  "contract": "spielorders.add_vendor",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>"
+  },
+  "data": {
+    "report": {
+      "committed": true,
+      "changed": true,
+      "outcome": "created",
+      "operations": [
+        {
+          "operation": "replace_vendor_record",
+          "location": {
+            "absolute_path": "<PACKAGE_ROOT>/.spielorders/vendors.json",
+            "package_relative_path": ".spielorders/vendors.json"
+          }
+        },
+        {
+          "operation": "refresh_package_index",
+          "location": {
+            "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
+            "package_relative_path": ".spielorders/index.json"
+          }
+        }
+      ],
+      "index": {
+        "location": {
+          "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
+          "package_relative_path": ".spielorders/index.json"
+        },
+        "state": "current",
+        "refresh": "rebuilt",
+        "malformed_reasons": [],
+        "stale_reasons": [],
+        "observed_version": null,
+        "expected_version": null
+      },
+      "warnings": []
+    },
+    "vendor": {
+      "vendor_id": "<VENDOR_ID>",
+      "name": "Tarnwick",
+      "phone": "+1 555 0123",
+      "email": "sales@example.com",
+      "website": "https://example.com",
+      "address": "100 Example Avenue\nAnytown, ST 00000",
+      "purchasing_notes": "Quote required above $5000.",
+      "hidden": false,
+      "contacts": [],
+      "referencing_orders": []
+    }
+  },
+  "diagnostics": [],
+  "error": null
+}

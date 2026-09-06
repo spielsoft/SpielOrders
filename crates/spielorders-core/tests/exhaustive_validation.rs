@@ -507,8 +507,11 @@ fn non_utf8_reserved_content_conservatively_prevents_an_incomplete_validation_re
     };
 
     assert_eq!(
-        failed.failure().primary_location().absolute_path(),
-        Path::new("/package/.spielorders")
+        failed
+            .failure()
+            .primary_location()
+            .map(|location| location.absolute_path()),
+        Some(Path::new("/package/.spielorders"))
     );
     assert_eq!(
         failed.failure().evidence(),
@@ -571,8 +574,11 @@ fn every_authorized_canonicalize_kind_and_list_failure_returns_exact_operation_e
             panic!("{expected_operation:?} failure at {expected_path} cannot establish validation")
         };
         assert_eq!(
-            failed.failure().primary_location().absolute_path(),
-            Path::new(expected_path)
+            failed
+                .failure()
+                .primary_location()
+                .map(|location| location.absolute_path()),
+            Some(Path::new(expected_path))
         );
         assert_eq!(
             failed.failure().evidence(),
@@ -932,6 +938,87 @@ fn package_damage_does_not_hide_independently_observable_order_document_or_reser
     }
     assert_eq!(report.order_readmes().len(), 1);
     assert_eq!(report.order_readmes()[0].text(), None);
+}
+
+/// A calculated total that is not finite makes its Order semantically invalid, and the
+/// evidence names the total rather than a stored value.
+///
+/// **Overflow is the only route to one.** `FiniteNumber`'s deserializer refuses a
+/// non-finite stored Quantity or Unit Price, so a record that loads at all carries finite
+/// numbers and there is nothing stored to blame — which is why the reason is its own and
+/// the `field` is the calculated total. An Item Total and an Order Total are told apart
+/// there: a product that overflows and a sum of finite products that overflows are
+/// different arithmetic, and a caller correcting one is not looking at the other.
+#[test]
+fn a_calculated_total_that_is_not_finite_invalidates_its_order_naming_the_total() {
+    let filesystem = TestFileSystem::minimal_package();
+    for (directory, order_id, items) in [
+        (
+            "Item",
+            "c1111111-1111-4111-8111-111111111111",
+            r#"{"description":"Mirror mount","quantity":1e308,"unit_price":10.0}"#,
+        ),
+        (
+            "Order",
+            "c2222222-2222-4222-8222-222222222222",
+            r#"{"description":"First","quantity":1e308,"unit_price":1.0},
+      {"description":"Second","quantity":1e308,"unit_price":1.0}"#,
+        ),
+    ] {
+        let path = format!("/package/Orders/{directory}");
+        filesystem.put_entry(&path, FileSystemEntryKind::Directory);
+        filesystem.put_entry(
+            &format!("{path}/.spielorders"),
+            FileSystemEntryKind::Directory,
+        );
+        filesystem.put_file(
+            &format!("{path}/.spielorders/order.json"),
+            format!(
+                r#"{{
+  "schema_version": 1,
+  "package_root": "../..",
+  "order_id": "{order_id}",
+  "title": "Overflowing order",
+  "date_ordered": "2026-07-19",
+  "status": "in_preparation",
+  "items": [
+    {items}
+  ]
+}}
+"#
+            )
+            .as_bytes(),
+        );
+    }
+
+    let ExhaustivePackageValidation::Complete(report) =
+        validate_package_exhaustively(Path::new("/package"), &filesystem)
+    else {
+        panic!("a Package holding only Order-local damage validates completely")
+    };
+
+    assert!(!report.is_valid(), "an error-severity finding is invalid");
+    let semantic = report
+        .diagnostic_groups()
+        .iter()
+        .flat_map(|group| group.diagnostics())
+        .filter_map(|diagnostic| match diagnostic.evidence() {
+            DiagnosticEvidence::OrderSemanticInvalid { field, reason, .. } => {
+                assert_eq!(diagnostic.code(), DiagnosticCode::OrderSemanticInvalid);
+                assert_eq!(diagnostic.severity(), Severity::Error);
+                assert_eq!(diagnostic.scope(), EvidenceScope::Order);
+                Some((field.as_str(), reason.as_str()))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        semantic,
+        [
+            ("item_total", "non_finite_total"),
+            ("order_total", "non_finite_total"),
+        ]
+    );
 }
 
 fn minimal_current_filesystem() -> TestFileSystem {

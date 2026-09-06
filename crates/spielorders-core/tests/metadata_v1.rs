@@ -5,8 +5,8 @@
 
 use serde::Deserialize;
 use spielorders_core::metadata::{
-    Config, FiniteNumber, IndexDocument, MetadataErrorKind, OrderDocument, VendorsDocument,
-    VersionDocument,
+    Config, FiniteNumber, IndexDocument, MetadataErrorKind, OrderDocument, OrderStatus,
+    VendorsDocument, VersionDocument,
 };
 use std::path::PathBuf;
 
@@ -156,15 +156,67 @@ fn order_and_vendor_identities_require_lowercase_uuid_v4_text() {
     assert!(VendorsDocument::from_json_bytes(invalid_vendor).is_err());
 }
 
+/// A locator is two or more parent-only segments, and a record carrying anything else
+/// carries no locator at all.
+///
+/// **The verdict is the field's, not the record's.** A locator that is absent or
+/// malformed is the one Order-record damage the integrity decision calls repairable by
+/// recalculation, so the record parses and the field says it spells nothing — which is
+/// what lets a Package load diagnose the case that offers that repair instead of an
+/// invalid managed artifact whose only action is a replacement written by hand.
 #[test]
 fn package_root_requires_two_or_more_parent_segments() {
     let deeper = String::from_utf8(MINIMAL_ORDER.to_vec())
         .expect("fixture is UTF-8")
         .replacen("\"../..\"", "\"../../..\"", 1);
 
-    assert!(OrderDocument::from_json_bytes(ONE_PARENT_ORDER).is_err());
-    assert!(OrderDocument::from_json_bytes(MINIMAL_ORDER).is_ok());
-    assert!(OrderDocument::from_json_bytes(deeper.as_bytes()).is_ok());
+    for (case, source) in [
+        ("one parent segment", ONE_PARENT_ORDER.to_vec()),
+        ("no locator at all", without_package_root(MINIMAL_ORDER)),
+        (
+            "not a relative parent path",
+            String::from_utf8(MINIMAL_ORDER.to_vec())
+                .expect("fixture is UTF-8")
+                .replacen("\"../..\"", "\"/packages/optics\"", 1)
+                .into_bytes(),
+        ),
+        (
+            "not text at all",
+            String::from_utf8(MINIMAL_ORDER.to_vec())
+                .expect("fixture is UTF-8")
+                .replacen("\"../..\"", "7", 1)
+                .into_bytes(),
+        ),
+    ] {
+        let document = OrderDocument::from_json_bytes(&source)
+            .unwrap_or_else(|error| panic!("{case}: the record itself parses: {error}"));
+        assert!(
+            document.package_root.spelled().is_none(),
+            "{case}: and spells no locator"
+        );
+    }
+
+    for source in [MINIMAL_ORDER.to_vec(), deeper.into_bytes()] {
+        assert!(
+            OrderDocument::from_json_bytes(&source)
+                .expect("a record with a locator parses")
+                .package_root
+                .spelled()
+                .is_some()
+        );
+    }
+}
+
+/// One Order record with its `package_root` member removed outright.
+fn without_package_root(source: &[u8]) -> Vec<u8> {
+    let text = String::from_utf8(source.to_vec()).expect("fixture is UTF-8");
+    let stripped = text
+        .lines()
+        .filter(|line| !line.contains("\"package_root\""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_ne!(text, stripped, "the locator member was found and removed");
+    stripped.into_bytes()
 }
 
 #[test]
@@ -378,7 +430,13 @@ fn every_schema_invalid_fixture_is_rejected_by_its_public_codec() {
             .unwrap_or_else(|error| panic!("failed reading {}: {error}", fixture.file));
         let rejected = match fixture.artifact.as_str() {
             "version" => VersionDocument::from_json_bytes(&source).is_err(),
-            "order" => OrderDocument::from_json_bytes(&source).is_err(),
+            // The locator is the one version-1 rule the codec carries as an outcome
+            // rather than a parse failure, so a record refused for it is refused by the
+            // field rather than by `from_json_bytes` — see `PackageRootLocator`.
+            "order" => match OrderDocument::from_json_bytes(&source) {
+                Ok(document) => document.package_root.spelled().is_none(),
+                Err(_) => true,
+            },
             "vendors" => VendorsDocument::from_json_bytes(&source).is_err(),
             "index" => IndexDocument::from_json_bytes(&source).is_err(),
             artifact => panic!("unknown fixture artifact {artifact}"),
@@ -389,4 +447,33 @@ fn every_schema_invalid_fixture_is_rejected_by_its_public_codec() {
 
 fn contracts_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../contracts")
+}
+
+/// Every Order Status spelling is the one written to disk.
+///
+/// `OrderStatus::as_str` is stated by hand while the on-disk spelling is derived from
+/// `#[serde(rename_all = "snake_case")]`, and the status reaches a CLI response through
+/// `as_str`. Nothing but this binds the two, so a variant renamed on one side and not the
+/// other would give one status two spellings — one in a stored record and another in the
+/// machine contract a consumer branches on. Both directions are checked, so a spelling
+/// that stops parsing fails here too.
+#[test]
+fn every_status_spelling_is_the_one_written_to_disk() {
+    for status in [
+        OrderStatus::InPreparation,
+        OrderStatus::Hold,
+        OrderStatus::Ordered,
+        OrderStatus::Received,
+        OrderStatus::Complete,
+    ] {
+        let stored = serde_json::to_string(&status).expect("a status serializes");
+        assert_eq!(
+            stored,
+            format!("{:?}", status.as_str()),
+            "{status:?} is written and reported under one spelling"
+        );
+        let parsed: OrderStatus =
+            serde_json::from_str(&stored).expect("the stored spelling parses back");
+        assert_eq!(parsed, status);
+    }
 }

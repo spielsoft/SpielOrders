@@ -1,0 +1,134 @@
+{
+  "contract": "spielorders.add_order",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>",
+    "order_root": "<PACKAGE_ROOT>/Orders/<TODAY>_Tarnwick_Laser_components_Ada_Lovelace"
+  },
+  "data": {
+    "report": {
+      "committed": true,
+      "changed": true,
+      "outcome": "created",
+      "reusable_values": {
+        "ordering_institution": {
+          "outcome": "reused",
+          "value": "Northwind"
+        },
+        "orderer": {
+          "outcome": "reused",
+          "value": "Ada Lovelace"
+        },
+        "project": {
+          "outcome": "reused",
+          "value": "Telescope"
+        },
+        "order_group": {
+          "outcome": "introduced",
+          "value": "Autumn build"
+        }
+      },
+      "operations": [
+        {
+          "operation": "create_staging_directory",
+          "location": {
+            "absolute_path": "<PACKAGE_ROOT>/Orders/.<TODAY>_Tarnwick_Laser_components_Ada_Lovelace.spielorders-stage",
+            "package_relative_path": "Orders/.<TODAY>_Tarnwick_Laser_components_Ada_Lovelace.spielorders-stage"
+          }
+        },
+        {
+          "operation": "create_metadata_directory",
+          "location": {
+            "absolute_path": "<PACKAGE_ROOT>/Orders/.<TODAY>_Tarnwick_Laser_components_Ada_Lovelace.spielorders-stage/.spielorders",
+            "package_relative_path": "Orders/.<TODAY>_Tarnwick_Laser_components_Ada_Lovelace.spielorders-stage/.spielorders"
+          }
+        },
+        {
+          "operation": "write_order_record",
+          "location": {
+            "absolute_path": "<PACKAGE_ROOT>/Orders/.<TODAY>_Tarnwick_Laser_components_Ada_Lovelace.spielorders-stage/.spielorders/order.json",
+            "package_relative_path": "Orders/.<TODAY>_Tarnwick_Laser_components_Ada_Lovelace.spielorders-stage/.spielorders/order.json"
+          }
+        },
+        {
+          "operation": "write_readme",
+          "location": {
+            "absolute_path": "<PACKAGE_ROOT>/Orders/.<TODAY>_Tarnwick_Laser_components_Ada_Lovelace.spielorders-stage/README.md",
+            "package_relative_path": "Orders/.<TODAY>_Tarnwick_Laser_components_Ada_Lovelace.spielorders-stage/README.md"
+          }
+        },
+        {
+          "operation": "commit_directory",
+          "location": {
+            "absolute_path": "<PACKAGE_ROOT>/Orders/<TODAY>_Tarnwick_Laser_components_Ada_Lovelace",
+            "package_relative_path": "Orders/<TODAY>_Tarnwick_Laser_components_Ada_Lovelace"
+          }
+        },
+        {
+          "operation": "refresh_package_index",
+          "location": {
+            "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
+            "package_relative_path": ".spielorders/index.json"
+          }
+        }
+      ],
+      "index": {
+        "location": {
+          "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
+          "package_relative_path": ".spielorders/index.json"
+        },
+        "state": "current",
+        "refresh": "rebuilt",
+        "malformed_reasons": [],
+        "stale_reasons": [],
+        "observed_version": null,
+        "expected_version": null
+      },
+      "warnings": []
+    },
+    "order": {
+      "paths": {
+        "directory": {
+          "absolute_path": "<PACKAGE_ROOT>/Orders/<TODAY>_Tarnwick_Laser_components_Ada_Lovelace",
+          "package_relative_path": "Orders/<TODAY>_Tarnwick_Laser_components_Ada_Lovelace"
+        },
+        "metadata_directory": {
+          "absolute_path": "<PACKAGE_ROOT>/Orders/<TODAY>_Tarnwick_Laser_components_Ada_Lovelace/.spielorders",
+          "package_relative_path": "Orders/<TODAY>_Tarnwick_Laser_components_Ada_Lovelace/.spielorders"
+        },
+        "order": {
+          "absolute_path": "<PACKAGE_ROOT>/Orders/<TODAY>_Tarnwick_Laser_components_Ada_Lovelace/.spielorders/order.json",
+          "package_relative_path": "Orders/<TODAY>_Tarnwick_Laser_components_Ada_Lovelace/.spielorders/order.json"
+        },
+        "readme": {
+          "absolute_path": "<PACKAGE_ROOT>/Orders/<TODAY>_Tarnwick_Laser_components_Ada_Lovelace/README.md",
+          "package_relative_path": "Orders/<TODAY>_Tarnwick_Laser_components_Ada_Lovelace/README.md"
+        }
+      },
+      "schema_version": 1,
+      "package_root": "../..",
+      "order_id": "<ORDER_ID>",
+      "title": "Laser components",
+      "date_ordered": "<TODAY>",
+      "status": "ordered",
+      "vendor_id": "e0990d31-06aa-42e9-97c8-088e3e894822",
+      "vendor": {
+        "vendor_id": "e0990d31-06aa-42e9-97c8-088e3e894822",
+        "name": "Tarnwick",
+        "hidden": false
+      },
+      "orderer": "Ada Lovelace",
+      "ordering_institution": "Northwind",
+      "currency": "USD",
+      "project": "Telescope",
+      "order_group": "Autumn build",
+      "items": [],
+      "order_total": -0.0,
+      "readme_exists": true,
+      "readme_text": ""
+    }
+  },
+  "diagnostics": [],
+  "error": null
+}

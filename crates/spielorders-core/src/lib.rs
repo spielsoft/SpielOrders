@@ -1,7 +1,9 @@
 //! Platform-independent core boundary for SpielOrders.
 //!
-//! M1 defines durable metadata, and M2 adds canonical Package read projection,
-//! Package Index loading, and separately invoked exhaustive validation.
+//! Durable metadata, canonical Package read projection, Package Index loading,
+//! separately invoked exhaustive validation, and the domain mutations, repairs and
+//! Metadata Upgrades that write. Effects arrive through narrow ports; nothing here
+//! reaches a filesystem, a clock, or a platform service on its own.
 
 pub mod adoption;
 pub mod alignment;
@@ -18,14 +20,19 @@ pub mod operations;
 pub mod order;
 pub mod order_diagnosis;
 pub mod order_edits;
+pub mod order_reads;
 pub mod package;
+pub mod package_diagnosis;
+pub mod package_repair;
 pub mod paths;
 pub mod ports;
 pub mod readme;
 pub mod readme_writes;
 pub mod removal;
+pub mod repair_cases;
 pub mod semantic_repair;
 pub mod upgrade;
+pub mod vendor_reads;
 pub mod vendors;
 
 /// Identifies the reusable SpielOrders core crate.

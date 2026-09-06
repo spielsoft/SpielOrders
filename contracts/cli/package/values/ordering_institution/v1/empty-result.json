@@ -1,0 +1,13 @@
+{
+  "contract": "spielorders.package.values.ordering_institution",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>"
+  },
+  "data": {
+    "values": []
+  },
+  "diagnostics": [],
+  "error": null
+}

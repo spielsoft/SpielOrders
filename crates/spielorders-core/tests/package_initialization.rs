@@ -720,7 +720,7 @@ fn unsafe_roots_paths_collisions_and_links_reject_without_creating_artifacts() {
             &InitializationOptions::default(),
             &RealFileSystem,
         ),
-        Err(InitializationPlanError::AlreadyManaged)
+        Err(InitializationPlanError::AlreadyManaged { .. })
     ));
     assert_eq!(
         fs::read(managed.path().join(".spielorders")).unwrap(),
@@ -780,7 +780,7 @@ fn unsafe_roots_paths_collisions_and_links_reject_without_creating_artifacts() {
     ] {
         let error = plan_package_initialization(invalid.path(), &options, &RealFileSystem)
             .expect_err("an invalid configured path is refused");
-        let InitializationPlanError::InvalidConfiguredPath { path, failure } = error else {
+        let InitializationPlanError::InvalidConfiguredPath { path, failure, .. } = error else {
             panic!("the refusal names the configured path at fault, not {error:?}")
         };
         assert_eq!(path, refused);
@@ -795,7 +795,7 @@ fn unsafe_roots_paths_collisions_and_links_reject_without_creating_artifacts() {
             &InitializationOptions::new("Removed/Active", "Removed"),
             &RealFileSystem,
         ),
-        Err(InitializationPlanError::ManagedPathsOverlap)
+        Err(InitializationPlanError::ManagedPathsOverlap { .. })
     ));
     assert_eq!(fs::read_dir(overlapping.path()).unwrap().count(), 0);
 
@@ -1007,7 +1007,7 @@ fn configured_paths_naming_the_metadata_directory_are_refused_before_any_write()
         let error = plan_package_initialization(tree.path(), &options, &RealFileSystem)
             .expect_err("a configured path naming the metadata directory is refused");
 
-        let InitializationPlanError::InvalidConfiguredPath { path, failure } = error else {
+        let InitializationPlanError::InvalidConfiguredPath { path, failure, .. } = error else {
             panic!("the refusal names the reserved configured path, not {error:?}")
         };
         assert_eq!(path, refused);

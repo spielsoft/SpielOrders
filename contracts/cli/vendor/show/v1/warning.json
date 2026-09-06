@@ -1,0 +1,41 @@
+{
+  "contract": "spielorders.vendor.show",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>"
+  },
+  "data": {
+    "vendor_id": "1c9a5b7e-3d44-4f21-8a6c-9b0e2d7f4a13",
+    "name": "Nethermoor",
+    "phone": null,
+    "email": null,
+    "website": null,
+    "address": null,
+    "purchasing_notes": null,
+    "hidden": true,
+    "contacts": [],
+    "referencing_orders": []
+  },
+  "diagnostics": [
+    {
+      "code": "managed_artifact_invalid_syntax",
+      "severity": "error",
+      "scope": "order",
+      "primary_location": {
+        "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/order.json",
+        "package_relative_path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/order.json"
+      },
+      "related_locations": [],
+      "evidence": {
+        "artifact": "order",
+        "observed_kind": null,
+        "operation": null,
+        "field": null,
+        "observed_version": null,
+        "expected_version": null
+      }
+    }
+  ],
+  "error": null
+}

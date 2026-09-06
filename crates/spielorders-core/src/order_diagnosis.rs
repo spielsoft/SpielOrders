@@ -7,116 +7,19 @@
 //! condition with two different codes.
 
 use crate::{
-    canonical::{DiagnosticGroup, ExhaustivePackageValidation, validate_package_exhaustively},
-    evidence::{EvidenceFingerprint, location_text},
-    readme::{Diagnostic, DiagnosticCode, EvidenceScope, Location},
+    canonical::{
+        DiagnosticGroup, ExhaustivePackageValidation, OperationFailedProjection, OrderPaths,
+        validate_package_exhaustively,
+    },
+    readme::{Diagnostic, EvidenceScope, FailedPath, Location, package_relative_path_text},
+    repair_cases::{RepairCase, UnactionableFinding, cases_for},
 };
 use std::path::{Path, PathBuf};
-
-/// One explicit safe action a diagnosed case authorizes. Each is executed by a
-/// separate capability; diagnosis only states which are available.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum RepairAction {
-    /// Accept one user-confirmed complete replacement for parseable metadata.
-    ReplaceManagedRecord,
-    /// Promote the exact diagnosed staging candidate.
-    PromoteStagingCandidate,
-    /// Point an unresolved Vendor Reference at an existing Vendor.
-    AssignExistingVendor,
-    /// Deliberately create one fully specified distinct Vendor and assign it.
-    CreateAndAssignVendor,
-    /// Clear the unresolved Vendor Reference outright.
-    ClearVendorReference,
-    /// Adopt a fresh identity for this side of a duplicate Order ID conflict.
-    AdoptNewOrderIdentity,
-    /// Recompute the technical locator from the physical Package relationship.
-    RepairPackageLocator,
-}
-
-impl RepairAction {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::ReplaceManagedRecord => "replace_managed_record",
-            Self::PromoteStagingCandidate => "promote_staging_candidate",
-            Self::AssignExistingVendor => "assign_existing_vendor",
-            Self::CreateAndAssignVendor => "create_and_assign_vendor",
-            Self::ClearVendorReference => "clear_vendor_reference",
-            Self::AdoptNewOrderIdentity => "adopt_new_order_identity",
-            Self::RepairPackageLocator => "repair_package_locator",
-        }
-    }
-
-    /// The resolution values a caller must supply to apply this action. An action
-    /// with none is fully determined by the evidence already diagnosed.
-    pub fn required_values(self) -> &'static [&'static str] {
-        match self {
-            Self::ReplaceManagedRecord => &["record"],
-            Self::AssignExistingVendor => &["vendor_id"],
-            Self::CreateAndAssignVendor => &["name"],
-            Self::PromoteStagingCandidate
-            | Self::ClearVendorReference
-            | Self::AdoptNewOrderIdentity
-            | Self::RepairPackageLocator => &[],
-        }
-    }
-}
-
-/// One deterministic ephemeral repair case. The handle identifies a case within one
-/// diagnosis snapshot; it is not a domain identity and is never persisted.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RepairCase {
-    handle: String,
-    code: DiagnosticCode,
-    scope: EvidenceScope,
-    location: Location,
-    actions: Vec<RepairAction>,
-}
-
-impl RepairCase {
-    pub fn handle(&self) -> &str {
-        &self.handle
-    }
-
-    pub fn code(&self) -> DiagnosticCode {
-        self.code
-    }
-
-    pub fn scope(&self) -> EvidenceScope {
-        self.scope
-    }
-
-    /// The exact evidence this case was diagnosed from.
-    pub fn location(&self) -> &Location {
-        &self.location
-    }
-
-    pub fn actions(&self) -> &[RepairAction] {
-        &self.actions
-    }
-}
-
-/// One diagnosed condition for which no safe core action exists. Correcting it
-/// requires work outside this core, after which validation can be run again.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct UnactionableFinding {
-    code: DiagnosticCode,
-    location: Location,
-}
-
-impl UnactionableFinding {
-    pub fn code(&self) -> DiagnosticCode {
-        self.code
-    }
-
-    pub fn location(&self) -> &Location {
-        &self.location
-    }
-}
 
 /// The complete read-only result of validating one selected Order scope.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OrderDiagnosis {
-    directory: PathBuf,
+    paths: OrderPaths,
     root: PathBuf,
     valid: bool,
     diagnostics: Vec<Diagnostic>,
@@ -127,7 +30,17 @@ pub struct OrderDiagnosis {
 impl OrderDiagnosis {
     /// The exact Order Directory this diagnosis examined.
     pub fn directory(&self) -> &Path {
-        &self.directory
+        self.paths.directory().absolute_path()
+    }
+
+    /// This Order's managed locations, as the Package that holds it names them.
+    ///
+    /// **The Package-relative spelling comes from here rather than from a caller.** A
+    /// response that reports this Order's Directory owes that spelling, and a caller
+    /// deriving one from the absolute path would be a second place deciding what a
+    /// Package's layout is.
+    pub fn paths(&self) -> &OrderPaths {
+        &self.paths
     }
 
     /// The SpielOrders Root of the Package this diagnosis was taken against.
@@ -156,7 +69,7 @@ impl OrderDiagnosis {
     }
 
     pub fn case(&self, handle: &str) -> Option<&RepairCase> {
-        self.cases.iter().find(|case| case.handle == handle)
+        self.cases.iter().find(|case| case.handle() == handle)
     }
 
     /// Diagnosed conditions this core offers no safe action for. They are reported
@@ -169,14 +82,50 @@ impl OrderDiagnosis {
 
 #[derive(Debug, PartialEq)]
 pub enum OrderDiagnosisError<E> {
-    UnmanagedPackage,
+    /// No SpielOrders Root holds the selected directory: no ancestor of it carries a
+    /// Package marker, or what did stopped being a Root between the search and the load.
+    /// Either way there is no Package for an Order-scoped diagnosis to be taken against,
+    /// and the path reported is the directory the search started from.
+    UnmanagedPackage {
+        directory: PathBuf,
+    },
     /// Package-wide state is untrustworthy, so an Order-scoped answer would be
     /// misleading. A Package-wide failure is never downgraded to an Order finding.
-    DamagedPackage,
-    PackageOperationFailed,
+    ///
+    /// **The Package-scope findings travel with it**, and only those: a caller has to be
+    /// able to report the Package-level problem *as* a Package-level problem, and a
+    /// sibling Order's damage is not this scope's to report. Before they did, the refusal
+    /// named the state and discarded the evidence for it, so the only thing a caller
+    /// could say was that something somewhere was wrong.
+    DamagedPackage {
+        root: Location,
+        diagnostics: Vec<Diagnostic>,
+    },
+    /// The Package could not be read past its Root.
+    PackageOperationFailed(Box<OperationFailedProjection>),
+    /// The exact path given is not a directory this diagnosis can examine: nothing
+    /// stands there, or what does is not an ordinary directory.
+    ///
+    /// **Told apart from a filesystem that refused to say**, exactly as the ordinary
+    /// Order read tells them apart: the first is "this is not an Order Directory" and
+    /// the second is an operational failure. A caller that folded them would report a
+    /// path that does not exist as a Package it could not read.
+    NotAnOrderDirectory {
+        directory: PathBuf,
+    },
     /// The selected directory is not an entry of this Package's Orders Directory.
+    ///
+    /// The directory carries its Package-relative spelling where it has one, because a
+    /// directory that is inside the Package and is not one of its Orders is exactly the
+    /// case a reader needs named both ways.
+    ///
+    /// **The Root travels with it**, because that spelling is relative to something and a
+    /// caller handed only the relative half has nothing to resolve it against. This
+    /// refusal is raised after the Package resolved and validated — the directory is
+    /// judged against the Orders that load discovered — so a Root is exactly what it has.
     OrderNotFound {
-        path: PathBuf,
+        directory: FailedPath,
+        root: PathBuf,
     },
     FileSystem {
         path: PathBuf,
@@ -190,6 +139,24 @@ pub fn diagnose_order<F: crate::ports::FileSystem>(
     order_directory: &Path,
     filesystem: &F,
 ) -> Result<OrderDiagnosis, OrderDiagnosisError<F::Error>> {
+    // Nothing standing at the selected path is a different answer from a filesystem
+    // that would not say, and resolving the path cannot tell them apart: every failure
+    // to canonicalize looks the same. Observing the kind first is what keeps a path
+    // that does not exist from being reported as a Package this build could not read.
+    match filesystem.symlink_metadata(order_directory) {
+        Ok(Some(crate::ports::FileSystemEntryKind::Directory)) => {}
+        Ok(_) => {
+            return Err(OrderDiagnosisError::NotAnOrderDirectory {
+                directory: order_directory.to_path_buf(),
+            });
+        }
+        Err(error) => {
+            return Err(OrderDiagnosisError::FileSystem {
+                path: order_directory.to_path_buf(),
+                error,
+            });
+        }
+    }
     let directory = filesystem.canonicalize(order_directory).map_err(|error| {
         OrderDiagnosisError::FileSystem {
             path: order_directory.to_path_buf(),
@@ -203,10 +170,12 @@ pub fn diagnose_order<F: crate::ports::FileSystem>(
     let report = match validate_package_exhaustively(&root, filesystem) {
         ExhaustivePackageValidation::Complete(report) => report,
         ExhaustivePackageValidation::Unmanaged(_) => {
-            return Err(OrderDiagnosisError::UnmanagedPackage);
+            return Err(OrderDiagnosisError::UnmanagedPackage { directory });
         }
-        ExhaustivePackageValidation::OperationFailed(_) => {
-            return Err(OrderDiagnosisError::PackageOperationFailed);
+        ExhaustivePackageValidation::OperationFailed(failed) => {
+            return Err(OrderDiagnosisError::PackageOperationFailed(Box::new(
+                failed,
+            )));
         }
     };
 
@@ -214,30 +183,44 @@ pub fn diagnose_order<F: crate::ports::FileSystem>(
     // "this Order looks fine" while the Package it belongs to is untrustworthy would
     // be worse than refusing, because the Order-scoped answer depends on
     // package-wide evidence such as the Vendor aggregate.
-    if report.diagnostic_groups().iter().any(|group| {
-        group.scope() == EvidenceScope::Package
-            && group
-                .diagnostics()
-                .iter()
-                .any(|diagnostic| diagnostic.severity() == crate::readme::Severity::Error)
-    }) {
-        return Err(OrderDiagnosisError::DamagedPackage);
+    let package_wide = report
+        .diagnostic_groups()
+        .iter()
+        .filter(|group| group.scope() == EvidenceScope::Package)
+        .flat_map(|group| group.diagnostics().iter().cloned())
+        .collect::<Vec<_>>();
+    if package_wide
+        .iter()
+        .any(|diagnostic| diagnostic.severity() == crate::readme::Severity::Error)
+    {
+        return Err(OrderDiagnosisError::DamagedPackage {
+            root: report.context().root().clone(),
+            diagnostics: package_wide,
+        });
     }
 
-    let mut diagnostics = Vec::new();
-    let mut examined = false;
-    for group in report.diagnostic_groups() {
-        if !within_scope(group, &directory) {
-            continue;
-        }
-        examined = true;
-        diagnostics.extend(group.diagnostics().iter().cloned());
-    }
-    // A healthy Order produces no group at all, so presence in the Package's own
-    // discovery is what proves the scope exists.
-    if !examined && !discovered(&report, &directory) {
-        return Err(OrderDiagnosisError::OrderNotFound { path: directory });
-    }
+    // Presence in the Package's own discovery is what proves the scope exists: a healthy
+    // Order produces no diagnostic group at all, and a directory that is not an entry of
+    // the configured Orders Directory has no Order scope to report whatever stands under
+    // it. The paths come from the same place for the same reason — they are the Package's
+    // own account of where this Order's documents are.
+    let Some(paths) = report
+        .examined_orders()
+        .iter()
+        .find(|paths| paths.directory().absolute_path() == directory)
+        .cloned()
+    else {
+        return Err(OrderDiagnosisError::OrderNotFound {
+            directory: located_within(&root, &directory),
+            root,
+        });
+    };
+    let diagnostics = report
+        .diagnostic_groups()
+        .iter()
+        .filter(|group| within_scope(group, &directory))
+        .flat_map(|group| group.diagnostics().iter().cloned())
+        .collect::<Vec<_>>();
 
     let valid = !diagnostics
         .iter()
@@ -245,13 +228,23 @@ pub fn diagnose_order<F: crate::ports::FileSystem>(
     let (cases, unactionable) = cases_for(&diagnostics);
 
     Ok(OrderDiagnosis {
-        directory,
+        paths,
         root,
         valid,
         diagnostics,
         cases,
         unactionable,
     })
+}
+
+/// One path this Package can name, in the best spelling it has for it.
+fn located_within(root: &Path, path: &Path) -> FailedPath {
+    match package_relative_path_text(root, path)
+        .and_then(|relative| Location::within_package(path.to_path_buf(), relative).ok())
+    {
+        Some(location) => FailedPath::Located(location),
+        None => FailedPath::of(path),
+    }
 }
 
 /// Resolves the Package that owns this directory from its position beneath a root
@@ -274,7 +267,9 @@ fn package_root_of<F: crate::ports::FileSystem>(
             }
         }
     }
-    Err(OrderDiagnosisError::UnmanagedPackage)
+    Err(OrderDiagnosisError::UnmanagedPackage {
+        directory: directory.to_path_buf(),
+    })
 }
 
 fn within_scope(group: &DiagnosticGroup, directory: &Path) -> bool {
@@ -282,90 +277,4 @@ fn within_scope(group: &DiagnosticGroup, directory: &Path) -> bool {
         EvidenceScope::Package => false,
         _ => group.location().absolute_path().starts_with(directory),
     }
-}
-
-fn discovered(report: &crate::canonical::ExhaustiveValidationReport, directory: &Path) -> bool {
-    report.order_readmes().iter().any(|readme| {
-        readme
-            .reference()
-            .location()
-            .absolute_path()
-            .starts_with(directory)
-    })
-}
-
-/// Maps diagnosed evidence to the explicit safe actions the repair capabilities are
-/// authorized to execute. An evidence family absent from this mapping deliberately
-/// has no case: this core never guesses a fact, salvages malformed JSON, interprets
-/// an unsupported version, or adopts missing metadata.
-fn cases_for(diagnostics: &[Diagnostic]) -> (Vec<RepairCase>, Vec<UnactionableFinding>) {
-    let mut cases = Vec::new();
-    let mut unactionable = Vec::new();
-    for diagnostic in diagnostics {
-        // Whether a safe action exists follows from the evidence family, not from
-        // severity. An abandoned staging candidate does not invalidate its Order, yet
-        // promoting it is one of the explicit repairs this core is authorized to
-        // offer.
-        let actions: &[RepairAction] = match diagnostic.code() {
-            // Parseable metadata that fails its schema or Package semantics may be
-            // replaced wholesale by a confirmed valid record.
-            DiagnosticCode::ManagedArtifactInvalidShape | DiagnosticCode::OrderSemanticInvalid => {
-                &[RepairAction::ReplaceManagedRecord]
-            }
-            DiagnosticCode::StagingArtifactPresent => &[RepairAction::PromoteStagingCandidate],
-            DiagnosticCode::VendorReferenceUnresolved => &[
-                RepairAction::AssignExistingVendor,
-                RepairAction::CreateAndAssignVendor,
-                RepairAction::ClearVendorReference,
-            ],
-            DiagnosticCode::OrderIdDuplicate => &[RepairAction::AdoptNewOrderIdentity],
-            DiagnosticCode::OrderPackageLocatorMismatch => &[RepairAction::RepairPackageLocator],
-            _ => &[],
-        };
-        if actions.is_empty() {
-            // Only a condition that actually invalidates the Order is reported as
-            // one nothing safe can be done about; an ordinary warning is simply a
-            // diagnostic.
-            if diagnostic.severity() == crate::readme::Severity::Error {
-                unactionable.push(UnactionableFinding {
-                    code: diagnostic.code(),
-                    location: diagnostic.primary_location().clone(),
-                });
-            }
-            continue;
-        }
-        let location = diagnostic.primary_location().clone();
-        cases.push(RepairCase {
-            handle: handle_for(diagnostic),
-            code: diagnostic.code(),
-            scope: diagnostic.scope(),
-            location,
-            actions: actions.to_vec(),
-        });
-    }
-    (cases, unactionable)
-}
-
-/// A handle names one diagnosed condition *and the evidence that distinguishes it*.
-///
-/// The code and the path are kept because they make a handle recognizable, but they
-/// are not what identifies the condition: both are identical across every candidate
-/// that has ever occupied one path, so a handle built from them alone confirms a
-/// repair of whatever happens to be there now. The evidence digest is what makes a
-/// confirmation stop working once the fact it named has moved.
-///
-/// The evidence comes from [`EvidenceFingerprint::of_diagnostic`] rather than being
-/// restated here, so exactly one place decides which facts distinguish a diagnosed
-/// condition, and a handle and a plan confirmed against the same diagnosis cannot
-/// disagree about it.
-///
-/// It stays derived, so the same snapshot always yields the same handle and a
-/// corrected condition simply stops appearing.
-fn handle_for(diagnostic: &Diagnostic) -> String {
-    let path = location_text(diagnostic.primary_location());
-    format!(
-        "{}:{path}:{}",
-        diagnostic.code().as_str(),
-        EvidenceFingerprint::of_diagnostic(diagnostic).digest()
-    )
 }

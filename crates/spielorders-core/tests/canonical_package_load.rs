@@ -3,17 +3,46 @@
 //! contract; Decide how Package Index freshness is proven without canonical rereads.
 
 use crate::support::{RealFileSystem, TemporaryTree};
+use spielorders_core::adoption::{OrderAdoptionInput, OrderAdoptionPlanError, plan_order_adoption};
 use spielorders_core::canonical::{
-    CanonicalPackageLoad, MetadataState, UpgradeArtifactState, inspect_canonical_package,
+    CanonicalPackageLoad, ExhaustivePackageValidation, MetadataState, PackageLoad,
+    UpgradeArtifactState, inspect_canonical_package, open_package, validate_package_exhaustively,
 };
-use spielorders_core::ports::{DirectoryEntry, FileSystem, FileSystemEntryKind};
-use spielorders_core::readme::{DiagnosticCode, DiagnosticEvidence, EvidenceScope, Severity};
+use spielorders_core::creation::{OrderCreationInput, OrderCreationPlanError, plan_order_creation};
+use spielorders_core::metadata::OrderStatus;
+use spielorders_core::ports::{
+    DirectoryEntry, FileSystem, FileSystemEntryKind, LocalCalendar, LocalDate,
+};
+use spielorders_core::readme::{
+    DiagnosticCode, DiagnosticEvidence, EvidenceScope, FailedPath, FileSystemOperation,
+    OperationEvidence, Severity,
+};
+use spielorders_core::readme_writes::{ReadmeWritePlanError, plan_package_readme_write};
+use spielorders_core::vendors::{
+    ContactAssignments, VendorAssignments, VendorCapabilityError, list_vendor_contacts,
+    plan_vendor_contact_add, plan_vendor_contact_edit, plan_vendor_contact_move,
+    plan_vendor_contact_remove, plan_vendor_creation, plan_vendor_edit, plan_vendor_hide,
+    plan_vendor_unhide, show_vendor,
+};
 use std::{
     cell::RefCell,
     collections::BTreeMap,
     collections::BTreeSet,
-    path::{Path, PathBuf},
+    io,
+    path::{Component, Path, PathBuf},
 };
+
+struct FixedCalendar;
+
+impl LocalCalendar for FixedCalendar {
+    fn today(&self) -> LocalDate {
+        LocalDate {
+            year: 2026,
+            month: 8,
+            day: 22,
+        }
+    }
+}
 
 const VERSION: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -1098,8 +1127,10 @@ fn unclassifiable_filesystem_failures_return_exact_operation_evidence() {
             panic!("unclassifiable filesystem failure must remain an operation result")
         };
         assert_eq!(
-            failure.primary_location().absolute_path(),
-            Path::new(expected_path)
+            failure
+                .primary_location()
+                .map(|location| location.absolute_path()),
+            Some(Path::new(expected_path))
         );
         assert_eq!(
             failure.evidence(),
@@ -1449,6 +1480,7 @@ fn resolved_orders_directory_failures_use_only_outside_or_reserved_reasons() {
 #[test]
 fn ticket_two_public_vocabulary_uses_every_closed_stable_spelling() {
     use spielorders_core::canonical::{PackageIndexRefresh, PackageIndexState};
+    use spielorders_core::order::CalculatedTotal;
     use spielorders_core::readme::{
         ConfigurationPathKind, ConfigurationPathReason, ConfiguredOrdersDirectoryReason,
         FileSystemOperation, ManagedArtifactKind, OrderLocatorReason, OrderSemanticReason,
@@ -1571,6 +1603,14 @@ fn ticket_two_public_vocabulary_uses_every_closed_stable_spelling() {
         "invalid_gregorian_date"
     );
     assert_eq!(
+        OrderSemanticReason::NonFiniteTotal.as_str(),
+        "non_finite_total"
+    );
+    assert_eq!(CalculatedTotal::ItemTotal.as_str(), "item_total");
+    assert_eq!(CalculatedTotal::OrderTotal.as_str(), "order_total");
+    assert_eq!(OrderLocatorReason::Absent.as_str(), "absent");
+    assert_eq!(OrderLocatorReason::Malformed.as_str(), "malformed");
+    assert_eq!(
         OrderLocatorReason::NotActiveDirectChild.as_str(),
         "not_active_direct_child"
     );
@@ -1635,4 +1675,226 @@ fn diagnostic_groups_and_composed_order_diagnostics_follow_stable_scope_path_and
         groups[2].diagnostics()[0].code(),
         DiagnosticCode::OrderIdDuplicate
     );
+}
+
+/// A caller-supplied root the filesystem cannot canonicalize is a typed load failure
+/// that names the path the caller supplied.
+///
+/// The defect this catches aborts the process: the failure branch built its evidence
+/// with `Location::absolute(selected_root).expect(...)`, and `Location` refuses any
+/// path that is not absolute, so every relative root that failed to resolve panicked
+/// inside the core instead of returning. A relative root that *does* resolve never
+/// reaches the branch, which is why nothing else covers it.
+///
+/// Naming the path back is the substance rather than a nicety: a caller has to be able
+/// to say which root it asked about, and it cannot resolve the path itself to find out —
+/// that is the operation that just failed.
+#[test]
+fn a_relative_root_that_cannot_be_canonicalized_fails_naming_the_path_supplied() {
+    let selected_root = Path::new("./no-such-package-root");
+
+    let CanonicalPackageLoad::OperationFailed(failure) =
+        inspect_canonical_package(selected_root, &RealFileSystem)
+    else {
+        panic!("a root that cannot be canonicalized is an operation failure")
+    };
+    assert_eq!(
+        failure.evidence(),
+        &OperationEvidence::FileSystem {
+            operation: FileSystemOperation::Canonicalize
+        }
+    );
+    assert_eq!(
+        failure.primary_path(),
+        &FailedPath::Unlocated(selected_root.to_path_buf())
+    );
+    assert_eq!(failure.primary_path().as_path(), selected_root);
+    // There is no absolute spelling to report and none is invented, at either level of
+    // the answer.
+    assert_eq!(failure.primary_location(), None);
+    assert_eq!(failure.root(), None);
+}
+
+/// An absolute root that cannot be canonicalized keeps naming its `Location`.
+///
+/// The two halves of the new vocabulary are not interchangeable, and this is the half
+/// that already worked: a path this application can express stays expressed, so making
+/// the relative case answerable did not cost the absolute case its Package-relative and
+/// absolute spellings.
+#[test]
+fn an_absolute_root_that_cannot_be_canonicalized_still_names_its_location() {
+    let filesystem = minimal_package_filesystem().fail_canonicalize("/package");
+
+    let CanonicalPackageLoad::OperationFailed(failure) =
+        inspect_canonical_package(Path::new("/package"), &filesystem)
+    else {
+        panic!("a root that cannot be canonicalized is an operation failure")
+    };
+    let located = failure
+        .primary_location()
+        .expect("an absolute selected root is a Location this application expresses");
+    assert_eq!(located.absolute_path(), Path::new("/package"));
+    assert_eq!(
+        failure.root().map(|root| root.absolute_path()),
+        Some(Path::new("/package"))
+    );
+}
+
+/// Every public core entry point that takes a caller-supplied Package Root answers a
+/// root it cannot resolve, rather than aborting the process.
+///
+/// The panic was one branch of one private function, but the entry points that reach it
+/// are the contract. Four of these — Order creation, Order adoption, Package README
+/// writes, and the whole Vendor family — reach it through private helpers rather than by
+/// calling the load themselves, so a reader checking only the load's own callers misses
+/// them.
+///
+/// The relative root is what makes this a test rather than a restatement: each of these
+/// aborted for every relative root that failed to resolve, and each now returns the
+/// typed variant its own error vocabulary already had for a Package that cannot be read.
+#[test]
+fn no_public_entry_point_aborts_on_a_root_it_cannot_resolve() {
+    let root = Path::new("./no-such-package-root");
+
+    assert!(matches!(
+        inspect_canonical_package(root, &RealFileSystem),
+        CanonicalPackageLoad::OperationFailed(_)
+    ));
+    assert!(matches!(
+        open_package(root, &RealFileSystem),
+        PackageLoad::OperationFailed(_)
+    ));
+    assert!(matches!(
+        validate_package_exhaustively(root, &RealFileSystem),
+        ExhaustivePackageValidation::OperationFailed(_)
+    ));
+
+    assert!(matches!(
+        plan_order_creation(
+            root,
+            &OrderCreationInput::new("Anything"),
+            &FixedCalendar,
+            &RealFileSystem,
+        ),
+        Err(OrderCreationPlanError::PackageOperationFailed)
+    ));
+    assert!(matches!(
+        plan_order_adoption(
+            root,
+            &root.join("candidate"),
+            &OrderAdoptionInput::new("Anything", "2026-08-22", OrderStatus::Ordered),
+            &RealFileSystem,
+        ),
+        Err(OrderAdoptionPlanError::PackageOperationFailed)
+    ));
+    assert!(matches!(
+        plan_package_readme_write(root, "text", &RealFileSystem),
+        Err(ReadmeWritePlanError::PackageOperationFailed)
+    ));
+
+    // The Vendor family shares one private resolution, and every entry point in it
+    // takes the Root directly. All ten are named because the review boundary is the
+    // set of entry points, and a set is not evidenced by a representative of it.
+    let contacts = ContactAssignments::new().assign("name", "Anyone");
+    let vendor_failures: [Result<_, VendorCapabilityError<io::Error>>; 10] = [
+        show_vendor(root, "vendor", &RealFileSystem).map(|_| ()),
+        list_vendor_contacts(root, "vendor", &RealFileSystem).map(|_| ()),
+        plan_vendor_creation(
+            root,
+            &VendorAssignments::new().assign("name", "Anyone"),
+            &RealFileSystem,
+        )
+        .map(|_| ()),
+        plan_vendor_edit(
+            root,
+            "vendor",
+            &VendorAssignments::new().assign("name", "Anyone"),
+            &RealFileSystem,
+        )
+        .map(|_| ()),
+        plan_vendor_hide(root, "vendor", &RealFileSystem).map(|_| ()),
+        plan_vendor_unhide(root, "vendor", &RealFileSystem).map(|_| ()),
+        plan_vendor_contact_add(root, "vendor", &contacts, None, &RealFileSystem).map(|_| ()),
+        plan_vendor_contact_edit(root, "vendor", 0, &contacts, &RealFileSystem).map(|_| ()),
+        plan_vendor_contact_move(root, "vendor", 0, 1, &RealFileSystem).map(|_| ()),
+        plan_vendor_contact_remove(root, "vendor", 0, &RealFileSystem).map(|_| ()),
+    ];
+    for failure in vendor_failures {
+        assert!(matches!(
+            failure,
+            Err(VendorCapabilityError::PackageOperationFailed(_))
+        ));
+    }
+}
+
+/// A relative root that resolves is unaffected, and this proves it rather than assuming
+/// it.
+///
+/// Canonicalization normalizes a resolvable relative path before anything downstream can
+/// tell how it was spelled, so the load through the relative spelling and the load
+/// through the resolved absolute one are the same answer. Nothing in this ticket touched
+/// how a root resolves, and this is the assertion that would notice if it had.
+#[test]
+fn a_relative_root_that_resolves_loads_exactly_as_its_resolved_root_does() {
+    let tree = TemporaryTree::new("relative-root-that-resolves");
+    let root = tree.path().join("package");
+    std::fs::create_dir_all(root.join(".spielorders")).expect("the Package metadata directory");
+    std::fs::write(root.join(".spielorders/config.toml"), b"").expect("the configuration");
+    std::fs::write(root.join(".spielorders/version.json"), VERSION).expect("the version marker");
+    std::fs::write(root.join(".spielorders/vendors.json"), VENDORS).expect("the Vendor record");
+    std::fs::create_dir(root.join("Orders")).expect("the Orders Directory");
+
+    let resolved = std::fs::canonicalize(&root).expect("the Root resolves");
+
+    // Two roots that resolve to the same directory and are spelled differently from it:
+    // a genuinely relative one, and an absolute one carrying a component the filesystem
+    // has to normalize away. Both must load what the resolved spelling loads.
+    for selected in [
+        relative_to_working_directory(&resolved),
+        root.join("Orders").join(".."),
+    ] {
+        let CanonicalPackageLoad::CurrentCandidate(through_selected) =
+            inspect_canonical_package(&selected, &RealFileSystem)
+        else {
+            panic!("a root that resolves loads its Package, however it was spelled")
+        };
+        let CanonicalPackageLoad::CurrentCandidate(through_resolved) =
+            inspect_canonical_package(&resolved, &RealFileSystem)
+        else {
+            panic!("the resolved root loads the same Package")
+        };
+        assert_eq!(through_selected, through_resolved);
+    }
+}
+
+/// A relative spelling of `resolved`, built by ascending from the process working
+/// directory to the filesystem root and descending again.
+///
+/// A relative path only means anything against a working directory, and this suite
+/// cannot choose one: `set_current_dir` is process-global and these tests share a
+/// process. Spelling the ascent out is what is left, and it makes the test's own premise
+/// checkable — the assertion below is that the path really is relative, not that it looks
+/// it.
+fn relative_to_working_directory(resolved: &Path) -> PathBuf {
+    let working_directory = std::fs::canonicalize(
+        std::env::current_dir().expect("the process has a working directory"),
+    )
+    .expect("the process working directory resolves");
+    let mut relative = PathBuf::new();
+    for _ in working_directory
+        .components()
+        .filter(|component| matches!(component, Component::Normal(_)))
+    {
+        relative.push("..");
+    }
+    relative.push(
+        resolved
+            .strip_prefix(Component::RootDir.as_os_str())
+            .expect("a resolved path is absolute"),
+    );
+    assert!(
+        relative.is_relative(),
+        "the relative spelling must actually be relative"
+    );
+    relative
 }

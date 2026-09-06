@@ -378,7 +378,7 @@ fn observation_failure_returns_stable_operation_evidence_without_fabricating_exi
         OperationFailureCode::FilesystemOperationFailed
     );
     assert_eq!(failure.scope(), EvidenceScope::Operation);
-    assert_eq!(failure.primary_location(), &location);
+    assert_eq!(failure.primary_location(), Some(&location));
     assert!(failure.related_locations().is_empty());
     assert_eq!(
         failure.evidence(),

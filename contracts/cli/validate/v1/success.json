@@ -1,0 +1,56 @@
+{
+  "contract": "spielorders.validate",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>"
+  },
+  "data": {
+    "scope": "package",
+    "package_readme": {
+      "absolute_path": "<PACKAGE_ROOT>/README.md",
+      "package_relative_path": "README.md"
+    },
+    "orders": [
+      {
+        "directory": {
+          "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace",
+          "package_relative_path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace"
+        },
+        "metadata_directory": {
+          "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders",
+          "package_relative_path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders"
+        },
+        "order": {
+          "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/order.json",
+          "package_relative_path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/order.json"
+        },
+        "readme": {
+          "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/README.md",
+          "package_relative_path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/README.md"
+        }
+      },
+      {
+        "directory": {
+          "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace",
+          "package_relative_path": "Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace"
+        },
+        "metadata_directory": {
+          "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace/.spielorders",
+          "package_relative_path": "Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace/.spielorders"
+        },
+        "order": {
+          "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace/.spielorders/order.json",
+          "package_relative_path": "Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace/.spielorders/order.json"
+        },
+        "readme": {
+          "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace/README.md",
+          "package_relative_path": "Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace/README.md"
+        }
+      }
+    ],
+    "offered_repairs": []
+  },
+  "diagnostics": [],
+  "error": null
+}

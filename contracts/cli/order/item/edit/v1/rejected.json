@@ -1,0 +1,29 @@
+{
+  "contract": "spielorders.order.item.edit",
+  "contract_version": 1,
+  "ok": false,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>",
+    "order_root": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace"
+  },
+  "data": null,
+  "diagnostics": [],
+  "error": {
+    "code": "order_item_position_invalid",
+    "message": "9 is not a position this command can address: they run from 1 to 3.",
+    "scope": "order",
+    "paths": [
+      {
+        "spelling": "resolved",
+        "path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace",
+        "package_relative_path": "Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace"
+      }
+    ],
+    "identities": [
+      {
+        "kind": "source_position",
+        "value": "9"
+      }
+    ]
+  }
+}

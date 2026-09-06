@@ -592,4 +592,7 @@ fn fixture_package_root(locator: &str) -> spielorders_core::metadata::PackageRoo
     OrderDocument::from_json_bytes(source.as_bytes())
         .expect("locator fixture parses")
         .package_root
+        .spelled()
+        .cloned()
+        .expect("the locator fixture spells a locator")
 }

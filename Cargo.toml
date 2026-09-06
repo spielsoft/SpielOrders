@@ -4,12 +4,13 @@ members = [
   "crates/spielorders-cli",
   "apps/desktop/src-tauri",
 ]
+default-members = ["crates/spielorders-core", "crates/spielorders-cli"]
 resolver = "3"
 
 [workspace.package]
 edition = "2024"
 license = "MIT"
-rust-version = "1.98.0"
+rust-version = "1.98.1"
 version = "0.1.0"
 
 [workspace.dependencies]

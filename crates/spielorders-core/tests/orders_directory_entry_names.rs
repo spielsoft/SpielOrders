@@ -213,10 +213,15 @@ fn adoption_refuses_a_candidate_whose_name_cannot_be_expressed() {
     )
     .expect_err("a directory this application cannot name is not adoptable");
 
-    let OrderAdoptionPlanError::NameUnusableCandidate { path } = error else {
+    let OrderAdoptionPlanError::NameUnusableCandidate { location } = error else {
         panic!("adoption names the candidate it refused: {error:?}")
     };
-    assert_eq!(path, unusable);
+    assert_eq!(location.absolute_path(), unusable);
+    assert_eq!(
+        location.package_relative_path(),
+        None,
+        "having no name this Package can express is what the refusal reports"
+    );
     // The refusal is a plan-time answer: nothing was written into the directory.
     assert!(!unusable.join(".spielorders").exists());
 }

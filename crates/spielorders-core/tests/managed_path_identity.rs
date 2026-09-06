@@ -318,7 +318,7 @@ fn initialization_refuses_two_paths_that_already_name_one_directory() {
     .expect_err("two configured paths that already name one directory are refused");
 
     assert!(
-        matches!(error, InitializationPlanError::ManagedPathsOverlap),
+        matches!(error, InitializationPlanError::ManagedPathsOverlap { .. }),
         "unexpected refusal: {error:?}"
     );
     assert!(!tree.path().join(".spielorders").exists());

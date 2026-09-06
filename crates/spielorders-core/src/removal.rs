@@ -14,14 +14,15 @@ use crate::{
         DestinationExpectation, ValidatedReplacementError, ValidatedReplacementFailure,
         replace_validated_file_expecting, staging_path,
     },
-    metadata::OrderDocument,
+    metadata::{OrderDocument, PackageRoot},
     mutation::MutationReport,
-    operations::OperationFailure,
+    operations::{FailedPath, OperationFailure},
     order_edits::{OrderResolutionFailure, resolve_order},
     ports::{
         DirectoryFileSystem, FileSystem, FileSystemEntryKind, NativeTrash,
         NewDirectoryRenameOutcome,
     },
+    readme::{Location, package_relative_path_text},
 };
 use std::path::{Path, PathBuf};
 
@@ -76,10 +77,27 @@ pub enum OrderRemovalOperationKind {
     RefreshPackageIndex,
 }
 
+impl OrderRemovalOperationKind {
+    /// This operation's one stable spelling.
+    ///
+    /// Beside the operation rather than in an adapter, so an operation reported by the CLI
+    /// and the same operation reported to the desktop shell cannot come to be named
+    /// differently.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CreateRemovedOrdersDirectory => "create_removed_orders_directory",
+            Self::MoveOrderDirectory => "move_order_directory",
+            Self::SubmitDirectoryToTrash => "submit_directory_to_trash",
+            Self::ReplaceOrderRecord => "replace_order_record",
+            Self::RefreshPackageIndex => "refresh_package_index",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OrderRemovalOperation {
     kind: OrderRemovalOperationKind,
-    path: PathBuf,
+    location: Location,
 }
 
 impl OrderRemovalOperation {
@@ -87,8 +105,14 @@ impl OrderRemovalOperation {
         self.kind
     }
 
+    /// Where this operation acts, as this Package locates it — so a caller reporting it
+    /// carries the Package-relative spelling as well as the absolute path.
+    pub fn location(&self) -> &Location {
+        &self.location
+    }
+
     pub fn path(&self) -> &Path {
-        &self.path
+        self.location.absolute_path()
     }
 }
 
@@ -96,9 +120,9 @@ impl OrderRemovalOperation {
 #[derive(Clone, Debug, PartialEq)]
 pub struct OrderRemovalPlan {
     root: PathBuf,
-    source: PathBuf,
-    destination: Option<PathBuf>,
-    removed_directory: Option<PathBuf>,
+    source: Location,
+    destination: Option<Location>,
+    removed_directory: Option<Location>,
     creates_removed_directory: bool,
     disposition: RemovalDisposition,
     locator: LocatorOutcome,
@@ -114,15 +138,20 @@ impl OrderRemovalPlan {
         &self.root
     }
 
-    /// The Order Directory as it stands now.
-    pub fn source(&self) -> &Path {
+    /// The Order Directory as it stands now, as this Package locates it.
+    ///
+    /// A `Location` rather than a path, for the reason
+    /// [`OrderRemovalOperation::location`] carries one: a caller reporting where this
+    /// directory is carries the Package-relative spelling as well as the absolute path,
+    /// and the normalized Package-relative grammar is this crate's.
+    pub fn source(&self) -> &Location {
         &self.source
     }
 
     /// Where the directory would land, when the disposition keeps it on this
     /// filesystem at a path this core chooses. Trash disposition has no such path.
-    pub fn destination(&self) -> Option<&Path> {
-        self.destination.as_deref()
+    pub fn destination(&self) -> Option<&Location> {
+        self.destination.as_ref()
     }
 
     pub fn disposition(&self) -> RemovalDisposition {
@@ -149,6 +178,15 @@ impl OrderRemovalPlan {
     pub fn operations(&self) -> &[OrderRemovalOperation] {
         &self.operations
     }
+
+    /// The derived Package Index as it stood when this removal was planned.
+    ///
+    /// The state a run that never commits has to report: committing refreshes the index
+    /// and [`OrderRemovalResult::index`] is that refreshed record, so a dry run has none
+    /// of its own and answers with what it observed instead.
+    pub fn prior_index(&self) -> &PackageIndexRecord {
+        &self.prior_index
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -165,11 +203,20 @@ pub enum OrderRemovalPlanError<E> {
     },
     /// Something already occupies the Order's basename inside the Removed Orders
     /// Directory. Removal stops rather than inventing a suffix.
+    ///
+    /// **A `Location` rather than a `PathBuf`**, because the projected destination is a
+    /// path inside this Package and [`located`] has already established its
+    /// Package-relative spelling — which a refusal owes exactly as a success does.
     DestinationCollision {
-        path: PathBuf,
+        location: Location,
     },
+    /// **A [`FailedPath`] rather than a `PathBuf`**, because the paths that reach here do
+    /// not agree about whether a Package surrounds them: an operation inside a Root this
+    /// capability established carries that Root's spelling, and one performed while
+    /// resolving the Order Directory up to its Package happens before there is a Root to
+    /// spell it against. The type is what tells them apart.
     FileSystem {
-        path: PathBuf,
+        path: FailedPath,
         error: E,
     },
 }
@@ -195,20 +242,20 @@ pub fn plan_order_removal<F: FileSystem>(
 ) -> Result<OrderRemovalPlan, OrderRemovalPlanError<F::Error>> {
     let (package, order) = resolve_order(order_directory, filesystem)?;
     let root = package.context().root().absolute_path().to_path_buf();
-    let source = order.paths().directory().absolute_path().to_path_buf();
+    let source = order.paths().directory().clone();
     let document = order.document().clone();
     // A removal moves the README with its directory, so what the load knew is what
     // the removed Order carries.
     let readme_text = order.readme_text().map(str::to_owned);
     let prior_index = package.index().clone();
-    let index_path = package.context().index().absolute_path().to_path_buf();
+    let index = package.context().index().clone();
 
     let mut operations = Vec::new();
     let (destination, removed_directory, creates_removed_directory, locator) = match disposition {
         RemovalDisposition::PlatformTrash => {
             operations.push(OrderRemovalOperation {
                 kind: OrderRemovalOperationKind::SubmitDirectoryToTrash,
-                path: source.clone(),
+                location: source.clone(),
             });
             (None, None, false, LocatorOutcome::NotApplicable)
         }
@@ -226,57 +273,57 @@ pub fn plan_order_removal<F: FileSystem>(
             let removed = package
                 .context()
                 .removed_orders_directory()
-                .map(|location| location.absolute_path().to_path_buf())
+                .cloned()
                 .ok_or_else(|| OrderRemovalPlanError::DamagedPackage)?;
             // It is created lazily, so it may legitimately be absent.
-            let creates = match filesystem.symlink_metadata(&removed) {
+            let creates = match filesystem.symlink_metadata(removed.absolute_path()) {
                 Ok(None) => true,
                 Ok(Some(_)) => false,
                 Err(error) => {
                     return Err(OrderRemovalPlanError::FileSystem {
-                        path: removed,
+                        path: FailedPath::Located(removed.clone()),
                         error,
                     });
                 }
             };
             // The same projection the evidence re-observes, so plan-time and
             // commit-time answers cannot drift apart through two spellings of one rule.
-            let destination = projected_destination(&source, &package).ok_or_else(|| {
-                OrderRemovalPlanError::OrderNotFound {
-                    path: source.clone(),
-                }
-            })?;
+            let destination = projected_destination(source.absolute_path(), &package)
+                .map(|destination| located(&root, destination))
+                .ok_or_else(|| OrderRemovalPlanError::OrderNotFound {
+                    path: source.absolute_path().to_path_buf(),
+                })?;
             if !creates {
-                match filesystem.symlink_metadata(&destination) {
+                match filesystem.symlink_metadata(destination.absolute_path()) {
                     Ok(None) => {}
                     Ok(Some(_)) => {
                         return Err(OrderRemovalPlanError::DestinationCollision {
-                            path: destination,
+                            location: destination.clone(),
                         });
                     }
                     Err(error) => {
                         return Err(OrderRemovalPlanError::FileSystem {
-                            path: destination,
+                            path: FailedPath::Located(destination.clone()),
                             error,
                         });
                     }
                 }
             }
-            let locator = locator_outcome(removed_relative_depth + 1, &document);
+            let locator = locator_outcome(removed_relative_depth + 1, order.package_root());
             if creates {
                 operations.push(OrderRemovalOperation {
                     kind: OrderRemovalOperationKind::CreateRemovedOrdersDirectory,
-                    path: removed.clone(),
+                    location: removed.clone(),
                 });
             }
             operations.push(OrderRemovalOperation {
                 kind: OrderRemovalOperationKind::MoveOrderDirectory,
-                path: destination.clone(),
+                location: destination.clone(),
             });
             if matches!(locator, LocatorOutcome::Updated { .. }) {
                 operations.push(OrderRemovalOperation {
                     kind: OrderRemovalOperationKind::ReplaceOrderRecord,
-                    path: destination.join(".spielorders").join("order.json"),
+                    location: located(&root, order_record(destination.absolute_path())),
                 });
             }
             (Some(destination), Some(removed), creates, locator)
@@ -284,7 +331,7 @@ pub fn plan_order_removal<F: FileSystem>(
     };
     operations.push(OrderRemovalOperation {
         kind: OrderRemovalOperationKind::RefreshPackageIndex,
-        path: index_path,
+        location: index,
     });
 
     let evidence = removal_evidence(&package, &order, disposition);
@@ -377,8 +424,12 @@ fn removal_evidence(
 /// The locator is a normalized relative path from the Order Directory to its Package
 /// root, so it depends only on how deep the directory sits. A disposition that keeps
 /// the same depth keeps the same locator.
-fn locator_outcome(depth: usize, document: &OrderDocument) -> LocatorOutcome {
-    let stored = document.package_root.as_str().to_owned();
+///
+/// It takes the locator rather than the record, because a removal plans for an Order the
+/// Package load judged healthy and [`HealthyOrder::package_root`] is where that Order's
+/// locator is already settled.
+fn locator_outcome(depth: usize, locator: &PackageRoot) -> LocatorOutcome {
+    let stored = locator.as_str().to_owned();
     let projected = vec![".."; depth].join("/");
     if projected == stored {
         LocatorOutcome::Unchanged { locator: stored }
@@ -435,21 +486,26 @@ pub enum RemovedDirectoryCleanup<E> {
     /// rejection left nothing of it behind. This reports that end state rather than
     /// claiming the rollback is what removed it: a directory already gone when the
     /// rollback looked reaches the same state by another route.
-    Removed { path: PathBuf },
+    Removed { location: Location },
     /// Left in place deliberately: it is no longer the empty ordinary directory this
     /// operation created. Something arrived inside it, or something else stands at its
     /// name, and neither is this rollback's to discard.
-    Retained { path: PathBuf },
+    Retained { location: Location },
     /// The rollback could not be completed, so the directory this operation created may
     /// still be there. Reported beside the failure that initiated it rather than in
     /// place of that failure: the removal was refused, and this is what refusing left.
-    Failed { path: PathBuf, error: E },
+    Failed { location: Location, error: E },
 }
 
 #[derive(Debug, PartialEq)]
 pub enum OrderRemovalRejection<E> {
+    /// **A `Location` rather than a `PathBuf`**, for the reason
+    /// [`OrderRemovalPlanError::DestinationCollision`] carries one: every path named here
+    /// is one this plan derived inside the Root it established — the Order Directory, the
+    /// Removed Orders Directory, or the destination inside it — and a response owes that
+    /// Root's spelling for what it names, in a refusal exactly as in a success.
     PreconditionsChanged {
-        path: PathBuf,
+        location: Location,
     },
     /// The facts this removal was authorized against no longer stand, so the plan no
     /// longer names the right Order or the right place to put it. The seam's own answer
@@ -459,20 +515,20 @@ pub enum OrderRemovalRejection<E> {
         outcome: EvidenceOutcome,
     },
     DestinationCollision {
-        path: PathBuf,
+        location: Location,
         cleanup: RemovedDirectoryCleanup<E>,
     },
     RemovedDirectoryCreationFailed {
-        path: PathBuf,
+        location: Location,
         error: E,
     },
     MoveFailed {
-        path: PathBuf,
+        location: Location,
         error: E,
         cleanup: RemovedDirectoryCleanup<E>,
     },
     TrashSubmissionFailed {
-        path: PathBuf,
+        location: Location,
         error: E,
     },
 }
@@ -493,6 +549,23 @@ pub enum OrderRemovalWarning<E> {
     /// new path. The Order is already outside active scope, so this damages nothing
     /// the Package loads; it is reported so a caller can correct it.
     LocatorUpdateFailed(LocatorUpdateFailure<E>),
+}
+
+impl<E> OrderRemovalWarning<E> {
+    /// This warning's one stable spelling.
+    ///
+    /// Beside the warning rather than in an adapter, and the first two are deliberately
+    /// the same words `crate::creation`, `crate::adoption`, and `crate::alignment` use:
+    /// a committed mutation whose derived refresh failed is one condition however the
+    /// Package came to need refreshing. The third is this capability's own, because only
+    /// a disposition rewrites a locator.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::IndexRefreshFailed(_) => "index_refresh_failed",
+            Self::RefreshUnavailable => "refresh_unavailable",
+            Self::LocatorUpdateFailed(_) => "locator_update_failed",
+        }
+    }
 }
 
 /// Why the moved Order's technical locator was not rewritten, and what the attempt
@@ -575,20 +648,20 @@ where
     // rather than left to the resolution below, which canonicalizes: a link standing
     // where the directory was would resolve to whatever it points at and then be
     // disposed of in its place.
-    match filesystem.symlink_metadata(&plan.source) {
+    match filesystem.symlink_metadata(plan.source.absolute_path()) {
         Ok(Some(FileSystemEntryKind::Directory)) => {}
         _ => {
-            let path = plan.source.clone();
-            return preconditions_changed(plan, path);
+            let source = plan.source.clone();
+            return preconditions_changed(plan, source);
         }
     }
 
     // Re-resolve the subject rather than settle for having found something there. A
     // source that no longer resolves to a healthy Order of its own Package is neither
     // this plan's Order nor identifiable as any other.
-    let Ok((package, order)) = resolve_order(&plan.source, filesystem) else {
-        let path = plan.source.clone();
-        return preconditions_changed(plan, path);
+    let Ok((package, order)) = resolve_order(plan.source.absolute_path(), filesystem) else {
+        let source = plan.source.clone();
+        return preconditions_changed(plan, source);
     };
 
     // Immediately before the first effect, which is the lazy creation of the Removed
@@ -609,13 +682,16 @@ where
             // Exactly one narrow native effect, with the exact directory. There is no
             // filesystem delete fallback: if the platform cannot take it, nothing is
             // removed.
-            match trash.submit_directory(&plan.source) {
+            match trash.submit_directory(plan.source.absolute_path()) {
                 Ok(location) => location,
                 Err(error) => {
-                    let path = plan.source.clone();
+                    let source = plan.source.clone();
                     return MutationReport::Rejected {
                         plan,
-                        rejection: OrderRemovalRejection::TrashSubmissionFailed { path, error },
+                        rejection: OrderRemovalRejection::TrashSubmissionFailed {
+                            location: source,
+                            error,
+                        },
                     };
                 }
             }
@@ -632,12 +708,12 @@ where
             if plan.creates_removed_directory
                 && let Some(removed) = plan.removed_directory.as_ref()
             {
-                if let Err(error) = filesystem.create_directory(removed) {
-                    let path = removed.clone();
+                if let Err(error) = filesystem.create_directory(removed.absolute_path()) {
+                    let location = removed.clone();
                     return MutationReport::Rejected {
                         plan,
                         rejection: OrderRemovalRejection::RemovedDirectoryCreationFailed {
-                            path,
+                            location,
                             error,
                         },
                     };
@@ -647,14 +723,16 @@ where
             // One rename moves the complete tree. Nothing copies, enumerates, or
             // rewrites a child, so README, managed metadata, and Supporting Material
             // travel byte-identical.
-            match filesystem.rename_new_directory(&plan.source, &destination) {
+            match filesystem
+                .rename_new_directory(plan.source.absolute_path(), destination.absolute_path())
+            {
                 Ok(NewDirectoryRenameOutcome::Renamed) => {}
                 Ok(NewDirectoryRenameOutcome::DestinationExists) => {
                     let cleanup = undo_created_directory(created, filesystem);
                     return MutationReport::Rejected {
                         plan,
                         rejection: OrderRemovalRejection::DestinationCollision {
-                            path: destination,
+                            location: destination,
                             cleanup,
                         },
                     };
@@ -664,7 +742,7 @@ where
                     return MutationReport::Rejected {
                         plan,
                         rejection: OrderRemovalRejection::MoveFailed {
-                            path: destination,
+                            location: destination,
                             error,
                             cleanup,
                         },
@@ -675,17 +753,18 @@ where
             // scope, so a failure here cannot damage the Package the caller still
             // uses.
             if let LocatorOutcome::Updated { to, .. } = &plan.locator
-                && let Err(failure) = rewrite_locator(&destination, &plan.document, to, filesystem)
+                && let Err(failure) =
+                    rewrite_locator(destination.absolute_path(), &plan.document, to, filesystem)
             {
                 warnings.push(OrderRemovalWarning::LocatorUpdateFailed(failure));
             }
-            Some(destination)
+            Some(destination.absolute_path().to_path_buf())
         }
     };
 
     let order = project_committed_order(
         &plan.root,
-        &plan.source,
+        plan.source.absolute_path(),
         &plan.document,
         plan.readme_text.clone(),
     );
@@ -738,21 +817,22 @@ where
 /// rather than being swept up with it — the whole point of undoing the creation is to
 /// leave the Package as the rejected removal found it, not to take something else away.
 fn undo_created_directory<F: FileSystem + DirectoryFileSystem>(
-    created: Option<PathBuf>,
+    created: Option<Location>,
     filesystem: &F,
 ) -> RemovedDirectoryCleanup<F::Error> {
-    let Some(path) = created else {
+    let Some(location) = created else {
         return RemovedDirectoryCleanup::NothingCreated;
     };
+    let path = location.absolute_path().to_path_buf();
     match filesystem.symlink_metadata(&path) {
         Ok(Some(FileSystemEntryKind::Directory)) => {}
         // Already gone: nothing this operation created is left to undo, which is the
         // state this reports rather than a claim about who removed it.
-        Ok(None) => return RemovedDirectoryCleanup::Removed { path },
+        Ok(None) => return RemovedDirectoryCleanup::Removed { location },
         // A file or a link now stands at that name. It is not what this operation
         // created and this rollback does not remove it.
-        Ok(Some(_)) => return RemovedDirectoryCleanup::Retained { path },
-        Err(error) => return RemovedDirectoryCleanup::Failed { path, error },
+        Ok(Some(_)) => return RemovedDirectoryCleanup::Retained { location },
+        Err(error) => return RemovedDirectoryCleanup::Failed { location, error },
     }
     // Emptiness is established before the removal rather than inferred from it, so an
     // arrival this rollback can see is named as retained evidence instead of surfacing
@@ -761,12 +841,12 @@ fn undo_created_directory<F: FileSystem + DirectoryFileSystem>(
     // failed cleanup naming a directory that really is still there.
     match filesystem.read_directory(&path) {
         Ok(entries) if entries.is_empty() => {}
-        Ok(_) => return RemovedDirectoryCleanup::Retained { path },
-        Err(error) => return RemovedDirectoryCleanup::Failed { path, error },
+        Ok(_) => return RemovedDirectoryCleanup::Retained { location },
+        Err(error) => return RemovedDirectoryCleanup::Failed { location, error },
     }
     match filesystem.remove_directory(&path) {
-        Ok(()) => RemovedDirectoryCleanup::Removed { path },
-        Err(error) => RemovedDirectoryCleanup::Failed { path, error },
+        Ok(()) => RemovedDirectoryCleanup::Removed { location },
+        Err(error) => RemovedDirectoryCleanup::Failed { location, error },
     }
 }
 
@@ -790,7 +870,7 @@ fn rewrite_locator<F: FileSystem>(
     locator: &str,
     filesystem: &F,
 ) -> Result<(), LocatorUpdateFailure<F::Error>> {
-    let record = destination.join(".spielorders").join("order.json");
+    let record = order_record(destination);
     let Some(candidate) = relocated_record(document, locator) else {
         return Err(LocatorUpdateFailure {
             record,
@@ -840,10 +920,11 @@ fn rewrite_locator<F: FileSystem>(
 ///
 /// The round trip through the parse is what makes the result a validated candidate
 /// rather than an assembled one: the replaced value has to be readable back as a
-/// locator before anything is staged. `None` therefore means the plan's own record
-/// stopped round-tripping, which is an internal bug rather than a state of the
-/// Package — and after a whole directory has already moved, reporting it is a better
-/// answer than ending the process.
+/// locator before anything is staged, which is asked of the field itself because that
+/// is where the verdict now lives. `None` therefore means the plan's own record stopped
+/// round-tripping, which is an internal bug rather than a state of the Package — and
+/// after a whole directory has already moved, reporting it is a better answer than
+/// ending the process.
 fn relocated_record(document: &OrderDocument, locator: &str) -> Option<Vec<u8>> {
     let mut object = serde_json::to_value(document).ok()?.as_object().cloned()?;
     object.insert(
@@ -851,15 +932,35 @@ fn relocated_record(document: &OrderDocument, locator: &str) -> Option<Vec<u8>> 
         serde_json::Value::String(locator.to_owned()),
     );
     let bytes = serde_json::to_vec(&serde_json::Value::Object(object)).ok()?;
-    OrderDocument::from_json_bytes(&bytes)
-        .ok()?
-        .to_json_bytes()
-        .ok()
+    let relocated = OrderDocument::from_json_bytes(&bytes).ok()?;
+    relocated.package_root.spelled()?;
+    relocated.to_json_bytes().ok()
 }
 
-fn preconditions_changed<E>(plan: OrderRemovalPlan, path: PathBuf) -> OrderRemovalReport<E> {
+/// One planned path, as this Package locates it.
+///
+/// The Package-relative spelling holds by construction, as it does for a planned creation
+/// artifact: the source is a discovered Order Directory whose own `Location` the load
+/// already carries, the Removed Orders Directory is a configured root child the load has
+/// already confirmed has one, and the destination is that directory joined with the
+/// source's own basename or with this module's literal managed names.
+fn located(root: &Path, path: PathBuf) -> Location {
+    let relative = package_relative_path_text(root, &path)
+        .expect("a planned removal path has a Package-relative spelling");
+    Location::within_package(path, relative).expect("a planned removal path is normalized")
+}
+
+/// The managed Order record inside one Order Directory.
+///
+/// One spelling for the operation this removal plans and the file it later replaces, so
+/// the path it reports and the path it writes cannot come apart.
+fn order_record(directory: &Path) -> PathBuf {
+    directory.join(".spielorders").join("order.json")
+}
+
+fn preconditions_changed<E>(plan: OrderRemovalPlan, location: Location) -> OrderRemovalReport<E> {
     MutationReport::Rejected {
         plan,
-        rejection: OrderRemovalRejection::PreconditionsChanged { path },
+        rejection: OrderRemovalRejection::PreconditionsChanged { location },
     }
 }

@@ -1,0 +1,23 @@
+{
+  "contract": "spielorders.upgrade",
+  "contract_version": 1,
+  "ok": false,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>"
+  },
+  "data": null,
+  "diagnostics": [],
+  "error": {
+    "code": "upgrade_configuration_unusable",
+    "message": "the Package configuration at <PACKAGE_ROOT>/.spielorders/config.toml does not name a usable Orders Directory, so this upgrade refuses rather than assuming the conventional location: assuming wrong would find nothing pending and advance the marker past records it never migrated. Nothing was written.",
+    "scope": "package",
+    "paths": [
+      {
+        "spelling": "resolved",
+        "path": "<PACKAGE_ROOT>/.spielorders/config.toml",
+        "package_relative_path": ".spielorders/config.toml"
+      }
+    ],
+    "identities": []
+  }
+}

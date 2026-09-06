@@ -1,0 +1,14 @@
+{
+  "contract": "spielorders.package.list.orders",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>"
+  },
+  "data": {
+    "orders": [],
+    "damaged_orders": []
+  },
+  "diagnostics": [],
+  "error": null
+}

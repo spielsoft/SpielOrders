@@ -27,12 +27,13 @@ use crate::{
     filesystem::{
         DestinationExpectation, ValidatedReplacementError, replace_validated_file_expecting,
     },
-    metadata::{Config, OrderDocument, VendorsDocument, Version1, VersionDocument},
+    metadata::{Config, OrderDocument, VendorsDocument},
     mutation::MutationReport,
     operations::OperationFailure,
-    package::PackageMetadata,
+    package::vendor_aggregate_is_package_valid,
     paths::{PackagePathError, resolve_package_layout},
     ports::{FileSystem, FileSystemEntryKind},
+    readme::{Location, RootedLocation, located_in_package, rooted_at},
 };
 use std::path::{Path, PathBuf};
 
@@ -160,7 +161,7 @@ impl UpgradeArtifactState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UpgradeArtifactPlan {
     artifact: UpgradeArtifact,
-    path: PathBuf,
+    location: Location,
     state: UpgradeArtifactState,
 }
 
@@ -169,8 +170,14 @@ impl UpgradeArtifactPlan {
         self.artifact
     }
 
+    /// Where this artifact is, as the Package that holds it names it — so a caller
+    /// reporting it carries the Package-relative spelling as well as the absolute path.
+    pub fn location(&self) -> &Location {
+        &self.location
+    }
+
     pub fn path(&self) -> &Path {
-        &self.path
+        self.location.absolute_path()
     }
 
     pub fn state(&self) -> UpgradeArtifactState {
@@ -204,7 +211,7 @@ impl MetadataUpgradeOperationKind {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MetadataUpgradeOperation {
     kind: MetadataUpgradeOperationKind,
-    path: PathBuf,
+    location: Location,
 }
 
 impl MetadataUpgradeOperation {
@@ -212,8 +219,13 @@ impl MetadataUpgradeOperation {
         self.kind
     }
 
+    /// Where this operation writes, as the Package that holds it names it.
+    pub fn location(&self) -> &Location {
+        &self.location
+    }
+
     pub fn path(&self) -> &Path {
-        &self.path
+        self.location.absolute_path()
     }
 }
 
@@ -228,7 +240,7 @@ impl MetadataUpgradeOperation {
 #[derive(Clone)]
 pub struct MetadataUpgradePlan<'a> {
     root: PathBuf,
-    marker_path: PathBuf,
+    marker: Location,
     source_version: u64,
     target_version: u64,
     artifacts: Vec<UpgradeArtifactPlan>,
@@ -244,7 +256,7 @@ impl std::fmt::Debug for MetadataUpgradePlan<'_> {
         formatter
             .debug_struct("MetadataUpgradePlan")
             .field("root", &self.root)
-            .field("marker_path", &self.marker_path)
+            .field("marker", &self.marker)
             .field("source_version", &self.source_version)
             .field("target_version", &self.target_version)
             .field("artifacts", &self.artifacts)
@@ -264,6 +276,12 @@ impl std::fmt::Debug for MetadataUpgradePlan<'_> {
 impl MetadataUpgradePlan<'_> {
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// The Package marker this plan read its source version from, and the last artifact
+    /// an upgrade advances.
+    pub fn marker(&self) -> &Location {
+        &self.marker
     }
 
     pub fn source_version(&self) -> u64 {
@@ -318,56 +336,73 @@ impl MetadataUpgradePlan<'_> {
     }
 }
 
+/// Why no upgrade could be planned.
+///
+/// **A refusal raised after the Root resolved carries a [`RootedLocation`]**: the Package
+/// was established, so the response owes both the Root and the Package's own spelling of
+/// the artifact the refusal is about. The three that do not carry one are the three raised
+/// before there is a Package to name — a build whose own chain is incoherent, a directory
+/// that is a Root but holds no marker, and a path this application could not resolve at
+/// all.
 #[derive(Debug, PartialEq)]
 pub enum MetadataUpgradeError<E> {
     /// No Package marker, so there is nothing to upgrade.
-    UnmanagedPackage {
-        path: PathBuf,
-    },
+    UnmanagedPackage { path: PathBuf },
     /// The marker is missing, unreadable, or does not declare a version. It is
     /// diagnosed rather than interpreted.
-    UnreadableMarker {
-        path: PathBuf,
-    },
+    UnreadableMarker { marker: RootedLocation },
     /// The Package declares a version newer than this build knows. It is left
     /// untouched.
     NewerThanBuild {
         observed: u64,
         newest: u64,
+        root: RootedLocation,
     },
     /// The Package declares an older version this build has no complete consecutive
     /// chain for. It is left untouched rather than partially migrated.
     NoCompleteChain {
         observed: u64,
         reachable: u64,
+        root: RootedLocation,
     },
     /// Two registered steps declare the same source version, so the chain has two
     /// different answers for one step. Nothing is read and nothing is migrated: which
     /// transformations this build ships is not a question a Package can settle.
-    IncoherentChain {
-        version: u64,
-    },
+    ///
+    /// Answered before any path is resolved, because the answer is about this build and
+    /// no Package can change it.
+    IncoherentChain { version: u64 },
     /// The Package configuration that names the Orders Directory is missing,
     /// unreadable, or unusable. The upgrade refuses rather than assuming the default
     /// location: assuming wrong would enumerate the wrong directory, find nothing
     /// pending, and advance the marker past records that were never migrated.
-    UnusableConfiguration {
-        path: PathBuf,
-    },
-    FileSystem {
-        path: PathBuf,
-        error: E,
-    },
+    UnusableConfiguration { configuration: RootedLocation },
+    /// A managed path inside the resolved Root could not be examined.
+    FileSystem { subject: RootedLocation, error: E },
+    /// The Root itself could not be resolved, so nothing about this Package was read.
+    /// The resolution is what failed, so there is no Root to name it under and no
+    /// Package-relative spelling for the caller's own text.
+    UnresolvableRoot { path: PathBuf, error: E },
 }
 
 pub fn plan_metadata_upgrade<'a, F: FileSystem>(
-    root: &Path,
+    selected_root: &Path,
     registry: &TransformationRegistry<'a>,
     filesystem: &F,
 ) -> Result<MetadataUpgradePlan<'a>, MetadataUpgradeError<F::Error>> {
     if let Some(version) = registry.repeated_source_version() {
         return Err(MetadataUpgradeError::IncoherentChain { version });
     }
+    // Resolved exactly as the ordinary Package load resolves it, so every path this plan
+    // reports is absolute and carries the Package-relative spelling the Package has for
+    // it. A caller naming a relative root would otherwise get a plan full of paths that
+    // no response can express and no second process can reopen.
+    let root = &filesystem.canonicalize(selected_root).map_err(|error| {
+        MetadataUpgradeError::UnresolvableRoot {
+            path: selected_root.to_path_buf(),
+            error,
+        }
+    })?;
     let marker_path = root.join(".spielorders").join("version.json");
     match filesystem.symlink_metadata(&marker_path) {
         Ok(Some(FileSystemEntryKind::File)) => {}
@@ -378,14 +413,14 @@ pub fn plan_metadata_upgrade<'a, F: FileSystem>(
         }
         Err(error) => {
             return Err(MetadataUpgradeError::FileSystem {
-                path: marker_path,
+                subject: rooted_at(root, marker_path),
                 error,
             });
         }
     }
-    let source_version = declared_version(&marker_path, "metadata_version", filesystem)?
+    let source_version = declared_version(&marker_path, "metadata_version", filesystem)
         .ok_or_else(|| MetadataUpgradeError::UnreadableMarker {
-            path: marker_path.clone(),
+            marker: rooted_at(root, marker_path.clone()),
         })?;
 
     // The upgrade always targets exactly the newest version this build knows. It is
@@ -395,19 +430,21 @@ pub fn plan_metadata_upgrade<'a, F: FileSystem>(
         return Err(MetadataUpgradeError::NewerThanBuild {
             observed: source_version,
             newest: NEWEST_METADATA_VERSION,
+            root: rooted_at(root, root.to_path_buf()),
         });
     }
     if target_version != NEWEST_METADATA_VERSION {
         return Err(MetadataUpgradeError::NoCompleteChain {
             observed: source_version,
             reachable: target_version,
+            root: rooted_at(root, root.to_path_buf()),
         });
     }
 
     let mut artifacts = Vec::new();
     // Orders first, in deterministic directory order, then the Vendor aggregate.
     let orders_directory = configured_orders_directory(root, filesystem)?;
-    for directory in order_directories(&orders_directory, filesystem)? {
+    for directory in order_directories(root, &orders_directory, filesystem)? {
         let path = directory.join(".spielorders").join("order.json");
         let state = artifact_state(
             UpgradeArtifact::OrderRecord,
@@ -418,7 +455,7 @@ pub fn plan_metadata_upgrade<'a, F: FileSystem>(
         )?;
         artifacts.push(UpgradeArtifactPlan {
             artifact: UpgradeArtifact::OrderRecord,
-            path,
+            location: located_in_package(root, path),
             state,
         });
     }
@@ -432,7 +469,7 @@ pub fn plan_metadata_upgrade<'a, F: FileSystem>(
     )?;
     artifacts.push(UpgradeArtifactPlan {
         artifact: UpgradeArtifact::VendorAggregate,
-        path: vendors_path,
+        location: located_in_package(root, vendors_path),
         state,
     });
 
@@ -446,7 +483,7 @@ pub fn plan_metadata_upgrade<'a, F: FileSystem>(
     };
     Ok(MetadataUpgradePlan {
         root: root.to_path_buf(),
-        marker_path,
+        marker: located_in_package(root, marker_path),
         source_version,
         target_version,
         artifacts,
@@ -472,17 +509,17 @@ fn planned_operations(
             UpgradeArtifactState::Blocked => return operations,
             UpgradeArtifactState::Pending => operations.push(MetadataUpgradeOperation {
                 kind: MetadataUpgradeOperationKind::ReplaceArtifact,
-                path: artifact.path.clone(),
+                location: artifact.location.clone(),
             }),
         }
     }
     operations.push(MetadataUpgradeOperation {
         kind: MetadataUpgradeOperationKind::AdvanceMarker,
-        path: marker_path.to_path_buf(),
+        location: located_in_package(root, marker_path.to_path_buf()),
     });
     operations.push(MetadataUpgradeOperation {
         kind: MetadataUpgradeOperationKind::RefreshPackageIndex,
-        path: root.join(".spielorders").join("index.json"),
+        location: located_in_package(root, root.join(".spielorders").join("index.json")),
     });
     operations
 }
@@ -500,29 +537,33 @@ fn configured_orders_directory<F: FileSystem>(
     filesystem: &F,
 ) -> Result<PathBuf, MetadataUpgradeError<F::Error>> {
     let config_path = root.join(".spielorders").join("config.toml");
+    let configuration = || rooted_at(root, config_path.clone());
     let bytes =
         filesystem
             .read(&config_path)
             .map_err(|error| MetadataUpgradeError::FileSystem {
-                path: config_path.clone(),
+                subject: configuration(),
                 error,
             })?;
     let config = Config::from_toml_bytes(&bytes).map_err(|_| {
         MetadataUpgradeError::UnusableConfiguration {
-            path: config_path.clone(),
+            configuration: configuration(),
         }
     })?;
     match resolve_package_layout(root, &config, filesystem) {
         Ok(layout) => Ok(layout.orders_directory().to_path_buf()),
         Err(PackagePathError::FileSystem(error)) => Err(MetadataUpgradeError::FileSystem {
-            path: config_path,
+            subject: configuration(),
             error,
         }),
-        Err(_) => Err(MetadataUpgradeError::UnusableConfiguration { path: config_path }),
+        Err(_) => Err(MetadataUpgradeError::UnusableConfiguration {
+            configuration: configuration(),
+        }),
     }
 }
 
 fn order_directories<F: FileSystem>(
+    root: &Path,
     orders: &Path,
     filesystem: &F,
 ) -> Result<Vec<PathBuf>, MetadataUpgradeError<F::Error>> {
@@ -531,7 +572,7 @@ fn order_directories<F: FileSystem>(
         Ok(entries) => entries,
         Err(error) => {
             return Err(MetadataUpgradeError::FileSystem {
-                path: orders,
+                subject: rooted_at(root, orders),
                 error,
             });
         }
@@ -595,16 +636,14 @@ fn classify(
     }
 }
 
-fn declared_version<F: FileSystem>(
-    path: &Path,
-    field: &str,
-    filesystem: &F,
-) -> Result<Option<u64>, MetadataUpgradeError<F::Error>> {
-    let bytes = match filesystem.read(path) {
-        Ok(bytes) => bytes,
-        Err(_) => return Ok(None),
-    };
-    Ok(declared_version_in(&bytes, field))
+/// The version a managed document declares, when it can be read and declares one.
+///
+/// A marker that cannot be read and one that declares nothing are the same answer here:
+/// neither says which version to carry this Package from, and the caller reports both as
+/// a marker this build will not interpret.
+fn declared_version<F: FileSystem>(path: &Path, field: &str, filesystem: &F) -> Option<u64> {
+    let bytes = filesystem.read(path).ok()?;
+    declared_version_in(&bytes, field)
 }
 
 fn declared_version_in(bytes: &[u8], field: &str) -> Option<u64> {
@@ -631,6 +670,13 @@ fn artifact_is_valid_at(
         UpgradeArtifact::OrderRecord => {
             let document = OrderDocument::from_json_bytes(bytes)
                 .map_err(|_| UpgradeArtifactFailure::NotTheDeclaredSchema)?;
+            // The locator carries its own outcome rather than failing the record, so a
+            // record with none this build can follow is refused here rather than by the
+            // codec. An upgrade transforms and passes over records already valid under
+            // the version they declare, and version 1 requires a locator.
+            if document.package_root.spelled().is_none() {
+                return Err(UpgradeArtifactFailure::NotTheDeclaredSchema);
+            }
             // An Order's own semantics only. Whether its Vendor Reference resolves is a
             // Package-wide question, and during an upgrade the Vendor aggregate is
             // still at the source version — it is migrated last — so there is no
@@ -644,23 +690,9 @@ fn artifact_is_valid_at(
         UpgradeArtifact::VendorAggregate => {
             let vendors = VendorsDocument::from_json_bytes(bytes)
                 .map_err(|_| UpgradeArtifactFailure::NotTheDeclaredSchema)?;
-            // Asked through the Package-wide validator rather than a local scan, so an
-            // aggregate cannot be written on terms canonical validation would reject.
-            // The empty Orders slice is the same call `canonical` makes when it decides
-            // whether a stored `vendors.json` damages the Package: the aggregate answers
-            // for itself — duplicate Vendor IDs and package-duplicate Vendor Names.
-            //
-            // This is the fourth occurrence of that shape. Hoisting it would mean
-            // editing `canonical.rs` and `vendors.rs`, which is outside this ticket's
-            // review boundary, so it is repeated here for the same recorded reason as
-            // the third.
-            let marker = VersionDocument {
-                metadata_version: Version1,
-            };
-            PackageMetadata::new(&marker, &[], &vendors)
-                .validate()
-                .map(|_| ())
-                .map_err(|_| UpgradeArtifactFailure::InvalidAtDeclaredVersion)
+            vendor_aggregate_is_package_valid(&vendors)
+                .then_some(())
+                .ok_or(UpgradeArtifactFailure::InvalidAtDeclaredVersion)
         }
     }
 }
@@ -669,8 +701,8 @@ fn artifact_is_valid_at(
 pub struct MetadataUpgradeResult {
     source_version: u64,
     reached_version: u64,
-    upgraded: Vec<PathBuf>,
-    skipped: Vec<PathBuf>,
+    upgraded: Vec<Location>,
+    skipped: Vec<Location>,
     marker_advanced: bool,
     index: Option<PackageIndexRecord>,
 }
@@ -686,13 +718,13 @@ impl MetadataUpgradeResult {
     }
 
     /// Every artifact this run transformed, in the order it visited them.
-    pub fn upgraded(&self) -> &[PathBuf] {
+    pub fn upgraded(&self) -> &[Location] {
         &self.upgraded
     }
 
     /// Artifacts already at the target, which a resumed run leaves exactly as they
     /// are rather than transforming twice.
-    pub fn skipped(&self) -> &[PathBuf] {
+    pub fn skipped(&self) -> &[Location] {
         &self.skipped
     }
 
@@ -747,11 +779,14 @@ pub enum UpgradeCandidateFailure {}
 #[derive(Debug, PartialEq)]
 pub enum MetadataUpgradeRejection<E> {
     ArtifactReplacementFailed {
-        path: PathBuf,
+        /// The artifact, as the Package that holds it names it — so a caller reporting
+        /// this refusal carries the Package-relative spelling as well as the absolute
+        /// path, exactly as a success does.
+        artifact: Location,
         error: ValidatedReplacementError<E, UpgradeCandidateFailure>,
     },
     MarkerAdvanceFailed {
-        path: PathBuf,
+        marker: Location,
         error: ValidatedReplacementError<E, UpgradeCandidateFailure>,
     },
 }
@@ -827,7 +862,7 @@ pub fn commit_metadata_upgrade<'a, F: FileSystem>(
     for artifact in plan.artifacts.clone() {
         if artifact.state == UpgradeArtifactState::Blocked {
             warnings.push(MetadataUpgradeWarning::PausedAtBlockedArtifact {
-                path: artifact.path.clone(),
+                path: artifact.path().to_path_buf(),
             });
             break;
         }
@@ -837,9 +872,9 @@ pub fn commit_metadata_upgrade<'a, F: FileSystem>(
         // record another resume has since finished — applying one migration twice —
         // or skip a record that has since gone back to the source version, advancing
         // the marker over something that never reached the target.
-        let Ok(bytes) = filesystem.read(&artifact.path) else {
+        let Ok(bytes) = filesystem.read(artifact.path()) else {
             warnings.push(MetadataUpgradeWarning::PausedAtBlockedArtifact {
-                path: artifact.path.clone(),
+                path: artifact.path().to_path_buf(),
             });
             break;
         };
@@ -851,12 +886,12 @@ pub fn commit_metadata_upgrade<'a, F: FileSystem>(
         ) {
             // Already at the target: a resumed run leaves it exactly as it is.
             UpgradeArtifactState::AlreadyUpgraded => {
-                skipped.push(artifact.path.clone());
+                skipped.push(artifact.location.clone());
                 continue;
             }
             UpgradeArtifactState::Blocked => {
                 warnings.push(MetadataUpgradeWarning::PausedAtBlockedArtifact {
-                    path: artifact.path.clone(),
+                    path: artifact.path().to_path_buf(),
                 });
                 break;
             }
@@ -889,7 +924,7 @@ pub fn commit_metadata_upgrade<'a, F: FileSystem>(
         }
         if refused {
             warnings.push(MetadataUpgradeWarning::PausedAtRefusedTransformation {
-                path: artifact.path.clone(),
+                path: artifact.path().to_path_buf(),
             });
             break;
         }
@@ -904,7 +939,7 @@ pub fn commit_metadata_upgrade<'a, F: FileSystem>(
         );
         if let Err(failure) = judged {
             warnings.push(MetadataUpgradeWarning::PausedAtUnusableOutput {
-                path: artifact.path.clone(),
+                path: artifact.path().to_path_buf(),
                 failure,
             });
             break;
@@ -918,7 +953,7 @@ pub fn commit_metadata_upgrade<'a, F: FileSystem>(
         // this upgrade was running, rather than replacing their work with a
         // transformation of bytes that are no longer there.
         if let Err(error) = replace_validated_file_expecting(
-            &artifact.path,
+            artifact.path(),
             &candidate,
             DestinationExpectation::Exactly(&prior),
             filesystem,
@@ -926,13 +961,17 @@ pub fn commit_metadata_upgrade<'a, F: FileSystem>(
             // nothing this seam could reject reaches it.
             |_| Ok::<(), UpgradeCandidateFailure>(()),
         ) {
-            let path = artifact.path.clone();
+            let path = artifact.path().to_path_buf();
             // Nothing durable has happened yet, so refusing is the honest report and
             // prior canonical bytes are exactly as they were.
             if upgraded.is_empty() {
+                let artifact = artifact.location.clone();
                 return MutationReport::Rejected {
                     plan,
-                    rejection: MetadataUpgradeRejection::ArtifactReplacementFailed { path, error },
+                    rejection: MetadataUpgradeRejection::ArtifactReplacementFailed {
+                        artifact,
+                        error,
+                    },
                 };
             }
             // Earlier artifacts are already upgraded on disk. Calling this a rejection
@@ -941,7 +980,7 @@ pub fn commit_metadata_upgrade<'a, F: FileSystem>(
             warnings.push(MetadataUpgradeWarning::StoppedAtFailedArtifact { path, error });
             break;
         }
-        upgraded.push(artifact.path.clone());
+        upgraded.push(artifact.location.clone());
     }
 
     // The marker advances only when every artifact has reached the target, so an
@@ -976,17 +1015,18 @@ pub fn commit_metadata_upgrade<'a, F: FileSystem>(
         declared_version_in(current, "metadata_version") == Some(plan.source_version)
     };
     if let Err(error) = replace_validated_file_expecting(
-        &plan.marker_path,
+        plan.marker.absolute_path(),
         &marker,
         DestinationExpectation::Equivalent(&still_the_source_version),
         filesystem,
         |_| Ok::<(), UpgradeCandidateFailure>(()),
     ) {
-        let path = plan.marker_path.clone();
+        let path = plan.marker.absolute_path().to_path_buf();
         if upgraded.is_empty() {
+            let marker = plan.marker.clone();
             return MutationReport::Rejected {
                 plan,
-                rejection: MetadataUpgradeRejection::MarkerAdvanceFailed { path, error },
+                rejection: MetadataUpgradeRejection::MarkerAdvanceFailed { marker, error },
             };
         }
         // Every artifact reached the target and only the marker did not. The Package

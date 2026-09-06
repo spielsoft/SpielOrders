@@ -15,15 +15,14 @@ pays seconds per iteration instead of minutes. Nothing about what the suite asse
 change.
 
 This is a bounded engineering milestone in the shape of
-[M1-upgrade](../m1-upgrade-toolchain-dependencies/README.md). It is not M3 product work,
+[M1-upgrade](../../archive/m1-upgrade-toolchain-dependencies/README.md). It is not M3 product work,
 it does not close M3, and it may not touch a domain capability. M3's own remaining
 execution tickets are listed only in
-[the M3 index](../m3-domain-mutations-safe-persistence/README.md).
+[the M3 index](../../archive/m3-domain-mutations-safe-persistence/README.md).
 
 ## Why this exists
 
-The suite is fast; building it is not. Measured on 2026-08-31 at
-`217b2109e3afed166943daedba9ed66e614fb09a`:
+The suite is fast; building it is not. Measured on 2026-08-31:
 
 | Observation | Value |
 | --- | --- |

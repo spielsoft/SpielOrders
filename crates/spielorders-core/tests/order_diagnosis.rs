@@ -10,11 +10,10 @@ use spielorders_core::initialization::{
 };
 use spielorders_core::metadata::OrderStatus;
 use spielorders_core::mutation::MutationReport;
-use spielorders_core::order_diagnosis::{
-    OrderDiagnosis, OrderDiagnosisError, RepairAction, diagnose_order,
-};
+use spielorders_core::order_diagnosis::{OrderDiagnosis, OrderDiagnosisError, diagnose_order};
 use spielorders_core::ports::UuidGenerator;
-use spielorders_core::readme::DiagnosticCode;
+use spielorders_core::readme::{DiagnosticCode, EvidenceScope};
+use spielorders_core::repair_cases::RepairAction;
 use spielorders_core::vendors::{VendorAssignments, commit_vendor_mutation, plan_vendor_creation};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -665,7 +664,7 @@ fn a_directory_that_is_not_an_order_and_a_damaged_package_are_refused() {
     let error = diagnose_order(outside.path(), &RealFileSystem)
         .expect_err("a directory outside a Package is refused");
     assert!(
-        matches!(error, OrderDiagnosisError::UnmanagedPackage),
+        matches!(error, OrderDiagnosisError::UnmanagedPackage { .. }),
         "an unmanaged location is reported as such: {error:?}"
     );
 }
@@ -683,9 +682,31 @@ fn a_package_wide_failure_is_never_downgraded_to_an_order_finding() {
     let error = diagnose_order(&directory, &RealFileSystem)
         .expect_err("an Order inside a Damaged Package is not diagnosed in isolation");
 
+    // The Package-scope findings travel with the refusal, so a caller can report the
+    // Package-level problem as a Package-level problem rather than only that something
+    // somewhere was wrong.
+    let OrderDiagnosisError::DamagedPackage {
+        root: package_root,
+        diagnostics,
+    } = &error
+    else {
+        panic!("a Package-wide failure is reported as such: {error:?}")
+    };
+    assert_eq!(
+        package_root.absolute_path(),
+        fs::canonicalize(&root).expect("the Package Root resolves")
+    );
     assert!(
-        matches!(error, OrderDiagnosisError::DamagedPackage),
-        "a Package-wide failure is reported as such: {error:?}"
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.scope() == EvidenceScope::Package),
+        "and only those: a sibling Order's damage is not this scope's to report"
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code() == DiagnosticCode::ManagedArtifactInvalidSyntax),
+        "the evidence for the refusal travels with it: {diagnostics:?}"
     );
     assert_eq!(
         fs::read(record(&directory)).unwrap(),

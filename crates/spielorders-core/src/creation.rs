@@ -6,13 +6,15 @@ use crate::{
         PackageLoad, inspect_canonical_package, open_package, project_created_order,
     },
     evidence::{EvidenceFingerprint, EvidenceOutcome},
-    metadata::{OrderDocument, OrderStatus},
+    metadata::{OrderDocument, OrderStatus, Vendor},
     mutation::MutationReport,
-    operations::OperationFailure,
+    operations::{FailedPath, OperationFailure},
+    order_edits::{NewOrderAssignmentFailure, NewOrderFacts, OrderAssignments},
     package::{ReusableValue, canonicalize_reusable_value},
     ports::{
         DirectoryFileSystem, FileSystem, LocalCalendar, NewDirectoryRenameOutcome, UuidGenerator,
     },
+    readme::{Location, package_relative_path_text},
 };
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -23,6 +25,7 @@ const PLANNING_ORDER_ID: &str = "00000000-0000-4000-8000-000000000000";
 pub struct OrderCreationInput {
     title: String,
     date_ordered: Option<String>,
+    status: Option<OrderStatus>,
     vendor_id: Option<String>,
     orderer: Option<String>,
     ordering_institution: Option<String>,
@@ -36,6 +39,7 @@ impl OrderCreationInput {
         Self {
             title: title.into(),
             date_ordered: None,
+            status: None,
             vendor_id: None,
             orderer: None,
             ordering_institution: None,
@@ -45,8 +49,48 @@ impl OrderCreationInput {
         }
     }
 
+    /// The facts one canonical assignment set names, or every reason it named none.
+    ///
+    /// **Adjudicated here rather than by the caller**, because which fields an Order has
+    /// and which of them may be assigned are the Package's own rules — see
+    /// [`crate::order_edits::OrderAssignments`], whose vocabulary this shares with an
+    /// edit so the two cannot come to accept different fields. A caller supplying a
+    /// `field=value` language therefore refuses nothing itself: an unknown field, an
+    /// immutable one, a technical one, a repeated one, and a blank required one are all
+    /// reported from here, together.
+    ///
+    /// A creation's one required fact is the Order Title. Every other fact takes its
+    /// established default, and an empty value is simply an absent fact.
+    pub fn from_assignments(
+        assignments: &OrderAssignments,
+    ) -> Result<Self, NewOrderAssignmentFailure> {
+        let facts = NewOrderFacts::of(assignments)?;
+        let [title] = facts.required(["title"])?;
+        let mut input = Self::new(title);
+        input.date_ordered = facts.optional("date_ordered");
+        input.status = facts.status();
+        input.vendor_id = facts.optional("vendor_id");
+        input.orderer = facts.optional("orderer");
+        input.ordering_institution = facts.optional("ordering_institution");
+        input.currency = facts.optional("currency");
+        input.project = facts.optional("project");
+        input.order_group = facts.optional("order_group");
+        Ok(input)
+    }
+
     pub fn date_ordered(mut self, value: impl Into<String>) -> Self {
         self.date_ordered = Some(value.into());
+        self
+    }
+
+    /// The Order Status this Order is created at. Absent, it is `in_preparation`.
+    ///
+    /// Creation accepts one because every editable Order fact is assignable and an
+    /// adopted Order already requires a status: an Order that can be adopted at
+    /// `received` and only created at `in_preparation` would make the two disagree about
+    /// what an Order may be when it first appears.
+    pub fn status(mut self, value: OrderStatus) -> Self {
+        self.status = Some(value);
         self
     }
 
@@ -165,10 +209,28 @@ pub enum OrderCreationOperationKind {
     RefreshPackageIndex,
 }
 
+impl OrderCreationOperationKind {
+    /// This operation's one stable spelling.
+    ///
+    /// Beside the operation rather than in an adapter, so an operation reported by the CLI
+    /// and the same operation reported to the desktop shell cannot come to be named
+    /// differently.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CreateStagingDirectory => "create_staging_directory",
+            Self::CreateMetadataDirectory => "create_metadata_directory",
+            Self::WriteOrderRecord => "write_order_record",
+            Self::WriteReadme => "write_readme",
+            Self::CommitDirectory => "commit_directory",
+            Self::RefreshPackageIndex => "refresh_package_index",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OrderCreationOperation {
     kind: OrderCreationOperationKind,
-    path: PathBuf,
+    location: Location,
 }
 
 impl OrderCreationOperation {
@@ -176,8 +238,14 @@ impl OrderCreationOperation {
         self.kind
     }
 
+    /// Where this operation writes, as this Package locates it — so a caller reporting it
+    /// carries the Package-relative spelling as well as the absolute path.
+    pub fn location(&self) -> &Location {
+        &self.location
+    }
+
     pub fn path(&self) -> &Path {
-        &self.path
+        self.location.absolute_path()
     }
 }
 
@@ -188,6 +256,8 @@ pub struct OrderCreationPlan {
     staging_directory: PathBuf,
     package_root_locator: String,
     facts: PlannedOrderFacts,
+    projected_order: HealthyOrder,
+    vendor: Option<Vendor>,
     reusable_values: OrderCreationReusableValues,
     prior_index: PackageIndexRecord,
     evidence: EvidenceFingerprint,
@@ -219,12 +289,56 @@ impl OrderCreationPlan {
         &self.facts
     }
 
+    /// The complete Order this plan would leave behind, as a caller reporting an Order
+    /// reports one: its managed paths, its record, its calculated totals, and the text of
+    /// the README it will hold.
+    ///
+    /// **The Order this plan would leave, not one that exists.** Its record carries the
+    /// planning identity rather than an Order ID, because the identity is minted at the
+    /// commit — a run that never commits asks for none — so a caller reporting a plan has
+    /// no Order ID to report and says so. Every other fact is the one the commit writes.
+    ///
+    /// Here rather than assembled by a caller: where an Order Directory keeps its managed
+    /// documents and what an Order's totals come to are Package rules, and a second place
+    /// deriving them is a second answer.
+    pub fn projected_order(&self) -> &HealthyOrder {
+        &self.projected_order
+    }
+
+    /// The Vendor this Order's reference resolves to, Hidden Vendors included. `None` when
+    /// it references none.
+    ///
+    /// Resolved here for the reason [`crate::order_reads::OrderRead::vendor`] resolves one:
+    /// matching a Vendor Reference against the complete Vendor list is the Package's rule,
+    /// and hiding governs what is offered for new use rather than what resolves.
+    pub fn vendor(&self) -> Option<&Vendor> {
+        self.vendor.as_ref()
+    }
+
+    /// What committing this plan does to the canonical Order records.
+    ///
+    /// Read off the plan so that a dry run and the commit of the same plan cannot disagree
+    /// about what the mutation was — the rule
+    /// [`crate::vendors::VendorMutationKind::canonical_outcome`] carries for a Vendor.
+    pub fn canonical_outcome(&self) -> CanonicalOrderOutcome {
+        CanonicalOrderOutcome::Created
+    }
+
     pub fn reusable_values(&self) -> &OrderCreationReusableValues {
         &self.reusable_values
     }
 
     pub fn operations(&self) -> &[OrderCreationOperation] {
         &self.operations
+    }
+
+    /// The derived Package Index as it stood when this creation was planned.
+    ///
+    /// The state a run that never commits has to report: committing refreshes the index and
+    /// [`OrderCreationResult::index`] is that refreshed record, so a dry run has none of its
+    /// own and answers with what it observed instead.
+    pub fn prior_index(&self) -> &PackageIndexRecord {
+        &self.prior_index
     }
 }
 
@@ -235,10 +349,26 @@ pub enum OrderCreationPlanError<E> {
     UpgradePending,
     PackageOperationFailed,
     InvalidFacts,
-    UnknownVendor { vendor_id: String },
+    UnknownVendor {
+        vendor_id: String,
+    },
     EmptyProjectedComponent,
-    DestinationCollision { path: PathBuf },
-    FileSystem { path: PathBuf, error: E },
+    /// Something already occupies the projected Order Directory or the staging name beside
+    /// it. Creation stops rather than inventing a suffix.
+    ///
+    /// **A `Location` rather than a `PathBuf`**, because the projected destination is a
+    /// path inside this Package and [`located`] has already established its
+    /// Package-relative spelling — which a refusal owes exactly as a success does.
+    DestinationCollision {
+        location: Location,
+    },
+    /// **A [`FailedPath`] rather than a `PathBuf`**, because the path an operation failed
+    /// on carries this Package's spelling where the Package has one for it — which a
+    /// refusal owes exactly as a success does — and names the path alone where it does not.
+    FileSystem {
+        path: FailedPath,
+        error: E,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -246,10 +376,19 @@ pub enum CanonicalOrderOutcome {
     Created,
 }
 
+impl CanonicalOrderOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Created => "created",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct OrderCreationResult {
     canonical_outcome: CanonicalOrderOutcome,
     order: HealthyOrder,
+    vendor: Option<Vendor>,
     index: PackageIndexRecord,
 }
 
@@ -260,6 +399,12 @@ impl OrderCreationResult {
 
     pub fn order(&self) -> &HealthyOrder {
         &self.order
+    }
+
+    /// The Vendor the created Order's reference resolves to, Hidden Vendors included.
+    /// `None` when it references none. See [`OrderCreationPlan::vendor`].
+    pub fn vendor(&self) -> Option<&Vendor> {
+        self.vendor.as_ref()
     }
 
     pub fn index(&self) -> &PackageIndexRecord {
@@ -281,10 +426,28 @@ pub enum OrderCreationCommitPhase {
     CommitDirectory,
 }
 
+impl OrderCreationCommitPhase {
+    /// This phase's one stable spelling, for a caller reporting where a commit stopped.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ObservePreconditions => "observe_preconditions",
+            Self::CreateStagingDirectory => "create_staging_directory",
+            Self::CreateMetadataDirectory => "create_metadata_directory",
+            Self::WriteOrderRecord => "write_order_record",
+            Self::ReadOrderRecord => "read_order_record",
+            Self::ValidateOrderRecord => "validate_order_record",
+            Self::SyncOrderRecord => "sync_order_record",
+            Self::WriteReadme => "write_readme",
+            Self::SyncReadme => "sync_readme",
+            Self::CommitDirectory => "commit_directory",
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub struct OrderCreationCommitFailure<E> {
     phase: OrderCreationCommitPhase,
-    path: PathBuf,
+    location: Location,
     cause: OrderCreationCommitFailureCause<E>,
 }
 
@@ -300,8 +463,14 @@ impl<E> OrderCreationCommitFailure<E> {
         self.phase
     }
 
-    pub fn path(&self) -> &Path {
-        &self.path
+    /// The staging path this commit stopped on, as this Package locates it.
+    ///
+    /// A `Location` rather than a path, for the reason
+    /// [`OrderCreationOperation::location`] carries one: everything a creation writes
+    /// before it commits stands inside the Package's own Orders Directory, and a refusal
+    /// owes that Package's spelling for what it names exactly as a success does.
+    pub fn location(&self) -> &Location {
+        &self.location
     }
 
     pub fn cause(&self) -> &OrderCreationCommitFailureCause<E> {
@@ -311,13 +480,15 @@ impl<E> OrderCreationCommitFailure<E> {
 
 #[derive(Debug, PartialEq)]
 pub struct OrderCreationCleanupFailure<E> {
-    path: PathBuf,
+    location: Location,
     error: E,
 }
 
 impl<E> OrderCreationCleanupFailure<E> {
-    pub fn path(&self) -> &Path {
-        &self.path
+    /// What this rollback left behind, as this Package locates it. See
+    /// [`OrderCreationCommitFailure::location`].
+    pub fn location(&self) -> &Location {
+        &self.location
     }
 
     pub fn error(&self) -> &E {
@@ -327,8 +498,13 @@ impl<E> OrderCreationCleanupFailure<E> {
 
 #[derive(Debug, PartialEq)]
 pub enum OrderCreationRejection<E> {
+    /// **A `Location` rather than a `PathBuf`**, for the reason
+    /// [`OrderCreationPlanError::DestinationCollision`] carries one: this refusal happens
+    /// under a Root the plan established, about the Root itself or a path the plan derived
+    /// inside it, and a response owes that Root's spelling for what it names — in a refusal
+    /// exactly as in a success.
     PreconditionsChanged {
-        path: PathBuf,
+        location: Location,
     },
     /// The facts the plan was built from no longer stand, so the plan is no longer
     /// authorized. The seam's own answer is carried rather than re-encoded, so a
@@ -353,6 +529,19 @@ pub enum OrderCreationRejection<E> {
 pub enum OrderCreationWarning {
     IndexRefreshFailed(OperationFailure),
     RefreshUnavailable,
+}
+
+impl OrderCreationWarning {
+    /// This warning's one stable spelling.
+    ///
+    /// Beside the warning rather than in an adapter, so a committed creation whose derived
+    /// refresh failed is named the same way in every surface that reports one.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::IndexRefreshFailed(_) => "index_refresh_failed",
+            Self::RefreshUnavailable => "refresh_unavailable",
+        }
+    }
 }
 
 pub type OrderCreationReport<E> = MutationReport<
@@ -434,7 +623,10 @@ pub fn plan_order_creation<F: FileSystem>(
         "order_id": PLANNING_ORDER_ID,
         "title": input.title,
         "date_ordered": date_ordered,
-        "status": "in_preparation",
+        // The caller's status where one was chosen, and the decided default otherwise. A
+        // created Order is `in_preparation` unless it says otherwise; see
+        // [`OrderCreationInput::status`].
+        "status": input.status.unwrap_or(OrderStatus::InPreparation),
         "items": [],
     });
     let object = candidate
@@ -488,12 +680,12 @@ pub fn plan_order_creation<F: FileSystem>(
             Ok(None) => {}
             Ok(Some(_)) => {
                 return Err(OrderCreationPlanError::DestinationCollision {
-                    path: path.to_path_buf(),
+                    location: located(&root, path.to_path_buf()),
                 });
             }
             Err(error) => {
                 return Err(OrderCreationPlanError::FileSystem {
-                    path: path.to_path_buf(),
+                    path: FailedPath::inside(&root, path.to_path_buf()),
                     error,
                 });
             }
@@ -502,32 +694,43 @@ pub fn plan_order_creation<F: FileSystem>(
     let metadata_directory = staging_directory.join(".spielorders");
     let operations = vec![
         operation(
+            &root,
             OrderCreationOperationKind::CreateStagingDirectory,
             staging_directory.clone(),
         ),
         operation(
+            &root,
             OrderCreationOperationKind::CreateMetadataDirectory,
             metadata_directory.clone(),
         ),
         operation(
+            &root,
             OrderCreationOperationKind::WriteOrderRecord,
             metadata_directory.join("order.json"),
         ),
         operation(
+            &root,
             OrderCreationOperationKind::WriteReadme,
             staging_directory.join("README.md"),
         ),
         operation(
+            &root,
             OrderCreationOperationKind::CommitDirectory,
             directory.clone(),
         ),
         operation(
+            &root,
             OrderCreationOperationKind::RefreshPackageIndex,
             package.context().index().absolute_path().to_path_buf(),
         ),
     ];
 
     Ok(OrderCreationPlan {
+        // The Order this plan would leave, in the shape every caller reports an Order in.
+        // Its managed paths follow from the projected Directory, which is where the commit
+        // publishes it, and its README is the empty document the commit writes there.
+        projected_order: project_created_order(&root, &directory, order),
+        vendor: vendor.cloned(),
         root,
         directory,
         staging_directory,
@@ -610,10 +813,10 @@ pub fn commit_order_creation<F: DirectoryFileSystem>(
     let current = match inspect_canonical_package(&plan.root, filesystem) {
         CanonicalPackageLoad::CurrentCandidate(package) => package,
         _ => {
-            let path = plan.root.clone();
+            let location = located(&plan.root, plan.root.clone());
             return MutationReport::Rejected {
                 plan,
-                rejection: OrderCreationRejection::PreconditionsChanged { path },
+                rejection: OrderCreationRejection::PreconditionsChanged { location },
             };
         }
     };
@@ -632,9 +835,10 @@ pub fn commit_order_creation<F: DirectoryFileSystem>(
         match filesystem.symlink_metadata(&path) {
             Ok(None) => {}
             Ok(Some(_)) | Err(_) => {
+                let location = located(&plan.root, path);
                 return MutationReport::Rejected {
                     plan,
-                    rejection: OrderCreationRejection::PreconditionsChanged { path },
+                    rejection: OrderCreationRejection::PreconditionsChanged { location },
                 };
             }
         }
@@ -868,13 +1072,14 @@ fn result_from_package(
     order: &OrderDocument,
     package: &CurrentPackageCandidate,
 ) -> Option<OrderCreationResult> {
-    let refreshed = package
+    let index = package
         .healthy_orders()
         .iter()
-        .find(|candidate| candidate.document().order_id == order.order_id)?;
+        .position(|candidate| candidate.document().order_id == order.order_id)?;
     Some(OrderCreationResult {
         canonical_outcome: CanonicalOrderOutcome::Created,
-        order: refreshed.clone(),
+        order: package.healthy_orders()[index].clone(),
+        vendor: package.vendor_for_order(index).cloned(),
         index: package.index().clone(),
     })
 }
@@ -894,6 +1099,11 @@ fn result_from_commit(
     OrderCreationResult {
         canonical_outcome: CanonicalOrderOutcome::Created,
         order: project_created_order(&plan.root, &plan.directory, order),
+        // The Vendor the plan resolved. Every arm reaching here has no refreshed Package to
+        // resolve one against, and the commit's own precondition check confirmed the
+        // Package still carries what the plan observed — including this Vendor's Name,
+        // which the projected Directory's basename is spelled with.
+        vendor: plan.vendor.clone(),
         index,
     }
 }
@@ -904,13 +1114,13 @@ fn commit_failure<E>(
     error: E,
     cleanup_failures: Vec<OrderCreationCleanupFailure<E>>,
 ) -> OrderCreationReport<E> {
-    let path = plan.staging_directory.clone();
+    let location = located(&plan.root, plan.staging_directory.clone());
     MutationReport::Rejected {
         plan,
         rejection: OrderCreationRejection::CommitFailed {
             failure: OrderCreationCommitFailure {
                 phase,
-                path,
+                location,
                 cause: OrderCreationCommitFailureCause::FileSystem(error),
             },
             cleanup_failures,
@@ -944,17 +1154,23 @@ fn commit_failure_cause_with_cleanup<F: DirectoryFileSystem>(
     files: &[PathBuf],
     filesystem: &F,
 ) -> OrderCreationReport<F::Error> {
-    let cleanup_failures = cleanup_owned(&plan.staging_directory, files, filesystem);
+    let cleanup_failures = cleanup_owned(&plan.root, &plan.staging_directory, files, filesystem);
+    let location = located(&plan.root, path);
     MutationReport::Rejected {
         plan,
         rejection: OrderCreationRejection::CommitFailed {
-            failure: OrderCreationCommitFailure { phase, path, cause },
+            failure: OrderCreationCommitFailure {
+                phase,
+                location,
+                cause,
+            },
             cleanup_failures,
         },
     }
 }
 
 fn cleanup_owned<F: DirectoryFileSystem>(
+    root: &Path,
     staging_directory: &Path,
     files: &[PathBuf],
     filesystem: &F,
@@ -963,7 +1179,7 @@ fn cleanup_owned<F: DirectoryFileSystem>(
     for path in files {
         if let Err(error) = filesystem.remove_file(path) {
             failures.push(OrderCreationCleanupFailure {
-                path: path.clone(),
+                location: located(root, path.clone()),
                 error,
             });
         }
@@ -973,7 +1189,10 @@ fn cleanup_owned<F: DirectoryFileSystem>(
         staging_directory.to_path_buf(),
     ] {
         if let Err(error) = filesystem.remove_directory(&path) {
-            failures.push(OrderCreationCleanupFailure { path, error });
+            failures.push(OrderCreationCleanupFailure {
+                location: located(root, path),
+                error,
+            });
         }
     }
     failures
@@ -1007,8 +1226,35 @@ fn insert_optional(
     }
 }
 
-fn operation(kind: OrderCreationOperationKind, path: PathBuf) -> OrderCreationOperation {
-    OrderCreationOperation { kind, path }
+/// One planned operation, at a path this Package can name.
+///
+/// The Package-relative spelling holds by construction rather than by assertion, as it does
+/// for a planned initialization artifact: every path here is the canonical root joined with
+/// the configured Orders Directory — which the load has already confirmed has a
+/// Package-relative spelling — and then with a projected basename whose components
+/// `normalize_filename_component` has already stripped of separators, or with one of this
+/// module's own literal managed names.
+fn operation(
+    root: &Path,
+    kind: OrderCreationOperationKind,
+    path: PathBuf,
+) -> OrderCreationOperation {
+    OrderCreationOperation {
+        kind,
+        location: located(root, path),
+    }
+}
+
+/// One planned path, as this Package locates it.
+///
+/// The same construction [`operation`] reports a planned artifact through, so a path this
+/// creation *refuses* about is spelled the way the same path is spelled when it succeeds.
+/// The Package-relative spelling holds for the reason given above, and for the Root itself,
+/// which every Package spells `.`.
+fn located(root: &Path, path: PathBuf) -> Location {
+    let relative = package_relative_path_text(root, &path)
+        .expect("a planned creation path has a Package-relative spelling");
+    Location::within_package(path, relative).expect("a planned creation path is normalized")
 }
 
 /// The one decided aligned Order Directory basename,

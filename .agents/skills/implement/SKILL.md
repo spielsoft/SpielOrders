@@ -10,11 +10,9 @@ one independently reviewable ticket and stop.
 
 ## Orient and claim
 
-- Read `AGENTS.md`, the milestone index, the selected ticket, and the outcome or
-  frontmatter of its direct blockers. Read linked decisions and prior-ticket detail
-  only when the selected ticket or changed code needs them.
-- Do not ingest every milestone ticket, historical evidence record, or command
-  transcript by default. Search and zoom in as questions arise.
+- Follow the reading rule in [`AGENTS.md`](../../../AGENTS.md): this file, the milestone
+  index's ticket table, the one ticket, and the decision documents that ticket links.
+  Nothing else is read by default.
 - Verify the worktree, ownership, blockers, and fixed point required by the local
   tracker. Claim the ticket before implementation and record the fixed point when
   the tracker requires it. Stop if the ticket is already claimed or blocked.
@@ -22,6 +20,8 @@ one independently reviewable ticket and stop.
 
 ## Build the ticket
 
+- First check whether the work qualifies for the small-change lane in
+  [`AGENTS.md`](../../../AGENTS.md). If it does, take it and stop reading this skill.
 - Use `/tdd` for observable behavior additions and defects at an agreed public
   seam. An already approved ticket supplies planning approval; ask the user only
   when a material product or interface choice remains unresolved.
@@ -29,47 +29,22 @@ one independently reviewable ticket and stop.
   only work.
 - Keep changes within the selected ticket. Return a pre-existing defect to its
   smallest owner instead of absorbing unrelated work.
-- Run focused checks during development. Run the ticket's affected repository
-  gates once after the implementation is stable.
-
-## Verify proportionately
-
-Classify the final diff before choosing the closeout checks:
-
-- **Behavior or executable inputs:** run focused tests plus the affected build,
-  lint, type, contract, and repository gates. Run a required full suite once at
-  the end, then rerun only gates affected by review remediation.
-- **Dependency or toolchain selection:** refresh authoritative currentness, apply
-  the repository's selected-major policy, recreate the affected dependency trees,
-  and run the builds and tests those selections can affect.
-- **Documentation, status, or evidence only:** run diff/whitespace, link,
-  traceability, and consistency checks that cover the changed claims. Do not
-  repeat clean installs, builds, or executable suites unless the documents are
-  executable inputs or the change invalidates prior executable evidence.
-
-A later documentation-only commit does not invalidate a completed executable gate
-when source, tests, fixtures, manifests, lockfiles, scripts, contracts, and
-toolchain selectors are unchanged. Record the gate's target and prove the later
-path inventory instead of restarting it.
+- Run `scripts/loop.sh` during development and `scripts/gate.sh` once the
+  implementation is stable.
 
 ## Review, close, and hand off
 
-- Commit the implementation and evidence, then use `/code-review` against the ticket's
-  fixed point. Run it in its designed parallel sub-agent form, Standards and Spec
-  independent. Resolve blocking findings and explicitly record any accepted
-  non-blocking findings. Rerun only affected checks.
-- A single-reader pass does not satisfy this. If the parallel mechanism is unavailable,
-  stop and report it as a blocker rather than substituting a weaker form — a review
-  that silently runs at reduced strength is worse than one that visibly did not run.
-- Commit the ticket resolution and tracker status as required by the repository.
-- Hand off a pointer, not a generated runbook: report the completed ticket, final
-  SHA, next eligible ticket (or blocker), and the skill to invoke. The fresh agent
-  should derive current instructions from repository sources.
-- Never copy the ticket, milestone rules, commands, versions, hashes, or this
-  handoff rule into a ready-to-paste recursive prompt.
-- When a milestone closes, give the validation worker only the milestone path,
-  implementation fixed point, completed target, permitted writes, and prohibition
-  on later-milestone work. The validation plan remains in the repository.
+- Commit the implementation, then run the project `code-review` skill against the
+  ticket's fixed point in its two-axis parallel form. Fix every blocking finding. If the
+  parallel mechanism is unavailable, stop and report; never substitute one reader.
+- Write the `## Result`, at most 150 words: what shipped, where the tests are, and links
+  to any follow-up tickets, in the present tense: what exists now, not what was routed,
+  deferred, or changed along the way.
+- Set the ticket frontmatter closed and update its row in the milestone table. Commit
+  that closure.
+- Report the closing SHA, the gate result, and the next eligible ticket. Nothing else.
+- Never copy the ticket, milestone rules, commands, versions, or hashes into a
+  ready-to-paste recursive prompt.
 
 Commit the completed work to the current branch unless the user or repository
 explicitly requests a different handoff.

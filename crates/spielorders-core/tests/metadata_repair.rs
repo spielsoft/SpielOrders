@@ -16,9 +16,10 @@ use spielorders_core::metadata_repair::{
     commit_metadata_repair, plan_metadata_repair,
 };
 use spielorders_core::mutation::MutationReport;
-use spielorders_core::order_diagnosis::{RepairAction, diagnose_order};
+use spielorders_core::order_diagnosis::diagnose_order;
 use spielorders_core::ports::UuidGenerator;
 use spielorders_core::readme::DiagnosticCode;
+use spielorders_core::repair_cases::RepairAction;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -379,7 +380,7 @@ fn a_replacement_that_is_still_invalid_is_refused_before_any_write() {
         .err()
         .unwrap_or_else(|| panic!("{label} must be refused rather than salvaged"));
         assert!(
-            matches!(error, MetadataRepairError::InvalidReplacement),
+            matches!(error, MetadataRepairError::InvalidReplacement { .. }),
             "{label} is refused as an invalid replacement: {error:?}"
         );
     }
@@ -448,7 +449,7 @@ fn a_replacement_that_would_leave_the_package_damaged_is_refused_before_any_writ
         assert!(
             matches!(
                 error,
-                MetadataRepairError::ReplacementDamagesPackage { constraint: broken }
+                MetadataRepairError::ReplacementDamagesPackage { constraint: broken, .. }
                     if broken == constraint
             ),
             "{label} is refused by the name of the constraint it broke: {error:?}"

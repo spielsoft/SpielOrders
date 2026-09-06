@@ -1,0 +1,33 @@
+{
+  "contract": "spielorders.add_order",
+  "contract_version": 1,
+  "ok": false,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>",
+    "order_root": null
+  },
+  "data": null,
+  "diagnostics": [],
+  "error": {
+    "code": "order_assignment_rejected",
+    "message": "no assignment was applied, because an assignment set is one atomic mutation and some of them were refused: `colour` (unknown_field), `items` (ordered_collection).",
+    "scope": "order",
+    "paths": [
+      {
+        "spelling": "resolved",
+        "path": "<PACKAGE_ROOT>/Orders",
+        "package_relative_path": "Orders"
+      }
+    ],
+    "identities": [
+      {
+        "kind": "unknown_field",
+        "value": "colour"
+      },
+      {
+        "kind": "ordered_collection",
+        "value": "items"
+      }
+    ]
+  }
+}

@@ -260,11 +260,15 @@ fn a_recoverable_removal_moves_the_intact_directory_and_never_reaches_the_trash(
     .expect("an active Order can be removed recoverably");
 
     assert_eq!(plan.disposition(), RemovalDisposition::RecoverableDirectory);
-    assert_eq!(plan.destination(), Some(removed.as_path()));
+    assert_eq!(
+        plan.destination()
+            .map(|destination| destination.absolute_path()),
+        Some(removed.as_path())
+    );
     assert!(plan.creates_removed_orders_directory());
     assert_eq!(plan.order_id(), ORDER_ID);
     assert_eq!(plan.title(), "Laser components");
-    assert_eq!(plan.source(), directory);
+    assert_eq!(plan.source().absolute_path(), directory);
     assert_eq!(
         plan.operations()
             .iter()
@@ -524,7 +528,8 @@ fn stored_locator(directory: &Path) -> String {
     OrderDocument::from_json_bytes(&fs::read(directory.join(".spielorders/order.json")).unwrap())
         .expect("the canonical Order parses")
         .package_root
-        .as_str()
+        .stored_text()
+        .expect("the canonical Order carries a locator")
         .to_owned()
 }
 
@@ -971,10 +976,14 @@ fn a_destination_collision_stops_removal_without_inventing_a_suffix() {
     )
     .expect_err("a taken destination stops removal");
 
-    let OrderRemovalPlanError::DestinationCollision { path } = &error else {
+    let OrderRemovalPlanError::DestinationCollision { location } = &error else {
         panic!("a collision is reported as such: {error:?}");
     };
-    assert_eq!(path, &occupied);
+    assert_eq!(location.absolute_path(), occupied);
+    assert!(
+        location.package_relative_path().is_some(),
+        "a refused destination inside the Package carries the Package's spelling for it"
+    );
     assert!(directory.is_dir(), "the Order stays active");
     assert_eq!(contents(&directory), before);
     assert_eq!(
@@ -1233,10 +1242,10 @@ fn a_rejected_move_leaves_no_removed_orders_directory_it_created() {
 
         let report = commit_order_removal(plan, &injected, &UnreachableTrash);
 
-        let RemovedDirectoryCleanup::Removed { path } = cleanup(&report) else {
+        let RemovedDirectoryCleanup::Removed { location } = cleanup(&report) else {
             panic!("{label}: the rejection reports the directory it undid: {report:?}");
         };
-        assert_eq!(path, &removed_root, "{label}");
+        assert_eq!(location.absolute_path(), removed_root, "{label}");
         assert!(
             !removed_root.exists(),
             "{label}: the rejected operation left no directory behind"
@@ -1296,10 +1305,10 @@ fn a_rejected_removal_retains_a_directory_it_created_that_evidence_arrived_in() 
         &UnreachableTrash,
     );
 
-    let RemovedDirectoryCleanup::Retained { path } = cleanup(&report) else {
+    let RemovedDirectoryCleanup::Retained { location } = cleanup(&report) else {
         panic!("evidence this operation did not create retains the directory: {report:?}");
     };
-    assert_eq!(path, &removed_root);
+    assert_eq!(location.absolute_path(), removed_root);
     assert_eq!(
         fs::read(&arrived).unwrap(),
         b"not ours\n",
@@ -1330,7 +1339,7 @@ fn a_cleanup_that_fails_is_reported_beside_the_failure_that_initiated_it() {
     let MutationReport::Rejected {
         rejection:
             OrderRemovalRejection::MoveFailed {
-                cleanup: RemovedDirectoryCleanup::Failed { path, .. },
+                cleanup: RemovedDirectoryCleanup::Failed { location, .. },
                 ..
             },
         ..
@@ -1338,7 +1347,7 @@ fn a_cleanup_that_fails_is_reported_beside_the_failure_that_initiated_it() {
     else {
         panic!("the initiating failure and the cleanup failure are both reported: {report:?}");
     };
-    assert_eq!(path, &removed_root);
+    assert_eq!(location.absolute_path(), removed_root);
     assert!(
         removed_root.is_dir(),
         "the report names a directory that really is still there"

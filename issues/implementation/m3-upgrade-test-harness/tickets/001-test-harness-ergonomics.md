@@ -97,13 +97,11 @@ Review the test harness layout, the profile and manifest changes, and the develo
 procedure. Do not absorb M3 capability work, and do not review the domain behavior the
 tests cover except to confirm it is unchanged.
 
-## Closeout
+## Result
 
 Closed. Scope parts 1 to 3 landed; part 4 was handed back unstarted, as that part
 authorizes, and is now
 [Let a core test read as its assertions plus a named fixture](002-fixture-builders.md).
-
-Started from a clean worktree at `958d278e16e9ded642814ebfb5ce1c4307a527c1`.
 
 ### Measurements
 

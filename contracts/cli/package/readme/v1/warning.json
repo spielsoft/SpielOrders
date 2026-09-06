@@ -1,0 +1,32 @@
+{
+  "contract": "spielorders.package.readme",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>"
+  },
+  "data": {
+    "location": {
+      "absolute_path": "<PACKAGE_ROOT>/README.md",
+      "package_relative_path": "README.md"
+    },
+    "exists": true
+  },
+  "diagnostics": [
+    {
+      "code": "readme_unavailable",
+      "severity": "warning",
+      "scope": "document",
+      "primary_location": {
+        "absolute_path": "<PACKAGE_ROOT>/README.md",
+        "package_relative_path": "README.md"
+      },
+      "related_locations": [],
+      "evidence": {
+        "document_kind": "package_readme",
+        "reason": "wrong_kind"
+      }
+    }
+  ],
+  "error": null
+}

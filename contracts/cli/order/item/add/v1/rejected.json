@@ -1,0 +1,37 @@
+{
+  "contract": "spielorders.order.item.add",
+  "contract_version": 1,
+  "ok": false,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>",
+    "order_root": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace"
+  },
+  "data": null,
+  "diagnostics": [],
+  "error": {
+    "code": "order_item_facts_required",
+    "message": "an Order Item requires `description`, `quantity`, `unit_price` and this command line assigned none of them, so nothing was written. Its Catalog Number is optional, and its totals are calculated rather than assigned.",
+    "scope": "order",
+    "paths": [
+      {
+        "spelling": "resolved",
+        "path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace",
+        "package_relative_path": "Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace"
+      }
+    ],
+    "identities": [
+      {
+        "kind": "required_fact",
+        "value": "description"
+      },
+      {
+        "kind": "required_fact",
+        "value": "quantity"
+      },
+      {
+        "kind": "required_fact",
+        "value": "unit_price"
+      }
+    ]
+  }
+}

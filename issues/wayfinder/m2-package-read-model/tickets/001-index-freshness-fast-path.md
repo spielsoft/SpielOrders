@@ -8,18 +8,11 @@ labels:
 assignee: /root
 ---
 
-## Question
+## Decision
 
-What exact, observable trust and freshness contract lets SpielOrders accept a
-current Package Index without reading every canonical `order.json`, while still
-detecting missing, malformed, wrong-version, and stale derived state and rebuilding
-it deterministically when required?
-
-## Blocking
-
-Unblocked.
-
-## Resolution
+The read model is built. The core crate's public surface is the record of the index
+states, refresh outcomes, and load results named below; what follows is what that core
+may never become.
 
 ### Trust boundary and version-1 constraint
 
@@ -147,12 +140,9 @@ and refresh outcome is `replacement_failed`.
 
 ### Stable state vocabulary and core boundary
 
-Later diagnostics and projections use two separate typed concepts:
-
-- Package Index state: `current`, `missing`, `malformed`, `wrong_version`,
-  `stale`, or `not_assessed`;
-- refresh outcome: `not_needed`, `rebuilt`, `not_attempted`, or
-  `replacement_failed`.
+Diagnostics and projections keep Package Index state and refresh outcome as two
+separate typed concepts. Neither is ever collapsed into the other, and neither is
+canonical damage.
 
 The shared Rust core owns cutoff comparison, directory-membership proof, state
 classification, deterministic projection, validation, and the decision to replace.

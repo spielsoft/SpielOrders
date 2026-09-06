@@ -19,7 +19,7 @@ use spielorders_core::mutation::{MutationReport, RejectedAssignmentReason};
 use spielorders_core::operations::OperationFailureCode;
 use spielorders_core::order_edits::{
     DateOrderedSource, OrderAssignments, OrderEditOperationKind, OrderEditPlanError,
-    OrderEditRejection, OrderEditResult, OrderEditReusableValues, OrderEditWarning,
+    OrderEditRejection, OrderEditResult, OrderEditReusableValues, OrderEditWarning, OrderFactKind,
     PlannedOrderFacts, commit_order_edit, plan_order_edit,
 };
 use spielorders_core::package::ReusableValue;
@@ -222,7 +222,7 @@ fn commit_persists_facts_refreshes_index_and_retains_the_drifted_directory_name(
     )
     .expect("the canonical Order parses");
     assert_eq!(persisted.title.as_str(), "Laser mounts");
-    assert_eq!(persisted.package_root.as_str(), "../..");
+    assert_eq!(persisted.package_root.stored_text(), Some("../.."));
     let indexed =
         IndexDocument::from_json_bytes(&fs::read(root.join(".spielorders/index.json")).unwrap())
             .expect("the refreshed derived index parses");
@@ -908,6 +908,10 @@ fn planned_value<'a>(facts: &'a PlannedOrderFacts, field: &str) -> Option<&'a st
     }
 }
 
+/// **The Vendor an edit leaves is resolved by the plan and by the result**, because the
+/// projection a mutation answers with resolves one and an edit is what can change which
+/// Vendor that is. A run asked to plan only has no committed record to resolve it from, so
+/// the plan carries it; a run that committed reports the Vendor the refreshed load found.
 #[test]
 fn a_live_vendor_reference_can_be_assigned_and_cleared() {
     let tree = initialized_package("order-edit-vendor");
@@ -919,10 +923,28 @@ fn a_live_vendor_reference_can_be_assigned_and_cleared() {
         &OrderCreationInput::new("Laser components"),
     );
 
+    let plan = plan_order_edit(
+        &directory,
+        &OrderAssignments::new().assign("vendor_id", &vendor),
+        &FixedCalendar::on(2026, 9, 1),
+        &RealFileSystem,
+    )
+    .expect("a live Vendor can be referenced");
+    assert_eq!(
+        plan.vendor().map(|vendor| vendor.name.as_str()),
+        Some("Tarnwick"),
+        "the Vendor the plan would leave is resolved against what it would store"
+    );
+
     let assigned = committed_edit(
         &directory,
         OrderAssignments::new().assign("vendor_id", &vendor),
         &FixedCalendar::on(2026, 9, 1),
+    );
+    assert_eq!(
+        assigned.vendor().map(|vendor| vendor.name.as_str()),
+        Some("Tarnwick"),
+        "and the committed Order resolves it too, so the answer needs no second read"
     );
     assert_eq!(
         assigned
@@ -951,8 +973,49 @@ fn a_live_vendor_reference_can_be_assigned_and_cleared() {
         &FixedCalendar::on(2026, 9, 1),
     );
     assert_eq!(cleared.order().document().vendor_id, None);
+    assert!(
+        cleared.vendor().is_none(),
+        "an Order that references no Vendor resolves none"
+    );
     let projection = show_vendor(root, &vendor, &RealFileSystem).expect("the Vendor resolves");
     assert!(projection.referencing_orders().is_empty());
+}
+
+/// **Assigning is itself the confirmation, and the core is what knows for which fields.**
+///
+/// A genuinely new Reusable Free-Entry Value needs explicit confirmation, and a caller for
+/// whom supplying the value *is* that confirmation — a CLI command line is the decided one
+/// — hands over the whole set the same way. So the same method carries a new Project into
+/// the record and an ordinary Title beside it, and neither has to know which of the two it
+/// was: a confirmation on a field that is not a Reusable Free-Entry Value would otherwise
+/// be refused as one.
+#[test]
+fn a_confirmed_assignment_introduces_a_new_value_and_still_assigns_an_ordinary_fact() {
+    let tree = initialized_package("order-edit-confirmed-assignment");
+    let directory = created_order(
+        tree.path(),
+        "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
+        &OrderCreationInput::new("Laser components"),
+    );
+
+    let committed = committed_edit(
+        &directory,
+        OrderAssignments::new()
+            .confirm("project", "Telescope")
+            .confirm("title", "Laser heads"),
+        &FixedCalendar::on(2026, 9, 1),
+    );
+
+    assert_eq!(
+        committed.order().document().project.as_deref(),
+        Some("Telescope"),
+        "a Package that uses no Project yet takes the confirmed new value"
+    );
+    assert_eq!(
+        committed.order().document().title.as_str(),
+        "Laser heads",
+        "and a field that is no Reusable Free-Entry Value is assigned rather than refused"
+    );
 }
 
 #[test]
@@ -1132,10 +1195,20 @@ fn a_concurrent_order_record_change_rejects_before_any_write() {
     let MutationReport::Rejected { rejection, .. } = report else {
         panic!("a concurrent record change rejects: {report:?}");
     };
-    let OrderEditRejection::PreconditionsChanged { path } = &rejection else {
+    let OrderEditRejection::PreconditionsChanged { location } = &rejection else {
         panic!("a concurrent record change is a precondition change: {rejection:?}");
     };
-    assert!(path.ends_with(".spielorders/order.json"));
+    assert!(
+        location
+            .absolute_path()
+            .ends_with(".spielorders/order.json")
+    );
+    assert!(
+        location
+            .package_relative_path()
+            .is_some_and(|relative| relative.ends_with(".spielorders/order.json")),
+        "a refusal names the record in the Package's own spelling: {location:?}"
+    );
     assert_eq!(
         fs::read(&order_path).unwrap(),
         before,
@@ -1144,16 +1217,21 @@ fn a_concurrent_order_record_change_rejects_before_any_write() {
 }
 
 /// The refusal that makes commit-time candidate validation redundant here, pinned at
-/// the site that actually performs it.
+/// the site that actually performs it — and it names the fact it refused.
 ///
 /// An Order edit's candidate is the planned document serialized, and the plan is only
-/// built from facts that parsed and validated. A `date_ordered` with the shape of a
-/// date but no such day, and one with no date shape at all, are both refused while
-/// planning — before any staging file exists and before the commit is even offered.
-/// Nothing reaches a commit holding facts that were never validated, which is why the
-/// commit-time guard was removed rather than kept as a net.
+/// built from facts that parsed and validated. Nothing reaches a commit holding facts
+/// that were never validated, which is why the commit-time guard was removed rather than
+/// kept as a net.
+///
+/// **Each of the three facts whose value the record constrains is refused by name.** A
+/// Date Ordered with the shape of a date but no such day parses and then fails calendar
+/// validation, and one with no date shape at all fails to parse: two different internal
+/// paths, one answer, because a caller correcting an assignment needs to be told which
+/// assignment. A refusal that said only "these facts are invalid" is what an atomic set
+/// makes least useful.
 #[test]
-fn an_unreal_or_shapeless_date_is_refused_while_planning_and_writes_nothing() {
+fn a_value_the_record_cannot_hold_is_refused_by_name_while_planning_and_writes_nothing() {
     let tree = initialized_package("order-edit-invalid-facts-refused-at-plan");
     let directory = created_order(
         tree.path(),
@@ -1163,19 +1241,36 @@ fn an_unreal_or_shapeless_date_is_refused_while_planning_and_writes_nothing() {
     let order_path = directory.join(".spielorders/order.json");
     let before = fs::read(&order_path).unwrap();
 
-    // Shape of a date, no such day: parses, then fails validation.
-    // No date shape at all: fails to parse. Both are the same refusal.
-    for proposed in ["2026-02-30", "the ides of March"] {
+    for (field, proposed, expected) in [
+        ("date_ordered", "2026-02-30", OrderFactKind::DateOrdered),
+        (
+            "date_ordered",
+            "the ides of March",
+            OrderFactKind::DateOrdered,
+        ),
+        ("status", "shipped", OrderFactKind::Status),
+        ("currency", "dollars", OrderFactKind::Currency),
+        ("currency", "usd", OrderFactKind::Currency),
+    ] {
         let error = plan_order_edit(
             &directory,
-            &OrderAssignments::new().assign("date_ordered", proposed),
+            &OrderAssignments::new().assign(field, proposed),
             &FixedCalendar::on(2026, 9, 1),
             &RealFileSystem,
         )
         .expect_err("an Order cannot be edited into an invalid record");
         assert!(
-            matches!(error, OrderEditPlanError::InvalidFacts),
-            "{proposed:?} is refused as invalid facts, not as something else: {error:?}"
+            matches!(
+                &error,
+                OrderEditPlanError::InvalidFactValue { fact, value }
+                    if *fact == expected && value == proposed
+            ),
+            "{field}={proposed:?} is refused naming the fact, not as something else: {error:?}"
+        );
+        assert_eq!(
+            expected.as_str(),
+            field,
+            "the fact a refusal names is the field a caller assigned"
         );
     }
 

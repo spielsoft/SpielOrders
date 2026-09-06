@@ -1,0 +1,28 @@
+{
+  "contract": "spielorders.vendor.contact.remove",
+  "contract_version": 1,
+  "ok": false,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>"
+  },
+  "data": null,
+  "diagnostics": [],
+  "error": {
+    "code": "vendor_contact_position_invalid",
+    "message": "1 is not a position this command can address: this Vendor has no Contacts.",
+    "scope": "package",
+    "paths": [
+      {
+        "spelling": "resolved",
+        "path": "<PACKAGE_ROOT>/.spielorders/vendors.json",
+        "package_relative_path": ".spielorders/vendors.json"
+      }
+    ],
+    "identities": [
+      {
+        "kind": "source_position",
+        "value": "1"
+      }
+    ]
+  }
+}

@@ -7,134 +7,67 @@ labels:
 assignee: /root
 ---
 
-## Question
+## Decision
 
-Within the accepted single Git-style `spielorders` executable and its first-level `init`, `package`, `order`, `vendor`, `search`, `validate`, `upgrade`, `repair`, and `index` families, which exact subcommands, mutation reports, validation and repair exposure, exit behavior, default human-readable output, and independently versioned machine-readable JSON envelopes make the GUI replaceable without duplicating Rust core package rules?
+SpielOrders has one human-first, Git-style `spielorders` executable. The CLI and Tauri backend are adapters over the same typed Rust core; neither owns or duplicates Package rules. Every ordinary Package-domain read and mutation the GUI needs is a core capability, including Package and Order README access and OS-native Supporting Material search. Presentation, window and session state, and app-owned preferences stay outside core. The diagnostic GUI's raw-JSON editor is the sole exception: it may write expert-supplied text directly and then call core validation, without a corresponding library or CLI mutation.
 
-## Blocking
+SpielGantt is precedent for human-readable defaults, opt-in versioned JSON, typed mutation reports, and a shared Rust package boundary. Its command names and JSON shapes are not SpielOrders requirements.
 
-Unblocked.
+Every command except the three under `search` is built. `contracts/cli/` records each command's response cells, `crates/spielorders-cli/src/contract.rs` is the registry of response identities and of how a version advances, and `crates/spielorders-cli/src/exit.rs` is the closed set of exits. What follows is what that surface may never become.
 
-## Resolution
+### Targeting
 
-SpielOrders has one human-first, Git-style `spielorders` executable. The CLI and Tauri backend are adapters over the same typed Rust core; neither owns or duplicates Package rules. Every ordinary Package-domain read and mutation required by the GUI must be a core capability, including Package and Order README access and OS-native Supporting Material search. Presentation, window/session state, and app-owned preferences remain outside core. The diagnostic GUI's explicitly accepted raw-JSON editor is the sole exception: it may write expert-supplied text directly and then call core validation, without adding a corresponding library or CLI mutation.
+`--root <PATH>` defaults to `.` and names the root of the command's subject: the SpielOrders Root for Package-level and Vendor commands, the Order Directory for `order` commands. The command fails when that exact path is not the required kind of root; it never searches ancestors. There is no separate `--order-root` option.
 
-SpielGantt establishes useful precedent for human-readable defaults, opt-in versioned JSON, typed mutation reports, and a shared Rust package boundary. Its command names and JSON shapes are not SpielOrders requirements.
+An Order Directory is self-locating without ancestor search. `order.json` carries a required technical `package_root` field: a normalized relative path from the Order Directory to its SpielOrders Root, never absolute and never a domain fact. Package validation verifies that the resolved root is the Package being validated and that the directory is an active direct child of its configured Orders Directory. A missing, malformed, stale, or mismatched locator damages only that Order and is explicitly repairable. Moving an entire Package preserves the locator.
 
-### Targeting and metadata refinements
-
-`--root <PATH>` defaults to `.` and names the root of the command's subject: the SpielOrders Root for Package-level and Vendor commands, and the Order Directory for `order` commands. The command fails when that exact path is not the required kind of root; it never searches ancestors. The separate `--order-root` option does not exist.
-
-To make an Order Directory self-locating without ancestor search, version-1 `order.json` gains a required technical `package_root` field. It is a normalized relative path from the Order Directory to its SpielOrders Root, never an absolute path or a domain fact. Package validation verifies that the resolved root is the Package being validated and that the directory is an active direct child of its configured Orders Directory. A missing, malformed, stale, or mismatched locator damages only that Order and is explicitly repairable. Moving an entire Package preserves the locator; an explicit Order removal updates it when necessary.
-
-This requirement refines the version-1 schema established by [Define durable metadata schemas and version evolution](010-metadata-schemas.md) before implementation; it is not a migration or a Git-like version history.
-
-Order commands also reserve provisional `--uuid <ORDER_ID>` targeting for GUI or scripting evaluation during MVP. It resolves the ID from the current-directory SpielOrder Package and is mutually exclusive with `--root`. It may be removed before the CLI contract is declared stable if MVP usage does not justify it. Human workflows use Order Directory paths, never UUIDs or non-unique Order Titles.
+Order commands reserve provisional `--uuid <ORDER_ID>` targeting for GUI and scripting evaluation during MVP. It resolves the ID within the current-directory SpielOrder Package, is mutually exclusive with `--root`, and may be withdrawn before the CLI contract is declared stable. Human workflows use Order Directory paths, never UUIDs or non-unique Order Titles.
 
 ### Command surface
 
-The required human-facing command tree is:
+`package list` owns Package collections so every `order` command keeps Order-root semantics. Vendor commands are Package-rooted because Vendors have no directories. There are no `create-order`, `create-vendor`, or Vendor Merge aliases.
 
-```text
-spielorders init [orders_path=Orders] [removed_path=Removed]
+`package show` is the complete GUI-bootstrap read: one call carries everything the desktop needs to open a Package, including the four current Reusable Free-Entry Value lists. The core derives those lists from the loaded Package Index rather than scanning Order Directories or recomputing per dropdown. Materializing them in `index.json` would leave them derived data and would require the normal metadata-version change.
 
-spielorders add-order [TITLE | field=value...]
-spielorders add-vendor [NAME | field=value...]
-
-spielorders package show
-spielorders package readme
-spielorders package list orders
-spielorders package list vendors
-spielorders package values project
-spielorders package values orderer
-spielorders package values ordering_institution
-spielorders package values order_group
-
-spielorders order show
-spielorders order edit field=value...
-spielorders order readme
-spielorders order align
-spielorders order remove [--delete]
-spielorders order validate
-spielorders order repair [case=... action=... field=value...]
-
-spielorders order item list
-spielorders order item add field=value...
-spielorders order item edit POSITION field=value...
-spielorders order item move POSITION position=POSITION
-spielorders order item remove POSITION
-
-spielorders vendor show NAME
-spielorders vendor edit NAME field=value...
-spielorders vendor hide NAME
-spielorders vendor unhide NAME
-
-spielorders vendor contact list NAME
-spielorders vendor contact add NAME field=value...
-spielorders vendor contact edit NAME POSITION field=value...
-spielorders vendor contact move NAME POSITION position=POSITION
-spielorders vendor contact remove NAME POSITION
-
-spielorders search orders KEYWORD...
-spielorders search vendors KEYWORD...
-spielorders search supporting-material KEYWORD...
-
-spielorders validate
-spielorders repair [case=... action=... field=value...]
-spielorders upgrade [--dry-run]
-spielorders index status
-spielorders index rebuild
-```
-
-Standard generated `--help` and `--version` complete the reference. `package list` owns Package collections so every `order` command retains Order-root semantics. Vendor commands remain Package-rooted because Vendors have no directories.
-
-`add-order "Laser components"` is the title-only shorthand for `add-order title="Laser components"`. The forms cannot be combined. Unspecified Order fields receive their established defaults: current local Date Ordered, `in_preparation`, no Vendor, and no Order Items. `add-vendor "Tarnwick"` is the equivalent Name shorthand. There are no `create-order`, `create-vendor`, or Vendor Merge aliases.
-
-`package show` is the complete GUI-bootstrap read. Its typed result includes Package paths and metadata versions, Package README, healthy Orders, Damaged Order placeholders, Vendors, diagnostics, upgrade and index state, and the four current Reusable Free-Entry Value lists. The core derives those lists once from the loaded Package Index rather than scanning Order Directories or recomputing per dropdown. If later measurement justifies materializing the lists in `index.json`, they remain derived data and require the normal metadata-version change.
-
-`package readme` and `order readme` print only the conventional absolute path, whether or not the optional file presently exists, so humans can compose `cat`, `vi`, or another ordinary tool. Their JSON results also identify the relevant relative path and existence. The Rust core nevertheless provides typed UTF-8 reads and atomic writes for both README kinds because the GUI editor depends on them; it never generates their content.
+`package readme` and `order readme` print only the conventional absolute path, whether or not the optional file exists, so humans can compose `cat`, `vi`, or another ordinary tool. The core provides typed UTF-8 reads and atomic writes for both README kinds because the GUI editor depends on them; it never generates their content.
 
 ### Assignment and collection semantics
 
-CLI options govern targeting, output, and execution. Domain facts use canonical `field=value` assignments. Parsing splits on the first `=` so quoted values may contain additional equals signs. Unknown and immutable fields are rejected. An empty value clears an optional scalar; blank required facts remain invalid. A CLI assignment of a new Reusable Free-Entry Value is itself explicit confirmation. Matching values reuse the existing trimmed, case-insensitive canonical spelling, and mutation results distinguish reuse from introduction.
+Options govern targeting, output, and execution; domain facts use canonical `field=value` assignments. Parsing splits on the first `=`, so a quoted value may contain further equals signs. Unknown and immutable fields are rejected. An empty value clears an optional scalar; blank required facts remain invalid. A CLI assignment of a new Reusable Free-Entry Value is itself the explicit confirmation that value requires, and mutation results distinguish reuse of an existing canonical spelling from introduction of a new one.
 
-Every command's assignments form one order-independent, fully validated atomic mutation. When an edit enters `ordered` without `date_ordered`, the core applies today's local date. An explicit `date_ordered` in the same mutation overrides that automatic value, enabling historical correction without a second edit.
+Every command's assignments form one order-independent, fully validated, atomic mutation. An edit entering `ordered` without `date_ordered` takes today's local date; an explicit `date_ordered` in the same mutation overrides it, so historical correction needs no second edit.
 
 Order Items and Vendor Contacts have no IDs and use one-based positions. `add` appends unless `position=N` is supplied; `edit`, `move`, and `remove` evaluate positions against the pre-mutation ordered collection. The core rewrites the complete validated owning Order or Vendor aggregate atomically.
 
-Vendor Names are the ordinary Vendor selectors and resolve by the established trimmed, case-insensitive package-unique comparison. Machine responses always retain Vendor IDs. `vendor show` includes summaries of referencing Orders and resolves a Hidden Vendor exactly as it resolves any other. A Vendor is never deleted: `vendor hide` stops offering one for new use and `vendor unhide` offers it again, neither is rejected on reference grounds, and the Vendor's record and ID survive either way. Vendor lists default to the currently active Vendors: `package list vendors` and `package show` omit Hidden Vendors unless `--all` is supplied, and with `--all` every Vendor is reported carrying its visibility. The core does not filter — it exposes both the complete list with visibility and the offered-only list — so this default is a presentation choice the CLI makes, and the desktop Vendors table consumes the complete list for its show/hide control.
+A bare `item` token opens one Item group on the command line, and the assignments after it belong to that Item until the next `item` or the end of the line. It is a decided third token class beside options and assignments, not an implementation detail of one command. `adopt-order` is the one command that takes it, because adoption is the one mutation that may carry Items at creation.
 
-Vendor Merge is absent from the product and core contract, consistently with
-[Define Vendor identity and historical semantics](004-vendor-identity-history.md).
-Duplicate reconciliation during adoption must use an existing Vendor association,
-a deliberately distinct Vendor, or hiding the duplicate so it stops being offered
-for new use; it cannot consolidate two Vendor records.
+Vendor Names are the ordinary Vendor selectors, resolved by the established trimmed, case-insensitive package-unique comparison; machine responses always retain Vendor IDs. A Vendor is never deleted: `vendor hide` stops offering one for new use and `vendor unhide` offers it again, neither is rejected on reference grounds, and the record and ID survive either way. Resolution ignores visibility. Vendor lists offer only active Vendors until `--all` asks for every Vendor with its visibility. The core does not filter — it exposes both the complete list with visibility and the offered-only list — so that default is a presentation choice the CLI makes, and the desktop Vendors table consumes the complete list for its show/hide control.
+
+Vendor Merge is absent from the product and the core contract; [Define Vendor identity and historical semantics](004-vendor-identity-history.md) owns what duplicate reconciliation may do instead.
 
 ### Removal and mutation boundaries
 
-`.spielorders/config.toml` now permits optional `orders_path` and `removed_path` keys, defaulting to `Orders` and `Removed`. `orders_path = "."` is no longer valid; it must be a nonempty relative descendant of the SpielOrders Root. `removed_path` must name an ordinary direct-child directory of the SpielOrders Root. The paths cannot overlap, escape the root, occupy `.spielorders`, or resolve through disallowed links. The Removed Orders Directory is created lazily.
+`order remove` moves the complete Order Directory — managed metadata, README, and opaque Supporting Material — to the Removed Orders Directory under its original basename. It rejects a collision instead of inventing a suffix, updates the technical Package locator, and rebuilds the Package Index. Removed contents are outside active discovery, indexing, search, validation, upgrade, and repair. That directory is created lazily, and [Define durable metadata schemas and version evolution](010-metadata-schemas.md) owns what `removed_path` may spell.
 
-`order remove` moves the complete Order Directory, including its managed metadata, README, and opaque Supporting Material, to `<removed_path>/<original-basename>`. It rejects a collision instead of inventing a suffix, updates the technical Package locator when necessary, and rebuilds the Package Index. Removed contents are outside active discovery, indexing, search, validation, upgrade, and repair.
+`order remove --delete` sends the complete directory to the platform Trash or Recycle Bin instead, and never permanently erases it. Permanent disposal remains ordinary platform trash management.
 
-`order remove --delete` sends the complete directory to the platform Trash or Recycle Bin instead of the Removed Orders Directory. It never permanently erases it. Permanent disposal remains ordinary platform trash management.
+All mutating commands accept `--dry-run`, which validates and emits the same planned mutation report with `committed: false` while creating no directory, staging file, index rewrite, or cleanup side effect. Commands never prompt and there is no `--yes`: naming the mutation and omitting `--dry-run` is authorization. Preconditions still reject unsafe removal, collisions, invalid writes, and unsupported repair actions.
 
-All mutating commands accept `--dry-run`. A dry run performs validation and emits the same planned mutation report with `committed: false`, but creates no directory, staging file, index rewrite, or cleanup side effect. Commands never prompt and there is no `--yes`: naming the mutation and omitting `--dry-run` is authorization. Preconditions still reject unsafe removal, collisions, invalid writes, and unsupported repair actions.
+The core validates a complete mutation plan before its first write, and managed-file replacements keep the established beside-destination staging, validation, atomic replacement, and rollback rules. Reports distinguish changed, unchanged, rejected, and committed-with-warnings outcomes. A committed canonical mutation followed by a failed derived-index refresh stays committed, reports the warning, and does not encourage an unsafe retry.
 
-The core validates a complete mutation plan before its first write. Managed-file replacements retain the established beside-destination staging, validation, atomic replacement, and rollback rules. Reports distinguish changed, unchanged, rejected, and committed-with-warnings outcomes. A committed canonical mutation followed by a failed derived-index refresh remains committed, reports the warning, and avoids encouraging an unsafe retry.
-
-Supporting Material stays opaque. The only core mutations that may move or dispose of it are the user's explicit whole-Order `remove` operations; validation, repair, alignment, metadata edits, rollback cleanup, and index work never inspect or mutate it.
+Supporting Material stays opaque. **Disposal is `remove`'s exclusive act**: the only core mutations that may dispose of Supporting Material — to the Removed Orders Directory, or to the platform Trash under `--delete` — are the user's explicit whole-Order `remove` operations. **Relocating a container intact is a different act from inspecting or mutating its contents**, and two operations relocate a whole Order Directory: whole-Order disposition, and `order align`, which renames the containing directory. Neither inspects, enumerates, hashes, or rewrites the opaque tree, and neither treats its contents as domain evidence. Validation, repair, alignment, metadata edits, rollback cleanup, and index work never inspect or mutate Supporting Material.
 
 ### Validation, repair, upgrade, and index exposure
 
-Top-level `validate` exhaustively validates the complete Package, including every Order Directory and cross-record constraint. `order validate` validates the selected Order scope. Both return all diagnostics at once, grouped at the narrowest scope.
+Top-level `validate` exhaustively validates the complete Package, including every Order Directory and cross-record constraint; `order validate` validates the selected Order scope. Both return all diagnostics at once, grouped at the narrowest scope.
 
-Bare top-level `repair` diagnoses only actionable Package-level repair cases. Bare `order repair` diagnoses only the selected Order's actionable cases. Supplying `case=... action=...` applies exactly one action offered by that diagnosis, using ordinary `field=value` resolutions where required. Case handles are ephemeral, not domain identities or persistent metadata. Diagnostics provide stable issue codes, evidence, allowed actions, required values, and an exact suggested command.
+Bare `repair` diagnoses only actionable Package-level cases and bare `order repair` only the selected Order's. Supplying `case=... action=...` applies exactly one action that diagnosis offered, using ordinary `field=value` resolutions where required. Case handles are ephemeral, never domain identities or persistent metadata. Diagnostics carry stable issue codes, evidence, allowed actions, required values, and an exact suggested command.
 
-Core repair never guesses, applies a broad `--fix`, mutates the other scope, partially salvages malformed JSON, interprets unsupported versions, or adopts missing Order metadata. It may apply only the explicit repairs allowed by the integrity decision: a fully valid confirmed replacement for parseable metadata, promotion of a validated staging candidate, explicit correction of an Unresolved Vendor Reference, or explicit adoption of a new Order identity for the chosen side of a duplicate-ID conflict. External correction and later validation remain available when no safe core action exists; the desktop decision treats its GUI-only raw-JSON editor as such an external correction surface, not as a new core repair.
+Core repair never guesses, applies a broad `--fix`, mutates the other scope, partially salvages malformed JSON, interprets unsupported versions, or adopts missing Order metadata. It may apply only the explicit repairs [Define integrity, validation, and repair boundaries](008-integrity-repair.md) allows. External correction followed by revalidation remains available when no safe core action exists; the desktop decision's GUI-only raw-JSON editor is such an external surface, not a new core repair.
 
-`upgrade` applies the complete supported sequential Metadata Upgrade to the running build's newest version. `--dry-run` reports source, target, deterministic artifact order, already-upgraded artifacts, and blockers. Rerunning the ordinary command resumes; arbitrary targets, per-file upgrades, downgrades, and package-wide rollback do not exist.
+`upgrade` applies the complete supported sequential Metadata Upgrade to the running build's newest version, and rerunning the ordinary command resumes. Arbitrary targets, per-file upgrades, downgrades, and package-wide rollback do not exist.
 
-`index status` explains whether the derived Package Index is missing, malformed, wrong-version, or stale. `index rebuild` deterministically replaces it from healthy canonical records. Neither command repairs canonical metadata or inspects Supporting Material.
+`index status` explains whether the derived Package Index is missing, malformed, wrong-version, or stale, and `index rebuild` deterministically replaces it from healthy canonical records. Neither repairs canonical metadata or inspects Supporting Material.
 
 ### Search exposure
 
@@ -148,61 +81,20 @@ The core operation is asynchronous and cancellable so it never blocks the GUI th
 
 ### Human output and process status
 
-Human-readable output is the default. Reads use concise labeled summaries or tables. `order show` includes numbered Items and calculated totals; `vendor show` includes numbered Contacts and referencing Orders. Search preserves decided sorting; Supporting Material results show Order groups and ranked paths. Mutations report the human entity name, affected facts and paths, and index outcome. UUIDs, provider rank, and individual managed-file operations appear only under `--verbose`.
+Human-readable output is the default, and it is never a parsing contract. Search preserves decided sorting, and Supporting Material results show Order groups and ranked paths. UUIDs, provider rank, and individual managed-file operations appear only under `--verbose`. Results go to stdout; warnings and errors go to stderr. Interactive color respects `NO_COLOR`, disappears when redirected, and never carries meaning alone. The CLI has no automatic pager or full-screen mode.
 
-Validation and repair group diagnostics by Package or Order Directory and show severity, stable code, explanation, and the suggested next command. Results go to stdout; warnings and errors go to stderr. Interactive color respects `NO_COLOR`, disappears when redirected, and never carries meaning alone. The CLI has no automatic pager or full-screen mode, and human output is not a parsing contract.
+The mutually exclusive global output modes are default human output; `--json`, one versioned machine-readable document; `--quiet`, no output on success while retaining errors on stderr; and `--verbose`, additional human detail.
 
-The mutually exclusive global output modes are:
-
-- default human output;
-- `--json`, one versioned machine-readable document;
-- `--quiet`, no output on success while retaining errors on stderr; and
-- `--verbose`, additional human detail.
-
-Exit status is stable and deliberately coarse:
-
-- `0`: success, including an empty search, idempotent no-op, or a committed mutation with a noncanonical derived-index warning;
-- `1`: operational or domain failure, rejected mutation, invalid validation result, actionable repair findings, unsupported metadata state, or other failed operation;
-- `2`: command-line usage error; and
-- platform signal conventions, such as `130` for Ctrl-C.
+Exit status is stable, deliberately coarse, and closed: `0` for success, `1` for an operational or domain failure, `2` for a command-line usage error, and the platform signal conventions such as `130` for Ctrl-C. Three rules bind the mapping. A result is invalid exactly when some finding carries error severity, which is the predicate the core already computes, so severity alone decides an exit status and the availability of a repair never does. A read that answers exits `0` and carries its verdict as a payload member: `repair`'s bare diagnosis is an answer rather than a verdict whatever the severity of what it found, and reaches `1` only when it could not answer or when a requested repair action is refused or fails. `ok` and the exit status are one fact for every command.
 
 ### Versioned machine-readable contracts
 
-`--json` writes exactly one UTF-8 JSON document to stdout and no incidental text. Every command owns an independently evolving response contract rather than reusing an on-disk metadata schema. The common root is:
+`--json` writes exactly one UTF-8 JSON document to stdout and no incidental text. Every command owns an independently evolving response contract rather than reusing an on-disk metadata schema, and no `contract_version` advances before the release [the roadmap](../../../roadmaps/spielorders-implementation-roadmap.md) names.
 
-```json
-{
-  "contract": "spielorders.order.show",
-  "contract_version": 1,
-  "ok": true,
-  "context": {
-    "package_root": "/absolute/package",
-    "order_root": "/absolute/package/Orders/2026_07_20_Laser_components"
-  },
-  "data": {},
-  "diagnostics": []
-}
-```
+A failure retains the command's contract with `ok: false`, `data: null`, its diagnostics, and a structured error. Exit status stays authoritative at process level. A usage error is not a command's response and carries no command's identity, and one requested under JSON keeps the same stdout discipline rather than contaminating the stream with generated human help.
 
-`contract` identifies the exact command shape and `contract_version` is that response's consecutive positive integer. It is independent of Package `metadata_version`, individual managed-file `schema_version`, CLI release version, and every other response contract. Incompatible field, representation, requiredness, enum, diagnostic-meaning, or payload change advances only the affected response contract. Formatting and human wording do not. Contracts use `snake_case`, stable enum and diagnostic codes, JSON `null` for absent optional output facts, present empty collections, absolute paths plus relevant Package-relative paths, and domain UUIDs even when the human surface omits them.
+Three rules govern the payloads. A sub-list never has its own contract identity: a show and its sub-list are one projection under one contract, differing only in what they render for a human. A validating command carries the offered repair in its own payload, in `repair`'s action vocabulary, rather than on the shared diagnostic projection. An invalid validation result is a failure like any other and carries `data: null`, so validity is `ok` and the exit status, never a payload member.
 
-Failures under `--json` retain the command's contract with `ok: false`, `data: null`, diagnostics, and a structured `error` carrying a stable code, human message, scope, and relevant paths or identities. Exit status remains authoritative at process level. Usage errors requested under JSON follow the same stdout discipline rather than contaminating the stream with generated human help.
-
-Read-contract payloads are:
-
-- `package.show`: the complete typed Package bootstrap projection described above;
-- `package.list.orders` and `package.list.vendors`: ordered entity summaries with identities and roots where applicable;
-- `package.values.<kind>`: the canonical-spelling current values and usage counts;
-- `package.readme` and `order.readme`: absolute path, relevant relative path, and existence;
-- `order.show` and `order.item.list`: complete current Order facts, ordered Items, calculated Item Totals and Order Total, paths, and local diagnostics;
-- `vendor.show` and `vendor.contact.list`: complete current Vendor facts, ordered Contacts, and referencing Order summaries;
-- `search.orders` and `search.vendors`: each matching entity once in the decided deterministic order, plus query semantics and active filters;
-- `search.supporting-material`: the complete one-shot provider/result contract described above;
-- `validate` and `order.validate`: validity, scope, stable typed diagnostics, and examined Package/Order context;
-- `repair` and `order.repair`: actionable cases, evidence, allowed actions, and required resolution fields;
-- `upgrade`: source, target, progress, skipped/completed artifacts, blockers, and final marker state; and
-- `index.status`: current index state and typed reasons.
-
-Successful mutation JSON includes both a typed mutation report and the refreshed affected result. The report contains `committed`, `changed`, typed managed operations, old and new paths where relevant, canonical-versus-derived outcomes, index status, and warnings. Order and Item mutations return the complete refreshed Order projection; Vendor and Contact mutations return the complete refreshed Vendor and referencing Order summaries; removal returns the removed entity summary and disposition; repair returns remaining diagnostics in its scope; upgrade and index rebuild return refreshed Package/version/index state. This avoids a mandatory second read without returning the entire Package after every small edit. The GUI consumes the equivalent typed core results directly and never parses CLI JSON.
+Successful mutation JSON returns both a typed mutation report and the refreshed affected result, so a caller needs no mandatory second read and no command returns the entire Package after a small edit. The GUI consumes the equivalent typed core results directly and never parses CLI JSON.
 
 Machine-readable JSON is an output contract only. Ordinary mutation input remains the human `field=value` language; the CLI does not require request documents that resemble stored metadata.

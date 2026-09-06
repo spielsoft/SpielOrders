@@ -12,6 +12,7 @@ use crate::{
         DirectoryFileSystem, FileChangeEvidence, FileChangeObservation, FileSystem,
         FileSystemEntryKind, NewFileLinkOutcome,
     },
+    readme::{Location, package_relative_path_text},
 };
 use std::path::{Path, PathBuf};
 
@@ -28,6 +29,20 @@ impl InitializationOptions {
             removed_path: removed_path.into(),
         }
     }
+
+    /// The configured Orders Directory, exactly as supplied.
+    ///
+    /// Exposed so that a caller which overrides one of the two paths can take the other
+    /// from [`Self::default`] rather than repeating the conventional name. The
+    /// conventional names are this type's own default and are spelled nowhere else.
+    pub fn orders_path(&self) -> &str {
+        &self.orders_path
+    }
+
+    /// The configured Removed Orders Directory, exactly as supplied.
+    pub fn removed_path(&self) -> &str {
+        &self.removed_path
+    }
 }
 
 impl Default for InitializationOptions {
@@ -42,17 +57,35 @@ pub enum InitializationOperationKind {
     Preserve,
 }
 
+impl InitializationOperationKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Create => "create",
+            Self::Preserve => "preserve",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InitializationDestinationKind {
     Directory,
     File,
 }
 
+impl InitializationDestinationKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Directory => "directory",
+            Self::File => "file",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InitializationOperation {
     kind: InitializationOperationKind,
     destination_kind: InitializationDestinationKind,
-    path: PathBuf,
+    location: Location,
     contents: Option<Vec<u8>>,
 }
 
@@ -65,8 +98,18 @@ impl InitializationOperation {
         self.destination_kind
     }
 
+    /// Where this operation acts, in both spellings anything describing a Package needs.
+    ///
+    /// A `Location` rather than a bare path because every artifact an initialization
+    /// touches is inside the Package it is initializing, and a caller that reported the
+    /// absolute path alone would have to derive the Package-relative one — which is this
+    /// crate's grammar, decided here.
+    pub fn location(&self) -> &Location {
+        &self.location
+    }
+
     pub fn path(&self) -> &Path {
-        &self.path
+        self.location.absolute_path()
     }
 
     pub fn contents(&self) -> Option<&[u8]> {
@@ -112,28 +155,52 @@ impl PackageInitializationPlan {
     }
 }
 
+/// Why one initialization was refused before anything was written.
+///
+/// **Every variant refused *after* the selected root resolved names that root.** A caller
+/// reporting the refusal has one path to name and the filesystem is what decided it, so a
+/// caller left to re-resolve the selected root would be resolving it a second time and
+/// could get a second answer.
+///
+/// [`Self::RootNotOrdinaryDirectory`] is the one refusal with no root at all: what stands
+/// at the selected path is not a directory, so nothing resolved. [`Self::FileSystem`] sits
+/// on both sides of the resolution — the filesystem can refuse to observe the selected
+/// path, or to canonicalize it, before there is a root, and it can equally refuse about a
+/// configured path, the reserved subtree, the Package README, or a staging name long
+/// afterwards. Its `root` is therefore present exactly when the resolution had already
+/// happened, which is the only honest answer for a refusal that can arrive either way.
 #[derive(Debug, PartialEq)]
 pub enum InitializationPlanError<E> {
     FileSystem {
+        root: Option<Location>,
         path: PathBuf,
         error: E,
     },
     RootNotOrdinaryDirectory,
-    AlreadyManaged,
+    AlreadyManaged {
+        root: Location,
+    },
     InvalidConfiguredPath {
+        root: Location,
         path: ConfiguredPath,
         failure: ConfiguredPathFailure,
     },
-    ManagedPathsOverlap,
+    ManagedPathsOverlap {
+        root: Location,
+    },
     PlannedPathCollision {
-        path: PathBuf,
+        root: Location,
+        configured: ConfiguredPath,
+        path: Location,
     },
     DestinationCollision {
-        path: PathBuf,
+        root: Location,
+        path: Location,
         actual: FileSystemEntryKind,
     },
     DisallowedLink {
-        path: PathBuf,
+        root: Location,
+        path: Location,
     },
 }
 
@@ -151,6 +218,22 @@ pub enum InitializationCommitPhase {
     SyncStage,
     InstallDestination,
     RemoveInstalledStage,
+}
+
+impl InitializationCommitPhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ObserveDestination => "observe_destination",
+            Self::CreateDirectory => "create_directory",
+            Self::VerifyManagedPaths => "verify_managed_paths",
+            Self::WriteStage => "write_stage",
+            Self::ReadStage => "read_stage",
+            Self::ValidateCandidate => "validate_candidate",
+            Self::SyncStage => "sync_stage",
+            Self::InstallDestination => "install_destination",
+            Self::RemoveInstalledStage => "remove_installed_stage",
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -259,23 +342,35 @@ pub fn plan_package_initialization<F: FileSystem>(
     options: &InitializationOptions,
     filesystem: &F,
 ) -> Result<PackageInitializationPlan, InitializationPlanError<F::Error>> {
-    let selected_kind = observe(selected_root, filesystem)?;
+    let selected_kind = observe(selected_root, None, filesystem)?;
     if selected_kind != Some(FileSystemEntryKind::Directory) {
         return Err(InitializationPlanError::RootNotOrdinaryDirectory);
     }
     let root = filesystem.canonicalize(selected_root).map_err(|error| {
         InitializationPlanError::FileSystem {
+            root: None,
             path: selected_root.to_path_buf(),
             error,
         }
     })?;
-    if observe(&root.join(".spielorders"), filesystem)?.is_some() {
-        return Err(InitializationPlanError::AlreadyManaged);
+    // The root the refusals below name. They refuse before any Package exists here, so
+    // there is nothing for the root to be relative to and it carries no spelling.
+    let root_location = Location::absolute(root.clone())
+        .expect("a canonicalized selected root is an absolute path");
+    if observe(&root.join(".spielorders"), Some(&root_location), filesystem)?.is_some() {
+        // The one refusal above that is about a Package which *does* stand here, so the
+        // root has a Package to be relative to and spells itself the way a loaded one
+        // does. One question, one answer.
+        return Err(InitializationPlanError::AlreadyManaged {
+            root: Location::within_package(root.clone(), ".")
+                .expect("a canonicalized selected root is an absolute path"),
+        });
     }
 
     let orders_components =
         validate_configured_path(&options.orders_path, false).map_err(|failure| {
             InitializationPlanError::InvalidConfiguredPath {
+                root: root_location.clone(),
                 path: ConfiguredPath::Orders,
                 failure,
             }
@@ -283,51 +378,63 @@ pub fn plan_package_initialization<F: FileSystem>(
     let removed_components =
         validate_configured_path(&options.removed_path, true).map_err(|failure| {
             InitializationPlanError::InvalidConfiguredPath {
+                root: root_location.clone(),
                 path: ConfiguredPath::Removed,
                 failure,
             }
         })?;
     if paths_overlap(&orders_components, &removed_components) {
-        return Err(InitializationPlanError::ManagedPathsOverlap);
+        return Err(InitializationPlanError::ManagedPathsOverlap {
+            root: root_location,
+        });
     }
-    for component in [orders_components[0], removed_components[0]] {
+    for (configured, component) in [
+        (ConfiguredPath::Orders, orders_components[0]),
+        (ConfiguredPath::Removed, removed_components[0]),
+    ] {
         if component.eq_ignore_ascii_case("README.md")
             || component.eq_ignore_ascii_case(".README.md.spielorders-stage")
         {
             return Err(InitializationPlanError::PlannedPathCollision {
-                path: root.join(component),
+                root: root_location,
+                configured,
+                path: planned_location(&root, root.join(component)),
             });
         }
     }
 
-    let mut operations = vec![create_directory(root.join(".spielorders"))];
+    let mut operations = vec![create_directory(&root, root.join(".spielorders"))];
     let mut orders_directory = root.clone();
     for component in orders_components {
         orders_directory.push(component);
-        match observe(&orders_directory, filesystem)? {
-            None => operations.push(create_directory(orders_directory.clone())),
+        match observe(&orders_directory, Some(&root_location), filesystem)? {
+            None => operations.push(create_directory(&root, orders_directory.clone())),
             Some(FileSystemEntryKind::Directory) => {
                 let resolved = filesystem
                     .canonicalize(&orders_directory)
                     .map_err(|error| InitializationPlanError::FileSystem {
+                        root: Some(root_location.clone()),
                         path: orders_directory.clone(),
                         error,
                     })?;
                 if !resolved.starts_with(&root) {
                     return Err(InitializationPlanError::DisallowedLink {
-                        path: orders_directory,
+                        root: root_location,
+                        path: planned_location(&root, orders_directory),
                     });
                 }
-                operations.push(preserve_directory(orders_directory.clone()));
+                operations.push(preserve_directory(&root, orders_directory.clone()));
             }
             Some(FileSystemEntryKind::SymbolicLink) => {
                 return Err(InitializationPlanError::DisallowedLink {
-                    path: orders_directory,
+                    root: root_location,
+                    path: planned_location(&root, orders_directory),
                 });
             }
             Some(actual) => {
                 return Err(InitializationPlanError::DestinationCollision {
-                    path: orders_directory,
+                    root: root_location,
+                    path: planned_location(&root, orders_directory),
                     actual,
                 });
             }
@@ -335,7 +442,7 @@ pub fn plan_package_initialization<F: FileSystem>(
     }
 
     let removed_directory = root.join(removed_components[0]);
-    let removed_kind = observe(&removed_directory, filesystem)?;
+    let removed_kind = observe(&removed_directory, Some(&root_location), filesystem)?;
     // Two configured paths are two directories or one, and the filesystem is the only
     // thing that knows which. Both must already be there for it to answer: a path
     // with nothing at it is not the directory the other one resolves to, and where
@@ -343,22 +450,34 @@ pub fn plan_package_initialization<F: FileSystem>(
     // Orders Directory, which is where the commit asks it again.
     match managed_paths_collide(&orders_directory, &removed_directory, filesystem) {
         Ok(false) => {}
-        Ok(true) => return Err(InitializationPlanError::ManagedPathsOverlap),
-        Err((path, error)) => return Err(InitializationPlanError::FileSystem { path, error }),
+        Ok(true) => {
+            return Err(InitializationPlanError::ManagedPathsOverlap {
+                root: root_location,
+            });
+        }
+        Err((path, error)) => {
+            return Err(InitializationPlanError::FileSystem {
+                root: Some(root_location),
+                path,
+                error,
+            });
+        }
     }
     match removed_kind {
         None => {}
         Some(FileSystemEntryKind::Directory) => {
-            operations.push(preserve_directory(removed_directory.clone()));
+            operations.push(preserve_directory(&root, removed_directory.clone()));
         }
         Some(FileSystemEntryKind::SymbolicLink) => {
             return Err(InitializationPlanError::DisallowedLink {
-                path: removed_directory,
+                root: root_location,
+                path: planned_location(&root, removed_directory),
             });
         }
         Some(actual) => {
             return Err(InitializationPlanError::DestinationCollision {
-                path: removed_directory,
+                root: root_location,
+                path: planned_location(&root, removed_directory),
                 actual,
             });
         }
@@ -385,22 +504,26 @@ pub fn plan_package_initialization<F: FileSystem>(
     .to_json_bytes()
     .expect("empty version 1 Package Index serialization is infallible");
     operations.extend([
-        create_file(metadata.join("config.toml"), config),
-        create_file(metadata.join("version.json"), version),
-        create_file(metadata.join("vendors.json"), vendors),
-        create_file(metadata.join("index.json"), index),
+        create_file(&root, metadata.join("config.toml"), config),
+        create_file(&root, metadata.join("version.json"), version),
+        create_file(&root, metadata.join("vendors.json"), vendors),
+        create_file(&root, metadata.join("index.json"), index),
     ]);
 
     let readme = root.join("README.md");
-    match observe(&readme, filesystem)? {
-        None => operations.push(create_file(readme, Vec::new())),
-        Some(FileSystemEntryKind::File) => operations.push(preserve_file(readme)),
+    match observe(&readme, Some(&root_location), filesystem)? {
+        None => operations.push(create_file(&root, readme, Vec::new())),
+        Some(FileSystemEntryKind::File) => operations.push(preserve_file(&root, readme)),
         Some(FileSystemEntryKind::SymbolicLink) => {
-            return Err(InitializationPlanError::DisallowedLink { path: readme });
+            return Err(InitializationPlanError::DisallowedLink {
+                root: root_location,
+                path: planned_location(&root, readme),
+            });
         }
         Some(actual) => {
             return Err(InitializationPlanError::DestinationCollision {
-                path: readme,
+                root: root_location,
+                path: planned_location(&root, readme),
                 actual,
             });
         }
@@ -410,11 +533,12 @@ pub fn plan_package_initialization<F: FileSystem>(
         if operation.kind == InitializationOperationKind::Create
             && operation.destination_kind == InitializationDestinationKind::File
         {
-            let stage =
-                staging_path(&operation.path).expect("planned initialization files have basenames");
-            if let Some(actual) = observe(&stage, filesystem)? {
+            let stage = staging_path(operation.path())
+                .expect("planned initialization files have basenames");
+            if let Some(actual) = observe(&stage, Some(&root_location), filesystem)? {
                 return Err(InitializationPlanError::DestinationCollision {
-                    path: stage,
+                    root: root_location,
+                    path: planned_location(&root, stage),
                     actual,
                 });
             }
@@ -497,12 +621,12 @@ pub fn commit_package_initialization<F: DirectoryFileSystem>(
         }
         match operation.destination_kind {
             InitializationDestinationKind::Directory => {
-                if let Err(error) = filesystem.create_directory(&operation.path) {
+                if let Err(error) = filesystem.create_directory(operation.path()) {
                     return rejected_after_cleanup(
                         plan,
                         InitializationCommitFailure {
                             phase: InitializationCommitPhase::CreateDirectory,
-                            path: operation.path.clone(),
+                            path: operation.path().to_path_buf(),
                             cause: InitializationCommitFailureCause::FileSystem(error),
                         },
                         StageCleanup::None,
@@ -511,7 +635,7 @@ pub fn commit_package_initialization<F: DirectoryFileSystem>(
                         filesystem,
                     );
                 }
-                let directory_path = operation.path;
+                let directory_path = operation.path().to_path_buf();
                 created_directories.push(track_created(
                     directory_path.clone(),
                     FileSystemEntryKind::Directory,
@@ -563,7 +687,7 @@ pub fn commit_package_initialization<F: DirectoryFileSystem>(
                     .contents
                     .as_deref()
                     .expect("file creation carries candidate bytes");
-                let stage = staging_path(&operation.path)
+                let stage = staging_path(operation.path())
                     .expect("planned initialization files have basenames");
                 if let Err(error) = filesystem.write_new(&stage, candidate) {
                     return rejected_after_cleanup(
@@ -627,14 +751,14 @@ pub fn commit_package_initialization<F: DirectoryFileSystem>(
                         filesystem,
                     );
                 }
-                match filesystem.link_new_file(&stage, &operation.path) {
+                match filesystem.link_new_file(&stage, operation.path()) {
                     Ok(NewFileLinkOutcome::Linked) => {}
                     Ok(NewFileLinkOutcome::DestinationExists) => {
                         return rejected_after_cleanup(
                             plan,
                             InitializationCommitFailure {
                                 phase: InitializationCommitPhase::InstallDestination,
-                                path: operation.path.clone(),
+                                path: operation.path().to_path_buf(),
                                 cause: InitializationCommitFailureCause::DestinationChanged,
                             },
                             StageCleanup::Tracked(tracked_stage),
@@ -648,7 +772,7 @@ pub fn commit_package_initialization<F: DirectoryFileSystem>(
                             plan,
                             InitializationCommitFailure {
                                 phase: InitializationCommitPhase::InstallDestination,
-                                path: operation.path.clone(),
+                                path: operation.path().to_path_buf(),
                                 cause: InitializationCommitFailureCause::FileSystem(error),
                             },
                             StageCleanup::Tracked(tracked_stage),
@@ -659,12 +783,12 @@ pub fn commit_package_initialization<F: DirectoryFileSystem>(
                     }
                 }
                 created_files.push(track_created(
-                    operation.path.clone(),
+                    operation.path().to_path_buf(),
                     FileSystemEntryKind::File,
                     filesystem,
                 ));
                 refresh_containing_directories(
-                    &operation.path,
+                    operation.path(),
                     &mut created_directories,
                     filesystem,
                 );
@@ -715,16 +839,16 @@ fn changed_precondition<F: FileSystem>(
                 InitializationDestinationKind::File => FileSystemEntryKind::File,
             }),
         };
-        match filesystem.symlink_metadata(&operation.path) {
+        match filesystem.symlink_metadata(operation.path()) {
             Ok(actual) if actual == expected => {}
-            Ok(_) => return Ok(Some(operation.path.clone())),
-            Err(error) => return Err(observation_failure(operation.path.clone(), error)),
+            Ok(_) => return Ok(Some(operation.path().to_path_buf())),
+            Err(error) => return Err(observation_failure(operation.path().to_path_buf(), error)),
         }
         if operation.kind == InitializationOperationKind::Create
             && operation.destination_kind == InitializationDestinationKind::File
         {
-            let stage =
-                staging_path(&operation.path).expect("planned initialization files have basenames");
+            let stage = staging_path(operation.path())
+                .expect("planned initialization files have basenames");
             match filesystem.symlink_metadata(&stage) {
                 Ok(None) => {}
                 Ok(Some(_)) => return Ok(Some(stage)),
@@ -988,13 +1112,19 @@ fn ownership_uncertain<E>(
     }
 }
 
+/// What stands at `path`, or the typed refusal the filesystem gave instead.
+///
+/// `root` is the resolved selected root where the caller already has one, so a refusal
+/// arriving after the resolution names it. See [`InitializationPlanError`].
 fn observe<F: FileSystem>(
     path: &Path,
+    root: Option<&Location>,
     filesystem: &F,
 ) -> Result<Option<FileSystemEntryKind>, InitializationPlanError<F::Error>> {
     filesystem
         .symlink_metadata(path)
         .map_err(|error| InitializationPlanError::FileSystem {
+            root: root.cloned(),
             path: path.to_path_buf(),
             error,
         })
@@ -1019,38 +1149,51 @@ fn config_bytes(options: &InitializationOptions) -> Vec<u8> {
         .into_bytes()
 }
 
-fn create_directory(path: PathBuf) -> InitializationOperation {
+/// A `Location` for one planned initialization artifact.
+///
+/// The expectation holds by construction rather than by assertion. Every planned path is
+/// the canonical root joined with one of this module's own literal managed names or with
+/// the components of a configured value `validate_configured_path` has already accepted —
+/// and that validator enforces the same grammar `package_relative_path_text` answers
+/// against, so a value that reached here has a Package-relative spelling.
+fn planned_location(root: &Path, path: PathBuf) -> Location {
+    let relative = package_relative_path_text(root, &path)
+        .expect("a planned initialization path has a Package-relative spelling");
+    Location::within_package(path, relative).expect("a planned initialization path is normalized")
+}
+
+fn create_directory(root: &Path, path: PathBuf) -> InitializationOperation {
     InitializationOperation {
         kind: InitializationOperationKind::Create,
         destination_kind: InitializationDestinationKind::Directory,
-        path,
+        location: planned_location(root, path),
         contents: None,
     }
 }
 
-fn preserve_directory(path: PathBuf) -> InitializationOperation {
+fn preserve_directory(root: &Path, path: PathBuf) -> InitializationOperation {
     InitializationOperation {
         kind: InitializationOperationKind::Preserve,
         destination_kind: InitializationDestinationKind::Directory,
-        path,
+        location: planned_location(root, path),
         contents: None,
     }
 }
 
-fn create_file(path: PathBuf, contents: Vec<u8>) -> InitializationOperation {
+fn create_file(root: &Path, path: PathBuf, contents: Vec<u8>) -> InitializationOperation {
     InitializationOperation {
         kind: InitializationOperationKind::Create,
         destination_kind: InitializationDestinationKind::File,
-        path,
+        location: planned_location(root, path),
         contents: Some(contents),
     }
 }
 
-fn preserve_file(path: PathBuf) -> InitializationOperation {
+fn preserve_file(root: &Path, path: PathBuf) -> InitializationOperation {
     InitializationOperation {
         kind: InitializationOperationKind::Preserve,
         destination_kind: InitializationDestinationKind::File,
-        path,
+        location: planned_location(root, path),
         contents: None,
     }
 }

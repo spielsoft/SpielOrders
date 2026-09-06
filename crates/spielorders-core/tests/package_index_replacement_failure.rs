@@ -96,12 +96,18 @@ fn every_replacement_and_cleanup_failure_preserves_complete_evidence_and_effect_
             }
         );
         assert_eq!(
-            failed.failure().primary_location().package_relative_path(),
+            failed
+                .failure()
+                .primary_location()
+                .and_then(|location| location.package_relative_path()),
             Some(".spielorders/index.json")
         );
         assert_eq!(
-            failed.failure().primary_location().absolute_path(),
-            Path::new("/package/.spielorders/index.json")
+            failed
+                .failure()
+                .primary_location()
+                .map(|location| location.absolute_path()),
+            Some(Path::new("/package/.spielorders/index.json"))
         );
         assert_eq!(
             failed.failure().related_locations()[0].package_relative_path(),

@@ -66,6 +66,10 @@ When a term is resolved, update `CONTEXT.md` right there. Don't batch these up â
 
 `CONTEXT.md` should be totally devoid of implementation details. Do not treat `CONTEXT.md` as a spec, a scratch pad, or a repository for implementation decisions. It is a glossary and nothing else.
 
+### Keep decisions in the present tense
+
+A decision document reads as the current decision, stated once, in the present tense. When a decision changes, rewrite the sentence it governs so the document reads as if the new decision had always been the decision, and let the commit message carry what it replaced; git is the history. A rejected alternative is kept only when someone would otherwise propose it again, and then as a present-tense constraint rather than a story. Once a surface the decision describes is built and accepted, the code and its fixtures are the record of what exists; the decision keeps the rules that constrain future change and points at the code for the rest.
+
 ### Offer ADRs sparingly
 
 Only offer to create an ADR when all three are true:

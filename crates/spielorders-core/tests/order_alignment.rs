@@ -152,11 +152,15 @@ fn the_projection_enumerates_every_optional_component_combination() {
 
         assert_eq!(plan.basename(), expected, "{label}");
         assert_eq!(
-            plan.destination(),
+            plan.destination().absolute_path(),
             root.join("Orders").join(expected),
             "{label}"
         );
-        assert_eq!(plan.source().file_name().unwrap(), DRIFTED, "{label}");
+        assert_eq!(
+            plan.source().absolute_path().file_name().unwrap(),
+            DRIFTED,
+            "{label}"
+        );
         assert!(plan.changes_directory_name(), "{label}");
         assert_eq!(
             plan.operations()
@@ -335,10 +339,14 @@ fn a_collision_stops_alignment_without_inventing_a_suffix() {
     let error =
         plan_order_alignment(&directory, &RealFileSystem).expect_err("a collision stops alignment");
 
-    let OrderAlignmentPlanError::DestinationCollision { path } = &error else {
+    let OrderAlignmentPlanError::DestinationCollision { location } = &error else {
         panic!("a collision is reported as such: {error:?}");
     };
-    assert_eq!(path, &occupied);
+    assert_eq!(location.absolute_path(), occupied);
+    assert!(
+        location.package_relative_path().is_some(),
+        "a refused destination inside the Package carries the Package's spelling for it"
+    );
 
     // Nothing moved, nothing was replaced, and no suffixed variant was invented.
     assert!(directory.is_dir(), "the drifted name is retained");
@@ -505,10 +513,15 @@ fn a_destination_taken_between_planning_and_commit_stops_the_rename() {
     let MutationReport::Rejected { rejection, .. } = report else {
         panic!("a taken destination rejects: {report:?}");
     };
-    let OrderAlignmentRejection::DestinationCollision { path } = &rejection else {
+    let OrderAlignmentRejection::DestinationCollision { location } = &rejection else {
         panic!("a taken destination is a collision: {rejection:?}");
     };
-    assert_eq!(path, &root.join("Orders").join(ALIGNED));
+    assert_eq!(location.absolute_path(), root.join("Orders").join(ALIGNED));
+    assert_eq!(
+        location.package_relative_path(),
+        Some(format!("Orders/{ALIGNED}").as_str()),
+        "a refusal names the destination in the Package's own spelling"
+    );
     assert!(directory.is_dir());
     assert_eq!(fs::read(directory.join("README.md")).unwrap(), README);
 }
@@ -1135,7 +1148,7 @@ fn editing_a_basename_governing_fact_after_planning_is_refused() {
         let (tree, directory, _vendor) = surrounded_drifted_order(label);
         let root = fs::canonicalize(tree.path()).unwrap();
         let plan = plan_order_alignment(&directory, &RealFileSystem).unwrap();
-        let planned_destination = plan.destination().to_path_buf();
+        let planned_destination = plan.destination().absolute_path().to_path_buf();
 
         // An ordinary fact edit. It deliberately does not rename the directory, so
         // the source the plan recorded is still exactly where it was — and the name
@@ -1177,7 +1190,7 @@ fn clearing_the_vendor_reference_after_planning_is_refused() {
     let (tree, directory, _vendor) = surrounded_drifted_order("alignment-cleared-vendor");
     let root = fs::canonicalize(tree.path()).unwrap();
     let plan = plan_order_alignment(&directory, &RealFileSystem).unwrap();
-    let planned_destination = plan.destination().to_path_buf();
+    let planned_destination = plan.destination().absolute_path().to_path_buf();
 
     // Clearing the association drops the Vendor component from the projection
     // entirely, so the plan's name is wrong in a way no Vendor *value* comparison
@@ -1218,7 +1231,7 @@ fn associating_a_vendor_after_planning_is_refused() {
     let directory = drifted_order(&root, DRIFTED, None, Some("Ada Lovelace"));
     let plan = plan_order_alignment(&directory, &RealFileSystem).unwrap();
     assert_eq!(plan.basename(), "2026_08_22_Laser_components_Ada_Lovelace");
-    let planned_destination = plan.destination().to_path_buf();
+    let planned_destination = plan.destination().absolute_path().to_path_buf();
 
     // The mirror of clearing a reference: a plan authorized against "this Order has no
     // Vendor" must not proceed once it has one, and the projection it would rename to
@@ -1257,7 +1270,7 @@ fn renaming_the_vendor_after_planning_is_refused() {
     let (tree, directory, vendor) = surrounded_drifted_order("alignment-stale-vendor-name");
     let root = fs::canonicalize(tree.path()).unwrap();
     let plan = plan_order_alignment(&directory, &RealFileSystem).unwrap();
-    let planned_destination = plan.destination().to_path_buf();
+    let planned_destination = plan.destination().absolute_path().to_path_buf();
     assert_eq!(planned_destination, root.join("Orders").join(ALIGNED));
 
     // An Order keeps no Vendor snapshot, so an ordinary Vendor rename changes the

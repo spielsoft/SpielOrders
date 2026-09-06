@@ -1,0 +1,79 @@
+{
+  "contract": "spielorders.order.remove",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>",
+    "order_root": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace"
+  },
+  "data": {
+    "report": {
+      "committed": true,
+      "changed": true,
+      "disposition": "recoverable_directory",
+      "old_path": {
+        "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace",
+        "package_relative_path": "Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace"
+      },
+      "new_path": {
+        "absolute_path": "<PACKAGE_ROOT>/Removed/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace",
+        "package_relative_path": "Removed/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace"
+      },
+      "locator": {
+        "outcome": "unchanged",
+        "from": "../..",
+        "to": "../.."
+      },
+      "operations": [
+        {
+          "operation": "create_removed_orders_directory",
+          "location": {
+            "absolute_path": "<PACKAGE_ROOT>/Removed",
+            "package_relative_path": "Removed"
+          }
+        },
+        {
+          "operation": "move_order_directory",
+          "location": {
+            "absolute_path": "<PACKAGE_ROOT>/Removed/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace",
+            "package_relative_path": "Removed/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace"
+          }
+        },
+        {
+          "operation": "refresh_package_index",
+          "location": {
+            "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
+            "package_relative_path": ".spielorders/index.json"
+          }
+        }
+      ],
+      "index": {
+        "location": {
+          "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
+          "package_relative_path": ".spielorders/index.json"
+        },
+        "state": "current",
+        "refresh": "rebuilt",
+        "malformed_reasons": [],
+        "stale_reasons": [],
+        "observed_version": null,
+        "expected_version": null
+      },
+      "warnings": []
+    },
+    "removed": {
+      "order_id": "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
+      "title": "Laser components",
+      "date_ordered": "2026-08-22",
+      "status": "in_preparation",
+      "vendor_id": "e0990d31-06aa-42e9-97c8-088e3e894822",
+      "vendor": {
+        "vendor_id": "e0990d31-06aa-42e9-97c8-088e3e894822",
+        "name": "Tarnwick",
+        "hidden": false
+      }
+    }
+  },
+  "diagnostics": [],
+  "error": null
+}

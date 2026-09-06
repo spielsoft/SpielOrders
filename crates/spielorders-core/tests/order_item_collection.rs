@@ -17,16 +17,20 @@ use spielorders_core::metadata::{IndexDocument, OrderDocument, OrderStatus};
 use spielorders_core::mutation::{MutationReport, RejectedAssignmentReason};
 use spielorders_core::operations::OperationFailureCode;
 use spielorders_core::order_edits::{
-    ItemAssignments, ItemPositionRole, OrderEditOperationKind, OrderEditPlanError,
-    OrderEditRejection, OrderEditResult, OrderEditWarning, OrderItemMutationKind,
-    OrderItemMutationPlan, commit_order_item_mutation, list_order_items, plan_order_item_add,
-    plan_order_item_edit, plan_order_item_move, plan_order_item_remove,
+    CanonicalItemOutcome, ItemAssignments, ItemPositionRole, NewItemAssignmentFailure,
+    OrderEditOperationKind, OrderEditPlanError, OrderEditRejection, OrderEditResult,
+    OrderEditWarning, OrderItemMutationKind, OrderItemMutationPlan, commit_order_item_mutation,
+    list_order_items, plan_order_item_add, plan_order_item_edit, plan_order_item_move,
+    plan_order_item_remove,
 };
 use spielorders_core::package::ReusableValue;
 use spielorders_core::ports::{
     DirectoryEntry, FileChangeObservation, FileSystem, FileSystemEntryKind, UuidGenerator,
 };
-use spielorders_core::vendors::{VendorAssignments, commit_vendor_mutation, plan_vendor_creation};
+use spielorders_core::vendors::{
+    CanonicalContactOutcome, ContactPositionRole, VendorAssignments, commit_vendor_mutation,
+    plan_vendor_creation,
+};
 use std::cell::Cell;
 use std::fs;
 use std::io;
@@ -1488,10 +1492,20 @@ fn a_concurrent_item_collection_change_rejects_before_any_write() {
     let MutationReport::Rejected { rejection, .. } = report else {
         panic!("a concurrent collection change rejects: {report:?}");
     };
-    let OrderEditRejection::PreconditionsChanged { path } = &rejection else {
+    let OrderEditRejection::PreconditionsChanged { location } = &rejection else {
         panic!("a concurrent collection change is a precondition change: {rejection:?}");
     };
-    assert!(path.ends_with(".spielorders/order.json"));
+    assert!(
+        location
+            .absolute_path()
+            .ends_with(".spielorders/order.json")
+    );
+    assert!(
+        location
+            .package_relative_path()
+            .is_some_and(|relative| relative.ends_with(".spielorders/order.json")),
+        "a refusal names the record in the Package's own spelling: {location:?}"
+    );
     assert_eq!(
         fs::read(&order_path).unwrap(),
         before,
@@ -1499,6 +1513,11 @@ fn a_concurrent_item_collection_change_rejects_before_any_write() {
     );
 }
 
+/// **The two ordered collections share one vocabulary**, which is what the roles and the
+/// outcomes are asserted against here: a Vendor's Contacts and an Order's Items are
+/// addressed the same way, mutated by the same four verbs, and refuse a position the same
+/// way, so a caller reading which end was refused or what happened to the member reads one
+/// set of spellings rather than one per collection.
 #[test]
 fn order_item_code_vocabularies_keep_their_stable_spellings() {
     for (kind, spelling) in [
@@ -1509,11 +1528,33 @@ fn order_item_code_vocabularies_keep_their_stable_spellings() {
     ] {
         assert_eq!(kind.as_str(), spelling);
     }
-    for (role, spelling) in [
-        (ItemPositionRole::Source, "source"),
-        (ItemPositionRole::Destination, "destination"),
+    for (role, contact, item) in [
+        (
+            "the source end",
+            ContactPositionRole::Source,
+            ItemPositionRole::Source,
+        ),
+        (
+            "the destination end",
+            ContactPositionRole::Destination,
+            ItemPositionRole::Destination,
+        ),
     ] {
-        assert_eq!(role.as_str(), spelling);
+        assert_eq!(item.as_str(), contact.as_str(), "{role}");
+    }
+    for (item, contact) in [
+        (CanonicalItemOutcome::Added, CanonicalContactOutcome::Added),
+        (
+            CanonicalItemOutcome::Edited,
+            CanonicalContactOutcome::Edited,
+        ),
+        (CanonicalItemOutcome::Moved, CanonicalContactOutcome::Moved),
+        (
+            CanonicalItemOutcome::Removed,
+            CanonicalContactOutcome::Removed,
+        ),
+    ] {
+        assert_eq!(item.as_str(), contact.as_str());
     }
     assert_eq!(
         RejectedAssignmentReason::NotAFiniteNumber.as_str(),
@@ -1701,4 +1742,136 @@ fn every_committed_item_report_without_a_refresh_carries_the_orders_real_readme(
         // Reporting the README is never writing it.
         assert_eq!(fs::read(directory.join("README.md")).unwrap(), README);
     }
+}
+
+/// **One Item-assignment vocabulary, whichever capability takes the set.**
+///
+/// Adoption is the only mutation that may carry Items at creation — an Order created from
+/// nothing starts with none — and it adjudicates the set the four Item mutations
+/// adjudicate: the same four fields, the same refusals, the same required facts. Two lists
+/// is how a field comes to be assignable on one command and unknown on another, so the
+/// adopted Item and the added one are compared with each other here rather than each being
+/// checked against its own expectations.
+#[test]
+fn an_adopted_item_and_an_added_one_come_from_one_assignment_vocabulary() {
+    let assignments = ItemAssignments::new()
+        .assign("description", "Fiber collimator")
+        .assign("quantity", "4")
+        .assign("unit_price", "3.0")
+        .assign("catalog_number", "F220APC-1550");
+
+    let tree = initialized_package("order-item-one-vocabulary");
+    let adopted = OrderItemInput::from_assignments(&assignments)
+        .expect("one assignment set names one adopted Item");
+    let directory = adopted_order(tree.path(), vec![adopted]);
+    let added = committed(
+        plan_order_item_add(&directory, &assignments, None, &RealFileSystem)
+            .expect("the same set names one added Item"),
+    );
+
+    let items = &added.order().document().items;
+    assert_eq!(
+        items.first(),
+        items.last(),
+        "the adopted Item and the added one are the same Item: {items:?}"
+    );
+    assert_eq!(
+        added.order().item_totals(),
+        [12.0, 12.0],
+        "and each carries the same calculated total, which is stored nowhere"
+    );
+}
+
+/// The same set of rules refuses a set that names no Item, whichever capability was handed
+/// it.
+///
+/// Compared refusal by refusal rather than merely both failing: an unknown field, a
+/// repeated one, a blank required fact, and a Quantity the record could not hold as a
+/// finite number each have to reach the same reason on both routes, or the two capabilities
+/// have two vocabularies that happen to agree on the accepted case.
+#[test]
+fn one_set_of_item_rules_refuses_an_adoption_and_an_addition_alike() {
+    let (_tree, directory) = four_item_order("order-item-one-refusal");
+
+    for (label, assignments, expected) in [
+        (
+            "an unknown field",
+            collimator().assign("colour", "red"),
+            vec![("colour", RejectedAssignmentReason::UnknownField)],
+        ),
+        (
+            "a repeated field",
+            collimator().assign("quantity", "5"),
+            vec![("quantity", RejectedAssignmentReason::Duplicate)],
+        ),
+        (
+            "a blank required fact",
+            ItemAssignments::new()
+                .assign("description", "  ")
+                .assign("quantity", "1")
+                .assign("unit_price", "2"),
+            vec![("description", RejectedAssignmentReason::BlankRequiredValue)],
+        ),
+        (
+            "a Quantity that is no finite number",
+            ItemAssignments::new()
+                .assign("description", "Lens")
+                .assign("quantity", "quite a few")
+                .assign("unit_price", "inf"),
+            vec![
+                ("quantity", RejectedAssignmentReason::NotAFiniteNumber),
+                ("unit_price", RejectedAssignmentReason::NotAFiniteNumber),
+            ],
+        ),
+    ] {
+        let adoption = OrderItemInput::from_assignments(&assignments)
+            .expect_err("the set names no adopted Item");
+        let NewItemAssignmentFailure::InvalidAssignments(refused) = &adoption else {
+            panic!("{label} is a refused assignment set for adoption: {adoption:?}");
+        };
+        assert_eq!(
+            refused
+                .iter()
+                .map(|assignment| (assignment.field(), assignment.reason()))
+                .collect::<Vec<_>>(),
+            expected,
+            "{label}: adoption names every offending field and its reason"
+        );
+
+        let addition = plan_order_item_add(&directory, &assignments, None, &RealFileSystem)
+            .expect_err("the set names no added Item");
+        let OrderEditPlanError::InvalidAssignments(refused) = &addition else {
+            panic!("{label} is a refused assignment set for an addition: {addition:?}");
+        };
+        assert_eq!(
+            refused
+                .iter()
+                .map(|assignment| (assignment.field(), assignment.reason()))
+                .collect::<Vec<_>>(),
+            expected,
+            "{label}: an addition refuses the same set for the same reasons"
+        );
+    }
+
+    // A set naming none of the required facts is the other refusal both routes have, and
+    // both report every missing fact at once rather than one round trip at a time.
+    let assignments = ItemAssignments::new().assign("catalog_number", "F220APC-1550");
+    let adoption =
+        OrderItemInput::from_assignments(&assignments).expect_err("no required fact was named");
+    assert_eq!(
+        adoption,
+        NewItemAssignmentFailure::MissingRequiredFacts {
+            fields: vec![
+                "description".to_owned(),
+                "quantity".to_owned(),
+                "unit_price".to_owned()
+            ]
+        }
+    );
+    let addition = plan_order_item_add(&directory, &assignments, None, &RealFileSystem)
+        .expect_err("no required fact was named");
+    let OrderEditPlanError::MissingRequiredItemFacts { fields } = &addition else {
+        panic!("an addition reports the missing Item facts: {addition:?}");
+    };
+    assert_eq!(fields, &["description", "quantity", "unit_price"]);
 }

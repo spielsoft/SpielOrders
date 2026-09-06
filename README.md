@@ -1,11 +1,12 @@
 # SpielOrders
 
 SpielOrders is a macOS-first desktop application with a shared Rust core and a
-human-first CLI. The M0 skeleton intentionally contains no Package behavior.
+human-first CLI. The core owns Package rules and the `spielorders` executable exposes
+them; the desktop shell is still a stub.
 
 ## Prerequisites
 
-- Rust 1.98.0 (installed automatically by `rustup` from `rust-toolchain.toml`)
+- Rust 1.98.1 (installed automatically by `rustup` from `rust-toolchain.toml`)
 - Node.js 26.8.1 and npm 12.0.2
 - macOS Tauri 2 system prerequisites (Xcode command-line tools and WebKit)
 

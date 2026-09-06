@@ -7,14 +7,6 @@ labels:
 assignee: /root/shared_foundation_research
 ---
 
-## Question
-
-Based on SpielGantt's actual Rust/core and frontend boundaries, should SpielOrders extract and share a `FolderBuckets`/`FilesystemDatabase` foundation now, defer extraction behind compatible interfaces, or remain independent—and what is the narrowest coherent shared responsibility if sharing is justified?
-
-## Blocking
-
-Unblocked.
-
-## Resolution
+## Decision
 
 Defer extraction behind compatible application/repository interfaces. The narrow future sharing seam is policy-neutral filesystem bucket mechanics, not domain schemas, CLI/Tauri contracts, search, or frontend models. See [Shared filesystem-bucket foundation](../research/001-shared-filesystem-foundation.md).

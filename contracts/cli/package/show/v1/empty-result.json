@@ -1,0 +1,73 @@
+{
+  "contract": "spielorders.package.show",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>"
+  },
+  "data": {
+    "paths": {
+      "metadata_directory": {
+        "absolute_path": "<PACKAGE_ROOT>/.spielorders",
+        "package_relative_path": ".spielorders"
+      },
+      "config": {
+        "absolute_path": "<PACKAGE_ROOT>/.spielorders/config.toml",
+        "package_relative_path": ".spielorders/config.toml"
+      },
+      "version": {
+        "absolute_path": "<PACKAGE_ROOT>/.spielorders/version.json",
+        "package_relative_path": ".spielorders/version.json"
+      },
+      "vendors": {
+        "absolute_path": "<PACKAGE_ROOT>/.spielorders/vendors.json",
+        "package_relative_path": ".spielorders/vendors.json"
+      },
+      "orders_directory": {
+        "absolute_path": "<PACKAGE_ROOT>/Orders",
+        "package_relative_path": "Orders"
+      },
+      "removed_orders_directory": {
+        "absolute_path": "<PACKAGE_ROOT>/Removed",
+        "package_relative_path": "Removed"
+      }
+    },
+    "metadata": {
+      "metadata_version": 1,
+      "state": "current"
+    },
+    "readme": {
+      "location": {
+        "absolute_path": "<PACKAGE_ROOT>/README.md",
+        "package_relative_path": "README.md"
+      },
+      "exists": true,
+      "text": ""
+    },
+    "orders": [],
+    "damaged_orders": [],
+    "vendors": [],
+    "hidden_vendors_included": false,
+    "values": {
+      "ordering_institutions": [],
+      "orderers": [],
+      "projects": [],
+      "order_groups": []
+    },
+    "index": {
+      "location": {
+        "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
+        "package_relative_path": ".spielorders/index.json"
+      },
+      "state": "current",
+      "refresh": "not_needed",
+      "malformed_reasons": [],
+      "stale_reasons": [],
+      "observed_version": null,
+      "expected_version": null
+    },
+    "diagnostic_groups": []
+  },
+  "diagnostics": [],
+  "error": null
+}

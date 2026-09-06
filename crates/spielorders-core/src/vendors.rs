@@ -2,8 +2,9 @@
 
 use crate::{
     canonical::{
-        CanonicalPackageLoad, CurrentPackageCandidate, HealthyOrder, PackageIndexRecord,
-        PackageLoad, inspect_canonical_package, open_package,
+        CanonicalPackageLoad, CurrentPackageCandidate, DamagedPackageProjection, HealthyOrder,
+        OperationFailedProjection, PackageIndexRecord, PackageLoad, UnmanagedPackage,
+        UpgradeProjection, inspect_canonical_package, open_package,
     },
     filesystem::{
         DestinationExpectation, ValidatedReplacementError, replace_validated_file_expecting,
@@ -13,9 +14,10 @@ use crate::{
         VendorId, VendorsDocument, Version1, VersionDocument,
     },
     mutation::{MutationReport, RejectedAssignment, RejectedAssignmentReason},
-    operations::OperationFailure,
+    operations::{FailedPath, OperationFailure},
     package::PackageMetadata,
     ports::{FileSystem, UuidGenerator},
+    readme::{Location, located_in_package},
 };
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -84,6 +86,19 @@ impl PlannedVendorFacts {
         &self.identity
     }
 
+    /// The Vendor ID these facts will carry, where the mutation is not minting one.
+    ///
+    /// `None` for a creation, whose identity is generated at the commit. A caller
+    /// reporting planned facts therefore has no identity to report, which is the honest
+    /// answer: the placeholder the planned candidate carries is not the Vendor ID the
+    /// commit will mint, and this keeps it out of reach.
+    pub fn vendor_id(&self) -> Option<&str> {
+        match &self.identity {
+            PlannedVendorIdentity::GeneratedAtCommit => None,
+            PlannedVendorIdentity::Retained(vendor_id) => Some(vendor_id.as_str()),
+        }
+    }
+
     pub fn name(&self) -> &str {
         self.document.name.as_str()
     }
@@ -125,7 +140,7 @@ pub struct ReferencingOrderSummary {
     title: NonBlankString,
     date_ordered: DateOrdered,
     status: OrderStatus,
-    directory: PathBuf,
+    directory: Location,
 }
 
 impl ReferencingOrderSummary {
@@ -145,7 +160,9 @@ impl ReferencingOrderSummary {
         self.status
     }
 
-    pub fn directory(&self) -> &Path {
+    /// The Order Directory, as the load located it — so a caller reporting it carries the
+    /// Package-relative spelling as well as the absolute path.
+    pub fn directory(&self) -> &Location {
         &self.directory
     }
 }
@@ -156,10 +173,19 @@ pub enum VendorMutationOperationKind {
     RefreshPackageIndex,
 }
 
+impl VendorMutationOperationKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ReplaceVendorRecord => "replace_vendor_record",
+            Self::RefreshPackageIndex => "refresh_package_index",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VendorMutationOperation {
     kind: VendorMutationOperationKind,
-    path: PathBuf,
+    location: Location,
 }
 
 impl VendorMutationOperation {
@@ -167,8 +193,14 @@ impl VendorMutationOperation {
         self.kind
     }
 
+    /// Where this operation writes, as the load located it — so a caller reporting it
+    /// carries the Package-relative spelling as well as the absolute path.
+    pub fn location(&self) -> &Location {
+        &self.location
+    }
+
     pub fn path(&self) -> &Path {
-        &self.path
+        self.location.absolute_path()
     }
 }
 
@@ -180,6 +212,22 @@ pub enum VendorMutationKind {
     Edit,
     Hide,
     Unhide,
+}
+
+impl VendorMutationKind {
+    /// What committing a mutation of this kind does to the canonical Vendor record.
+    ///
+    /// One mapping rather than one per caller, because a plan and the result of
+    /// committing it must not disagree about what the mutation was: a dry run has no
+    /// result to read the outcome off, and reads it here instead.
+    pub fn canonical_outcome(self) -> CanonicalVendorOutcome {
+        match self {
+            Self::Create => CanonicalVendorOutcome::Created,
+            Self::Edit => CanonicalVendorOutcome::Edited,
+            Self::Hide => CanonicalVendorOutcome::Hidden,
+            Self::Unhide => CanonicalVendorOutcome::Unhidden,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -197,10 +245,30 @@ pub struct VendorMutationPlan {
     operations: Vec<VendorMutationOperation>,
 }
 
+/// Which end of a Contact mutation a position names.
+///
+/// A `move` addresses two: the Contact it takes, and where that Contact goes. The others
+/// address one — the pre-mutation entry for an `edit` or a `remove`, and the insertion
+/// point for an `add` — so a refused position says which end it was.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ContactPositionRole {
     Source,
     Destination,
+}
+
+impl ContactPositionRole {
+    /// The stable spelling of one role.
+    ///
+    /// Beside the role rather than in an adapter, for the reason
+    /// [`VendorMutationWarning::as_str`] carries the same rule: a position refused by the
+    /// CLI and the same position refused for the desktop shell cannot come to be named
+    /// differently.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Source => "source_position",
+            Self::Destination => "destination_position",
+        }
+    }
 }
 
 impl VendorMutationPlan {
@@ -239,16 +307,40 @@ impl VendorMutationPlan {
     pub fn changes_canonical_vendors(&self) -> bool {
         self.candidate_vendors != self.prior_vendors
     }
+
+    /// The derived Package Index as it stood when this mutation was planned.
+    ///
+    /// The state a run that never commits has to report: committing refreshes the index
+    /// and [`VendorMutationResult::index`] is that refreshed record, so a dry run has
+    /// none of its own and answers with what it observed instead.
+    pub fn prior_index(&self) -> &PackageIndexRecord {
+        &self.prior_index
+    }
 }
 
 /// Why a Vendor capability refused a request before performing any write. Every
 /// planner and the live read share these reasons; none of them changes a byte.
+///
+/// **The four Package-load states travel as the core's own projections**, for the reason
+/// [`crate::vendor_reads::VendorReadFailure`] carries them: a caller reporting a refused
+/// mutation classifies the Package exactly as a Package-level read does, rather than
+/// folding every one of them into "unreadable" — and a damaged Package's diagnosis is
+/// what a refusal on those grounds is *for*, since `repair` is the action behind it.
 #[derive(Debug, PartialEq)]
 pub enum VendorCapabilityError<E> {
-    UnmanagedPackage,
-    DamagedPackage,
-    UpgradePending,
-    PackageOperationFailed,
+    /// The exact path given is a resolved directory and is not a SpielOrders Root.
+    UnmanagedPackage(Box<UnmanagedPackage>),
+    /// The Package could be read and not trusted. `root` is the best name this refusal
+    /// has for the Root it loaded, which is all there is to report where the damage left
+    /// the Package with no managed paths of its own.
+    DamagedPackage {
+        root: FailedPath,
+        projection: Box<DamagedPackageProjection>,
+    },
+    /// The Package is mid-upgrade or awaiting one.
+    UpgradePending(Box<UpgradeProjection>),
+    /// The Package could not be read past its Root.
+    PackageOperationFailed(Box<OperationFailedProjection>),
     UnknownVendor {
         vendor_id: String,
     },
@@ -320,6 +412,45 @@ pub enum VendorContactMutationKind {
     Remove,
 }
 
+impl VendorContactMutationKind {
+    /// What committing a mutation of this kind does to the addressed Contact.
+    ///
+    /// One mapping rather than one per caller, for the reason
+    /// [`VendorMutationKind::canonical_outcome`] has one: a dry run has no result to read
+    /// the outcome off, so it reads it here, and a plan and the result of committing it
+    /// cannot come to disagree about what the mutation was. Every Contact mutation
+    /// replaces the owning Vendor record, so the *Vendor's* canonical outcome is `edited`
+    /// whichever of these four ran; this is the Contact's own.
+    pub fn canonical_outcome(self) -> CanonicalContactOutcome {
+        match self {
+            Self::Add => CanonicalContactOutcome::Added,
+            Self::Edit => CanonicalContactOutcome::Edited,
+            Self::Move => CanonicalContactOutcome::Moved,
+            Self::Remove => CanonicalContactOutcome::Removed,
+        }
+    }
+}
+
+/// What committing one Contact mutation does to the addressed Contact.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CanonicalContactOutcome {
+    Added,
+    Edited,
+    Moved,
+    Removed,
+}
+
+impl CanonicalContactOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Added => "added",
+            Self::Edited => "edited",
+            Self::Moved => "moved",
+            Self::Removed => "removed",
+        }
+    }
+}
+
 /// A complete, validated mutation of one Vendor's embedded Contact collection.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VendorContactMutationPlan {
@@ -369,6 +500,12 @@ impl VendorContactMutationPlan {
 
     pub fn changes_canonical_vendors(&self) -> bool {
         self.vendor_plan.changes_canonical_vendors()
+    }
+
+    /// The derived Package Index as it stood when this mutation was planned. See
+    /// [`VendorMutationPlan::prior_index`], whose record this is.
+    pub fn prior_index(&self) -> &PackageIndexRecord {
+        self.vendor_plan.prior_index()
     }
 }
 
@@ -779,8 +916,6 @@ fn plan_from_candidate_aggregate<E>(
         .find(|vendor| vendor.vendor_id.as_str() == subject_vendor_id)
         .cloned()
         .ok_or(VendorCapabilityError::InvalidAggregate)?;
-    let vendors_path = package.context().vendors().absolute_path().to_path_buf();
-    let index_path = package.context().index().absolute_path().to_path_buf();
     // An unchanged aggregate is committed by performing nothing, so a dry run of it
     // must not announce managed operations its commit will never reach.
     let prior_vendors = package.vendors().to_vec();
@@ -790,18 +925,18 @@ fn plan_from_candidate_aggregate<E>(
         vec![
             VendorMutationOperation {
                 kind: VendorMutationOperationKind::ReplaceVendorRecord,
-                path: vendors_path.clone(),
+                location: package.context().vendors().clone(),
             },
             VendorMutationOperation {
                 kind: VendorMutationOperationKind::RefreshPackageIndex,
-                path: index_path,
+                location: package.context().index().clone(),
             },
         ]
     };
 
     Ok(VendorMutationPlan {
         root: package.context().root().absolute_path().to_path_buf(),
-        vendors_path,
+        vendors_path: package.context().vendors().absolute_path().to_path_buf(),
         kind,
         subject: PlannedVendorFacts {
             identity: subject_identity.clone(),
@@ -850,7 +985,16 @@ fn validated_aggregate<E>(
         .map_err(|_| VendorCapabilityError::InvalidAggregate)
 }
 
-fn referencing_orders(vendor_id: &str, orders: &[HealthyOrder]) -> Vec<ReferencingOrderSummary> {
+/// The live Orders resolving to one Vendor, in the load's own Order order.
+///
+/// The one place a Vendor Reference is matched, shared by every Vendor capability that
+/// reports what a Vendor is used by — the reads here, the mutation plans, and their
+/// results. A second spelling of it would be a second answer to "what references this
+/// Vendor", which is the fact a user checks before hiding one.
+pub(crate) fn referencing_orders(
+    vendor_id: &str,
+    orders: &[HealthyOrder],
+) -> Vec<ReferencingOrderSummary> {
     orders
         .iter()
         .filter(|order| {
@@ -865,7 +1009,7 @@ fn referencing_orders(vendor_id: &str, orders: &[HealthyOrder]) -> Vec<Referenci
             title: order.document().title.clone(),
             date_ordered: order.document().date_ordered.clone(),
             status: order.document().status,
-            directory: order.paths().directory().absolute_path().to_path_buf(),
+            directory: order.paths().directory().clone(),
         })
         .collect()
 }
@@ -930,16 +1074,36 @@ fn accepted_contact_assignments<E>(
     }
 }
 
+/// The one Vendor Name comparison: trimmed, and without regard to letter case.
+///
+/// Vendor Names are unique within a Package under exactly this comparison, so the same
+/// predicate resolves a Name to its Vendor and refuses a duplicate one. Two spellings of
+/// it would be two rules: a Name a read resolved and a create still accepted.
+pub(crate) fn vendor_names_match(left: &str, right: &str) -> bool {
+    focaccia::unicode_full_case_eq(left.trim(), right.trim())
+}
+
+/// The one Vendor of a Package carrying this Vendor Name, or `None` where none does.
+///
+/// At most one can, because Names are package-unique under [`vendor_names_match`] — a
+/// Package whose records name one Vendor twice is damaged and never loads as a current
+/// candidate. Hidden Vendors are searched like any other: hiding governs what a Package
+/// offers for new use and never what resolves.
+pub(crate) fn vendor_by_name<'a>(name: &str, vendors: &'a [Vendor]) -> Option<&'a Vendor> {
+    vendors
+        .iter()
+        .find(|vendor| vendor_names_match(name, vendor.name.as_str()))
+}
+
 fn reject_duplicate_name<E>(
     name: &str,
     exclude: Option<&VendorId>,
     vendors: &[Vendor],
 ) -> Result<(), VendorCapabilityError<E>> {
-    let name = name.trim();
     vendors
         .iter()
         .filter(|vendor| exclude != Some(&vendor.vendor_id))
-        .find(|vendor| focaccia::unicode_full_case_eq(name, vendor.name.as_str().trim()))
+        .find(|vendor| vendor_names_match(name, vendor.name.as_str()))
         .map_or(Ok(()), |vendor| {
             Err(VendorCapabilityError::DuplicateName {
                 vendor_id: vendor.vendor_id.as_str().to_owned(),
@@ -953,12 +1117,21 @@ fn current_package<F: FileSystem>(
 ) -> Result<CurrentPackageCandidate, VendorCapabilityError<F::Error>> {
     match inspect_canonical_package(selected_root, filesystem) {
         CanonicalPackageLoad::CurrentCandidate(package) => Ok(package),
-        CanonicalPackageLoad::Unmanaged(_) => Err(VendorCapabilityError::UnmanagedPackage),
-        CanonicalPackageLoad::DiagnosticOnly(_) => Err(VendorCapabilityError::DamagedPackage),
-        CanonicalPackageLoad::UpgradePending(_) => Err(VendorCapabilityError::UpgradePending),
-        CanonicalPackageLoad::OperationFailed(_) => {
-            Err(VendorCapabilityError::PackageOperationFailed)
+        CanonicalPackageLoad::Unmanaged(package) => {
+            Err(VendorCapabilityError::UnmanagedPackage(Box::new(package)))
         }
+        CanonicalPackageLoad::DiagnosticOnly(package) => {
+            Err(VendorCapabilityError::DamagedPackage {
+                root: FailedPath::of(selected_root),
+                projection: Box::new(package),
+            })
+        }
+        CanonicalPackageLoad::UpgradePending(package) => {
+            Err(VendorCapabilityError::UpgradePending(Box::new(package)))
+        }
+        CanonicalPackageLoad::OperationFailed(package) => Err(
+            VendorCapabilityError::PackageOperationFailed(Box::new(package)),
+        ),
     }
 }
 
@@ -968,6 +1141,17 @@ pub enum CanonicalVendorOutcome {
     Edited,
     Hidden,
     Unhidden,
+}
+
+impl CanonicalVendorOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::Edited => "edited",
+            Self::Hidden => "hidden",
+            Self::Unhidden => "unhidden",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1009,8 +1193,12 @@ pub enum VendorCandidateFailure {}
 
 #[derive(Debug, PartialEq)]
 pub enum VendorMutationRejection<E> {
+    /// **A `Location` rather than a path**, because this refusal happens under a Root the
+    /// plan established and a response owes that Root's spelling for what it names — in a
+    /// refusal exactly as in a success. Handing back a bare path is what left every
+    /// adapter to re-derive the spelling or drop it.
     PreconditionsChanged {
-        path: PathBuf,
+        location: Location,
     },
     InvalidGeneratedIdentity {
         generated: String,
@@ -1027,6 +1215,21 @@ pub enum VendorMutationRejection<E> {
 pub enum VendorMutationWarning {
     IndexRefreshFailed(OperationFailure),
     RefreshUnavailable,
+}
+
+impl VendorMutationWarning {
+    /// The stable spelling of one warning a committed Vendor mutation can carry.
+    ///
+    /// Beside the warning rather than in an adapter, so a warning reported by the CLI
+    /// and the same warning shown by the desktop shell cannot come to be named
+    /// differently. Neither says the mutation failed: the canonical record was
+    /// replaced, and what did not happen is the derived refresh.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::IndexRefreshFailed(_) => "index_refresh_failed",
+            Self::RefreshUnavailable => "refresh_unavailable",
+        }
+    }
 }
 
 pub type VendorMutationReport<E> = MutationReport<
@@ -1096,7 +1299,7 @@ pub fn commit_vendor_mutation<F: FileSystem>(
         .cloned()
         .expect("the validated aggregate retains its own subject Vendor");
 
-    let outcome = canonical_outcome(plan.kind);
+    let outcome = plan.kind.canonical_outcome();
     if !plan.changes_canonical_vendors() {
         let result = VendorMutationResult {
             outcome,
@@ -1189,15 +1392,6 @@ pub fn commit_vendor_mutation<F: FileSystem>(
     }
 }
 
-fn canonical_outcome(kind: VendorMutationKind) -> CanonicalVendorOutcome {
-    match kind {
-        VendorMutationKind::Create => CanonicalVendorOutcome::Created,
-        VendorMutationKind::Edit => CanonicalVendorOutcome::Edited,
-        VendorMutationKind::Hide => CanonicalVendorOutcome::Hidden,
-        VendorMutationKind::Unhide => CanonicalVendorOutcome::Unhidden,
-    }
-}
-
 /// Which observed precondition stopped a commit before its first write.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ChangedPrecondition {
@@ -1213,9 +1407,10 @@ fn preconditions_changed<E>(
         ChangedPrecondition::Package => plan.root.clone(),
         ChangedPrecondition::VendorRecord => plan.vendors_path.clone(),
     };
+    let location = located_in_package(&plan.root, path);
     MutationReport::Rejected {
         plan,
-        rejection: VendorMutationRejection::PreconditionsChanged { path },
+        rejection: VendorMutationRejection::PreconditionsChanged { location },
     }
 }
 

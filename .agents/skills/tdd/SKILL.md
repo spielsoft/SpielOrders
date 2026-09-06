@@ -65,6 +65,15 @@ behavior is ambiguous.
 **You can't test everything.** Follow the approved ticket's priorities and focus
 testing effort on critical paths and complex logic, not every possible edge case.
 
+Test the acceptance criteria and the failure paths a user can reach. Do not add a test
+for an edge case the ticket does not name unless you can state the realistic input that
+reaches it. Three good tests beat twelve exhaustive ones.
+
+A test of an exclusion or a refusal exercises every entry the surface offers to reach it:
+each option placement a command line allows, each route to the same failure. The RED run
+is what proves each entry was reachable; a test that passes from one placement has
+certified one placement.
+
 ### 2. Tracer Bullet
 
 Write ONE test that confirms ONE thing about the system:

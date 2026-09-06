@@ -13,9 +13,10 @@ use spielorders_core::metadata_repair::{
     MetadataRepairError, RepairConfirmation, RepairResolution, plan_metadata_repair,
 };
 use spielorders_core::mutation::MutationReport;
-use spielorders_core::order_diagnosis::{RepairAction, diagnose_order};
+use spielorders_core::order_diagnosis::diagnose_order;
 use spielorders_core::ports::UuidGenerator;
 use spielorders_core::readme::DiagnosticCode;
+use spielorders_core::repair_cases::RepairAction;
 use spielorders_core::semantic_repair::{
     PlannedVendorIdentity, SemanticCandidateFailure, SemanticRepairError,
     SemanticRepairOperationKind, SemanticRepairRejection, SemanticResolution,
@@ -172,7 +173,13 @@ fn stale_locator_order_at(label: &str, orders_path: &str) -> (TemporaryTree, Pat
     // Deeper than any layout this fixture uses, so the stored value is stale under
     // every configured Orders path rather than only the default one.
     let text = fs::read_to_string(record(&directory)).unwrap().replace(
-        &format!("\"{}\"", document(&directory).package_root.as_str()),
+        &format!(
+            "\"{}\"",
+            document(&directory)
+                .package_root
+                .stored_text()
+                .expect("the adopted Order carries a locator")
+        ),
         "\"../../../../..\"",
     );
     fs::write(record(&directory), text).unwrap();
@@ -386,7 +393,7 @@ fn a_vendor_is_never_inferred_from_anything_but_the_explicit_choice() {
         )
         .expect_err("a placeholder Vendor is refused");
         assert!(
-            matches!(error, SemanticRepairError::MissingVendorName),
+            matches!(error, SemanticRepairError::MissingVendorName { .. }),
             "{name:?} got {error:?}"
         );
     }
@@ -533,9 +540,14 @@ fn a_damaged_order_with_an_unreal_date_is_refused_at_the_candidate_guard() {
     let MutationReport::Rejected { rejection, .. } = report else {
         panic!("a repaired record that is still invalid is refused: {report:?}");
     };
-    let SemanticRepairRejection::ReplacementFailed { error } = rejection else {
+    let SemanticRepairRejection::ReplacementFailed { unrestored, error } = rejection else {
         panic!("the refusal comes from the replacement: {rejection:?}");
     };
+    assert!(
+        unrestored.is_empty(),
+        "nothing was written, so no managed file is left standing in another state: \
+         {unrestored:?}"
+    );
     // Refused by candidate validation before any write, not by a destination check and
     // not by a failed write. `std::io::Error` has no `PartialEq`, so the whole failure
     // cannot be compared as a value; the shape is matched instead.
@@ -693,7 +705,13 @@ fn a_package_nothing_can_read_is_not_refused_as_a_generated_identity_collision()
     let SemanticRepairRejection::PackageEvidenceUnavailable { root: named } = &rejection else {
         panic!("the refusal names the Package whose evidence is missing: {rejection:?}");
     };
-    assert_eq!(named, &root);
+    assert_eq!(named.root(), root);
+    assert_eq!(named.location().absolute_path(), root);
+    assert_eq!(
+        named.location().package_relative_path(),
+        Some("."),
+        "the Root is named in the Package's own spelling for itself"
+    );
     assert_eq!(
         fs::read(record(chosen)).unwrap(),
         before,
@@ -812,8 +830,8 @@ fn a_stale_locator_is_recomputed_from_the_physical_relationship_alone() {
     .expect("a stale locator can be repaired");
 
     assert_eq!(
-        plan.repaired_order().package_root.as_str(),
-        "../..",
+        plan.repaired_order().package_root.stored_text(),
+        Some("../.."),
         "the locator comes from where the directory physically sits"
     );
     let report = commit_semantic_repair(plan, &mut QueuedUuids::of(&[]), &RealFileSystem);
@@ -821,8 +839,11 @@ fn a_stale_locator_is_recomputed_from_the_physical_relationship_alone() {
     let MutationReport::Committed { result, .. } = report else {
         panic!("a locator repair commits: {report:?}");
     };
-    assert_eq!(result.order().package_root.as_str(), "../..");
-    assert_eq!(document(&directory).package_root.as_str(), "../..");
+    assert_eq!(result.order().package_root.stored_text(), Some("../.."));
+    assert_eq!(
+        document(&directory).package_root.stored_text(),
+        Some("../..")
+    );
     assert!(result.remaining().expect("rediagnosed").is_valid());
     // Every other fact is exactly as it was.
     assert_eq!(result.order().title.as_str(), "Laser components");
@@ -948,8 +969,8 @@ fn every_semantic_repair_reaches_the_real_package_under_a_nested_orders_path() {
         &[],
     );
     assert_eq!(
-        document(&directory).package_root.as_str(),
-        "../../..",
+        document(&directory).package_root.stored_text(),
+        Some("../../.."),
         "the locator counts the real distance to the SpielOrders Root"
     );
 }

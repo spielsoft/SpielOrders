@@ -7,15 +7,7 @@ labels:
 assignee: /root
 ---
 
-## Question
-
-How should an existing archive of physical Order Directories be adopted as a SpielOrder Package without executing migration in this planning effort: which directories are eligible, how are `config.toml` including the Orders and Removed Orders paths, `version.json`, `vendors.json`, `index.json`, per-Order `order.json` including its relative Package locator, and conventional README files proposed or created at one current package version, how are legacy institution aliases, ambiguous directory components, and duplicate Vendor evidence reconciled without Vendor Merge, and what review or dry-run evidence is required before any future write?
-
-## Blocking
-
-Blocked by: [Define the SpielOrders package topology](002-package-topology.md), [Define the Order record and lifecycle contract](003-order-record-lifecycle.md), [Define Vendor identity and historical semantics](004-vendor-identity-history.md), [Define the Rust CLI capability contract](006-cli-contract.md), [Define integrity, validation, and repair boundaries](008-integrity-repair.md), and [Define durable metadata schemas and version evolution](010-metadata-schemas.md). All blockers are closed.
-
-## Resolution
+## Decision
 
 Legacy adoption is an exceptional, agent-orchestrated workflow, not a general import subsystem or archive-migration engine. SpielOrders supplies only safe metadata bootstrapping primitives. An agent may inspect legacy names, structured indexes, and Supporting Material read-only; reason about contradictory evidence; prepare a consolidated proposal; and, after human approval, invoke the CLI with explicit facts. SpielOrders core never interprets Supporting Material, guesses semantic boundaries, maintains institution or Vendor alias registries, or implements an import wizard.
 
@@ -55,24 +47,9 @@ Vendor Contacts and other shared facts are proposed only from evidence that supp
 
 ### Minimal CLI surface
 
-The existing CLI contract gains one primitive:
+Adoption adds exactly one primitive to the CLI, `adopt-order`, recorded like every other command under `contracts/cli/`. It is Package-rooted, like `add-order`: `--root` identifies the exact SpielOrders Root and its argument selects one existing eligible direct child of the configured Orders Directory. It requires explicit `title`, `date_ordered`, and `status`, and takes the ordinary optional Order facts and Items through the ordinary mutation vocabulary. It never parses the directory basename or inspects its contents. Vendor selection uses an already existing Vendor; creating a Vendor remains a separate `add-vendor` operation.
 
-```text
-spielorders adopt-order DIRECTORY field=value... [--dry-run]
-```
-
-`adopt-order` is Package-rooted, like `add-order`: global `--root` identifies the exact SpielOrders Root and `DIRECTORY` selects one existing eligible direct child of its configured Orders Directory. The command requires explicit `title`, `date_ordered`, and `status`; it accepts the already defined optional Order facts and Items through the ordinary CLI mutation vocabulary. It does not parse the directory basename or inspect its contents. Vendor selection uses an already existing Vendor; creating a Vendor remains a separate `add-vendor` operation.
-
-The existing command families cover the complete workflow:
-
-- `init orders_path=... removed_path=... --dry-run` proposes Package bootstrapping;
-- `add-vendor --dry-run` and `adopt-order --dry-run` expose each contemplated canonical mutation;
-- the same commands without `--dry-run` commit approved mutations;
-- `package show`, `package list vendors`, and `package values ...` expose current evidence needed for reconciliation;
-- `validate` and `order validate` verify the resulting Package and Order;
-- `repair`, `order repair`, and `index rebuild` provide only their already bounded recovery behavior.
-
-There are no separate `import`, `proposal`, `review`, `resume`, or batch-adoption commands. Under `--json`, the ordinary independently versioned command contracts provide the machine-readable plans and mutation reports. Human review and the consolidated cross-Order proposal are agent artifacts, not Package metadata or persistent core state.
+Every other step of the workflow uses command families that already exist — dry-run bootstrapping and mutation, the Package reads that expose current Vendors and Reusable Free-Entry Values, validation, and the already bounded recovery commands. There are no separate `import`, `proposal`, `review`, `resume`, or batch-adoption commands. Under `--json`, the ordinary independently versioned command contracts carry the machine-readable plans and mutation reports. Human review and the consolidated cross-Order proposal are agent artifacts, not Package metadata or persistent core state.
 
 ### Metadata bootstrapping
 
@@ -80,12 +57,14 @@ There are no separate `import`, `proposal`, `review`, `resume`, or batch-adoptio
 
 Each successful `adopt-order`:
 
-- refuses any ineligible directory, link, basename collision in selection, already managed Order, or candidate with conflicting/partial reserved `.spielorders` state;
+- refuses any ineligible directory, link, candidate whose name has no usable Package-relative spelling, already managed Order, or candidate with conflicting/partial reserved `.spielorders` state;
 - generates a fresh lowercase hyphenated UUIDv4 Order ID in core at commit time;
 - writes only the current-version `.spielorders/order.json`, with every approved fact and a core-calculated normalized relative `package_root` locator from that Order Directory to the selected SpielOrders Root;
 - preserves an existing Order `README.md` byte-for-byte and creates an empty conventional Order README only when absent;
 - leaves every other file and subdirectory untouched; and
 - refreshes the derived Package Index from healthy canonical state.
+
+Adoption projects no destination name, so no basename collision can reach it; collision refusal belongs to alignment, where a projected name genuinely can be occupied. The name-related refusal adoption does have is the one above: a direct child whose filesystem name has no normalized Package-relative spelling — not valid Unicode, or rejected by the Package-relative grammar — is a real directory the operating system is content with and that nothing describing a Package could refer to. It is never indexed, and it must not be adopted either.
 
 Vendor IDs are likewise fresh UUIDv4 values generated by the ordinary `add-vendor` core mutation. IDs are never derived from paths, names, source-system identifiers, timestamps, or content hashes. A dry run states that a fresh identity will be generated; the opaque UUID itself is not evidence requiring review.
 
@@ -95,7 +74,7 @@ The agent resolves semantic duplicate-Order evidence before invoking adoption: i
 
 Every newly generated Order and Vendor ID is checked against the Package before commit. An existing `order.json`, any partial prior adoption, unexpected reserved metadata, or an already adopted identity is not overwritten by adoption. Valid managed records are inspected normally; damaged or partial records go through validation and the narrowly authorized repair/recovery paths. Where the safe distinction cannot be made, the candidate remains untouched for external correction or explicit human disposition.
 
-All mutating primitives inherit the CLI contract's complete-plan validation, beside-destination staging, atomic managed-file replacement, and rollback reporting. Initialization validates its complete root-artifact plan before writing and rolls back already-created managed artifacts where possible on failure. Each Order or Vendor commit is atomic at that entity scope. A sequence of 1,530 adoptions is deliberately not one transaction and receives no package-wide rollback: completed entities remain valid, and the agent resumes by re-reading Package state and skipping already adopted directories. A failed derived-index refresh does not undo committed canonical metadata and is recovered with `index rebuild`.
+All mutating primitives inherit the CLI contract's complete-plan validation, beside-destination staging, atomic managed-file replacement, and rollback reporting. Initialization validates its complete root-artifact plan before writing and rolls back already-created managed artifacts where possible on failure. Each Order or Vendor commit is atomic at that entity scope. A long sequence of adoptions is deliberately not one transaction and receives no package-wide rollback: completed entities remain valid, and the agent resumes by re-reading Package state and skipping already adopted directories. A failed derived-index refresh does not undo committed canonical metadata and is recovered with `index rebuild`.
 
 The agent must present a consolidated dry-run review before any future write. For each candidate it shows the physical relative path, proposed facts, evidence and contradictions, proposed existing/new/absent Vendor handling, reuse or introduction of Reusable Free-Entry Values, blockers, and the exact CLI mutations it intends to run. It separately summarizes exclusions, collisions, duplicate evidence, damaged or partial candidates, and expected README creation. Explicit human confirmation authorizes only that reviewed set. The CLI itself remains noninteractive: omitting `--dry-run` authorizes each named mutation, consistent with the existing contract. State-change preconditions may still reject a command between review and commit.
 

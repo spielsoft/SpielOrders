@@ -7,7 +7,6 @@ description: Break a plan, spec, or the current conversation into a set of trace
 
 Break a plan, spec, or conversation into a set of **tickets** — tracer-bullet vertical slices, each declaring the tickets that **block** it.
 
-The issue tracker and triage label vocabulary should have been provided to you — run `/setup-matt-pocock-skills` if not.
 
 ## Process
 
@@ -38,6 +37,8 @@ Give each ticket its **blocking edges** — the other tickets that must complete
 
 Each ticket must also be cheap for a fresh agent to load:
 
+- At most 600 words outside the acceptance criteria. Outcome, decision sources, blockers, scope as bullets, acceptance criteria, exclusions. No predicted types, fixture cells, response shapes, or file paths: implementation discovers those and the acceptance criteria are what
+  pin behavior.
 - Link to the milestone and the few decision sources that directly govern the
   slice; do not copy their bodies into the ticket.
 - State the observable outcome, blockers, acceptance criteria, exclusions, and
@@ -50,6 +51,8 @@ Each ticket must also be cheap for a fresh agent to load:
   acceptance/evidence records unless a particular value is itself the contract.
 - Do not embed a ready-to-paste prompt or recursive handoff requirement. A ticket
   ends with a concise next-ticket pointer produced by `/implement`.
+- A ticket describes the outcome and the rules that govern it. It does not
+  describe how the decision came to be, what it replaced, or who ruled on it.
 
 **Wide refactors are the exception to vertical slicing.** A **wide refactor** is one mechanical change — rename a column, retype a shared symbol — whose **blast radius** fans across the whole codebase, so a single edit breaks thousands of call sites at once and no vertical slice can land green. Don't force it into a tracer bullet; sequence it as **expand–contract**. First expand: add the new form beside the old so nothing breaks. Then migrate the call sites over in batches sized by blast radius (per package, per directory), each batch its own ticket blocked by the expand, keeping CI green batch to batch because the old form still exists. Finally contract: delete the old form once no caller remains, in a ticket blocked by every migrate batch. When even the batches can't stay green alone, keep the sequence but let them share an integration branch that all block a final integrate-and-verify ticket — green is promised only there.
 

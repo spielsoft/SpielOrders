@@ -7,15 +7,7 @@ labels:
 assignee: /root
 ---
 
-## Question
-
-What queries, filters, result summaries, and navigation must native SpielOrders search support across managed JSON and Markdown, and how should complementary OS-native search find Supporting Material and reveal it in Finder without duplicate results?
-
-## Blocking
-
-Unblocked.
-
-## Resolution
+## Decision
 
 SpielOrders has two distinct lookup experiences: deterministic native entity search and a complementary OS-indexed Supporting Material search. They do not mix results or behavior.
 

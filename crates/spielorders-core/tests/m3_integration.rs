@@ -26,7 +26,7 @@ use spielorders_core::metadata_repair::{
     RepairConfirmation, RepairResolution, commit_metadata_repair, plan_metadata_repair,
 };
 use spielorders_core::mutation::MutationReport;
-use spielorders_core::order_diagnosis::{RepairAction, diagnose_order};
+use spielorders_core::order_diagnosis::diagnose_order;
 use spielorders_core::order_edits::{
     ItemAssignments, OrderAssignments, OrderEditPlanError, OrderEditWarning, commit_order_edit,
     commit_order_item_mutation, plan_order_edit, plan_order_item_add,
@@ -44,6 +44,7 @@ use spielorders_core::removal::{
     OrderRemovalRejection, OrderRemovalWarning, RemovalDisposition, RemovedDirectoryCleanup,
     commit_order_removal, plan_order_removal,
 };
+use spielorders_core::repair_cases::RepairAction;
 use spielorders_core::semantic_repair::{
     SemanticRepairWarning, SemanticResolution, commit_semantic_repair, plan_semantic_repair,
 };
@@ -548,7 +549,7 @@ fn every_whole_directory_relocation_carries_supporting_material_untouched() {
 
     // Alignment: renamed in place, still active, contents identical.
     let plan = plan_order_alignment(&directory, &RealFileSystem).expect("the Order aligns");
-    let aligned = plan.destination().to_path_buf();
+    let aligned = plan.destination().absolute_path().to_path_buf();
     assert!(matches!(
         commit_order_alignment(plan, &RealFileSystem),
         MutationReport::Committed { .. }
@@ -576,6 +577,7 @@ fn every_whole_directory_relocation_carries_supporting_material_untouched() {
     let removed = plan
         .destination()
         .expect("a recoverable destination")
+        .absolute_path()
         .to_path_buf();
     assert!(matches!(
         commit_order_removal(plan, &RealFileSystem, &UnreachableTrash),
@@ -604,10 +606,10 @@ fn a_full_lifecycle_composes_through_public_core_seams_only() {
     let document = OrderDocument::from_json_bytes(&fs::read(record(&directory)).unwrap())
         .expect("the adopted record parses");
     assert_eq!(document.order_id.as_str(), FIRST_ID);
-    assert_eq!(document.package_root.as_str(), "../..");
+    assert_eq!(document.package_root.stored_text(), Some("../.."));
 
     let plan = plan_order_alignment(&directory, &RealFileSystem).unwrap();
-    let aligned = plan.destination().to_path_buf();
+    let aligned = plan.destination().absolute_path().to_path_buf();
     assert!(matches!(
         commit_order_alignment(plan, &RealFileSystem),
         MutationReport::Committed { .. }
@@ -740,7 +742,7 @@ fn every_write_capability_composes_over_a_configured_nested_layout() {
 
     let drifted = adopted_order_at(&root, NESTED_ORDERS, "Legacy_drifted", SECOND_ID, None);
     let plan = plan_order_alignment(&drifted, &RealFileSystem).expect("the Order aligns");
-    let aligned = plan.destination().to_path_buf();
+    let aligned = plan.destination().absolute_path().to_path_buf();
     assert!(
         aligned.starts_with(root.join(NESTED_ORDERS)),
         "alignment stays inside the configured Orders Directory: {aligned:?}"
@@ -816,6 +818,7 @@ fn every_write_capability_composes_over_a_configured_nested_layout() {
     let removed = plan
         .destination()
         .expect("a recoverable destination")
+        .absolute_path()
         .to_path_buf();
     assert!(
         removed.starts_with(root.join(RETIRED)),
@@ -996,13 +999,14 @@ fn a_refused_write_leaves_the_package_as_it_was_and_costs_no_other_capability() 
     let projected = plan_order_alignment(&directory, &RealFileSystem)
         .expect("the Order aligns while its name is free")
         .destination()
+        .absolute_path()
         .to_path_buf();
     fs::create_dir(&projected).unwrap();
     fs::write(projected.join("sibling.txt"), b"someone else's directory\n").unwrap();
     let error = plan_order_alignment(&directory, &RealFileSystem)
         .expect_err("an occupied destination stops alignment");
     assert!(
-        matches!(&error, OrderAlignmentPlanError::DestinationCollision { path } if path == &projected),
+        matches!(&error, OrderAlignmentPlanError::DestinationCollision { location } if location.absolute_path() == projected),
         "the collision names the occupied path: {error:?}"
     );
     fs::remove_dir_all(&projected).unwrap();
@@ -1048,7 +1052,7 @@ fn a_refused_write_leaves_the_package_as_it_was_and_costs_no_other_capability() 
         MutationReport::Committed { .. }
     ));
     let plan = plan_order_alignment(&directory, &RealFileSystem).unwrap();
-    let aligned = plan.destination().to_path_buf();
+    let aligned = plan.destination().absolute_path().to_path_buf();
     assert!(matches!(
         commit_order_alignment(plan, &RealFileSystem),
         MutationReport::Committed { .. }
@@ -1236,7 +1240,7 @@ fn a_derived_index_that_cannot_be_refreshed_never_makes_a_commit_look_retryable(
     );
 
     let plan = plan_order_alignment(&candidate, &RealFileSystem).expect("the Order aligns");
-    let aligned = plan.destination().to_path_buf();
+    let aligned = plan.destination().absolute_path().to_path_buf();
     let report = commit_order_alignment(plan, &failing());
     let MutationReport::CommittedWithWarning { warnings, .. } = report else {
         panic!("the rename is committed with a warning: {report:?}");
@@ -1331,7 +1335,7 @@ fn a_rollback_that_cannot_finish_leaves_the_order_active_and_still_disposable() 
     let MutationReport::Rejected {
         rejection:
             OrderRemovalRejection::MoveFailed {
-                cleanup: RemovedDirectoryCleanup::Failed { path, .. },
+                cleanup: RemovedDirectoryCleanup::Failed { location, .. },
                 ..
             },
         ..
@@ -1339,7 +1343,7 @@ fn a_rollback_that_cannot_finish_leaves_the_order_active_and_still_disposable() 
     else {
         panic!("both failures are reported: {report:?}");
     };
-    assert_eq!(path, &removed_root);
+    assert_eq!(location.absolute_path(), removed_root);
     assert!(
         removed_root.is_dir(),
         "the report names a directory really still there"
@@ -1365,6 +1369,7 @@ fn a_rollback_that_cannot_finish_leaves_the_order_active_and_still_disposable() 
     let removed = plan
         .destination()
         .expect("a recoverable destination")
+        .absolute_path()
         .to_path_buf();
     let MutationReport::Committed { result, .. } =
         commit_order_removal(plan, &RealFileSystem, &UnreachableTrash)
@@ -1451,9 +1456,20 @@ fn an_interrupted_upgrade_resumes_and_hands_the_package_back_usable() {
     let MutationReport::Committed { result, .. } = report else {
         panic!("the resumed run completes: {report:?}");
     };
-    assert_eq!(result.skipped(), [record(&first)]);
     assert_eq!(
-        result.upgraded(),
+        result
+            .skipped()
+            .iter()
+            .map(|location| location.absolute_path().to_path_buf())
+            .collect::<Vec<_>>(),
+        [record(&first)]
+    );
+    assert_eq!(
+        result
+            .upgraded()
+            .iter()
+            .map(|location| location.absolute_path().to_path_buf())
+            .collect::<Vec<_>>(),
         [record(&second), vendors_record(&root)],
         "nothing already finished is rewritten a second time"
     );

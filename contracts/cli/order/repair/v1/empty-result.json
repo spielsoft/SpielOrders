@@ -1,0 +1,19 @@
+{
+  "contract": "spielorders.order.repair",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>",
+    "order_root": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace"
+  },
+  "data": {
+    "scope": "order",
+    "valid": true,
+    "cases": [],
+    "unactionable": [],
+    "report": null,
+    "index": null
+  },
+  "diagnostics": [],
+  "error": null
+}

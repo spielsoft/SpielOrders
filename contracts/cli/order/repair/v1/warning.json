@@ -1,0 +1,56 @@
+{
+  "contract": "spielorders.order.repair",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>",
+    "order_root": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace"
+  },
+  "data": {
+    "scope": "order",
+    "valid": true,
+    "cases": [],
+    "unactionable": [],
+    "report": {
+      "committed": true,
+      "changed": true,
+      "case": "vendor_reference_unresolved:Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/order.json:f9ed66306e25940426de40bc1eda03c983fd9cbc9b49482cb51e5445b8c7625d",
+      "action": "clear_vendor_reference",
+      "operations": [
+        {
+          "operation": "replace_order_record",
+          "location": {
+            "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/order.json",
+            "package_relative_path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/order.json"
+          }
+        },
+        {
+          "operation": "refresh_package_index",
+          "location": {
+            "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
+            "package_relative_path": ".spielorders/index.json"
+          }
+        }
+      ],
+      "warnings": [
+        "index_refresh_failed"
+      ]
+    },
+    "index": {
+      "location": {
+        "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
+        "package_relative_path": ".spielorders/index.json"
+      },
+      "state": "stale",
+      "refresh": "replacement_failed",
+      "malformed_reasons": [],
+      "stale_reasons": [
+        "order_metadata_changed"
+      ],
+      "observed_version": null,
+      "expected_version": null
+    }
+  },
+  "diagnostics": [],
+  "error": null
+}

@@ -8,21 +8,11 @@ labels:
 assignee: /root
 ---
 
-## Question
+## Decision
 
-What exact typed projection and state model must the shared core return for
-unmanaged directories, Damaged Packages, current and resumable-upgrade Packages,
-healthy Orders, Damaged Order placeholders, Vendors, READMEs, reusable values,
-diagnostics, and Package Index status?
-
-## Blocking
-
-Unblocked. [Decide how Package Index freshness is proven without canonical rereads](001-index-freshness-fast-path.md)
-and [Define the stable M2 diagnostic vocabulary and evidence contract](002-stable-diagnostic-contract.md)
-now supply the exact index and evidence contracts this Package projection must
-compose without adding new behavior.
-
-## Resolution
+The projection is built. The core crate's public surface is the record of every result
+variant, field, and collection named below; what follows is what that projection may
+never become.
 
 ### Boundary and result variants
 
@@ -71,40 +61,17 @@ relative path is `.`. A relative path is absent only when Package membership has
 not been established, as in `unmanaged` or an early `operation_failed` result.
 No path is made absolute by following the final entry through a link.
 
-The managed context contains:
-
-- SpielOrders Root;
-- root `.spielorders` directory;
-- exact `config.toml`, `version.json`, `vendors.json`, and `index.json` locations;
-- configured Orders Directory and Removed Orders Directory when their configuration
-  and confinement have been established; and
-- exact Package README location.
-
-Each discovered Order entry contains exact locations for its Order Directory,
-immediate `.spielorders` directory, `order.json`, and conventional `README.md`.
-The directory basename is obtainable from the path and is not duplicated as an
-identity. The available projection also carries the current Package metadata
-version. Healthy Orders retain their declared schema version and technical
-`package_root` locator as part of their complete version-1 record. Untrusted or
-unexamined paths and versions are absent rather than guessed.
+The managed context names every established Package-owned location, and each discovered
+Order entry names its own. A directory basename is obtainable from the path and is never
+duplicated as an identity. Untrusted or unexamined paths and versions are absent rather
+than guessed.
 
 ### Metadata and upgrade state
 
-Managed results use this read-only metadata state:
-
-- `current`: the Package marker and every projected canonical artifact are at the
-  running contract's current version;
-- `upgrade_required`: a valid supported older source version has a complete
-  consecutive chain to the running target and no artifact has reached that target;
-- `upgrade_resumable`: the old marker remains at the supported source while every
-  examined canonical artifact is valid at either that source or the one recognized
-  target and at least one is already at the target;
-- `upgrade_blocked`: the source/target combination is recognized but diagnostics
-  identify canonical artifacts that prevent completion;
-- `unsupported`: a recognizable version is newer than the running contract or has
-  no complete supported chain; and
-- `not_assessed`: the version evidence needed to choose another state was not
-  trustworthy or was not examined.
+Managed results carry a read-only metadata state that distinguishes a current Package
+from one whose upgrade is required, resumable, blocked, or unsupported, and from one
+whose version evidence was untrustworthy or unexamined. It is read-only: no state it
+reports authorizes a write.
 
 Upgrade-required, resumable, and blocked projections carry source and target
 versions plus per-artifact observations in the already-decided deterministic
@@ -123,23 +90,13 @@ without moving upgrade execution out of M3.
 
 ### Available current-Package projection
 
-`PackageProjection` contains:
-
-- the complete established managed paths and current metadata version;
-- one Package README reference containing its exact location but no eagerly read
-  text;
-- `healthy_orders`, each with its complete normalized version-1 `OrderDocument`,
-  trustworthy Order ID, Order paths, calculated Item Total Prices and Order Total,
-  and the version-1 index README text projection;
-- `damaged_orders`, each with Order paths, an optional trustworthy Order ID, and an
-  Order README reference, but no fabricated title, date, status, Vendor, totals,
-  Items, or other partial canonical facts;
-- the complete normalized Vendors in canonical `vendors.json` order, including
-  trustworthy Vendor IDs and ordered Contacts;
-- the four Reusable Free-Entry Value collections: `ordering_institutions`,
-  `orderers`, `projects`, and `order_groups`;
-- the stable diagnostic groups supported by this load; and
-- Package Index state and refresh outcome.
+The available projection carries the established managed paths and metadata version, a
+Package README reference without eagerly read text, the healthy Orders with their
+complete normalized records and calculated totals, the Damaged Order placeholders, the
+complete normalized Vendors, the four Reusable Free-Entry Value collections, the
+diagnostic groups this load supports, and the Package Index record. A placeholder
+carries Order paths, an optional trustworthy Order ID, and a README reference — never a
+fabricated title, date, status, Vendor, total, Item, or other partial canonical fact.
 
 The projection does not duplicate a resolved Vendor object into each Order.
 An Order retains its optional Vendor ID and adapters resolve it against the one
@@ -212,12 +169,8 @@ README read. Editing and atomic README writes remain later mutation behavior.
 
 ### Package Index record
 
-The projection preserves the closed vocabularies exactly. Package Index state is
-`current`, `missing`, `malformed`, `wrong_version`, `stale`, or `not_assessed`;
-refresh outcome is `not_needed`, `rebuilt`, `not_attempted`, or
-`replacement_failed`.
-
-The visible pair represents the state after the attempted load:
+The projection preserves the closed index-state and refresh-outcome vocabularies
+exactly, and the visible pair represents the state after the attempted load:
 
 - a trusted fast path is `current` / `not_needed`;
 - a successful canonical rebuild is `current` / `rebuilt` and does not retain the
@@ -240,16 +193,13 @@ diagnostic severity nor a claim about canonical health.
 
 ### Deterministic collections and absent evidence
 
-- `healthy_orders` use Date Ordered descending, normalized Order Title ascending
-  by bytewise UTF-8, then Order ID ascending, matching the version-1 index contract.
-- `damaged_orders` use bytewise lexical normalized Package-relative Order Directory
-  path. Healthy and damaged entries remain separate rather than inventing a
-  cross-kind sort key for damaged facts.
-- Vendors and Vendor Contacts preserve canonical array order. Order Items preserve
-  canonical array order, and their calculated totals align positionally.
-- Reusable values and diagnostics use the ordering defined above and in the closed
-  diagnostic decision. Related path and identity collections retain their already
-  decided deterministic order.
+Every collection has an explicit deterministic order: healthy Orders follow the
+version-1 index contract's order, damaged Orders follow bytewise lexical
+Package-relative Order Directory path, Vendors, Contacts, and Items preserve canonical
+array order with totals aligned positionally, and reusable values, diagnostics, and
+related path and identity collections keep the orders their own decisions fix. Healthy
+and damaged entries stay separate rather than inventing a cross-kind sort key for
+damaged facts.
 
 All collections are present when empty. Semantically absent optional canonical
 facts remain absent. Evidence that was untrusted, not established, or not examined
@@ -327,7 +277,3 @@ can supply exact directory orders, kinds, bytes, comparable/uncertain change
 evidence, and failures at every existing read, list, staging, validation,
 durability, replacement, and cleanup boundary. No rule depends on platform error
 strings, filesystem enumeration order, Tauri, CLI parsing, or frontend state.
-
-No domain-language change is introduced. The existing SpielOrder Package, Damaged
-Package, Damaged Order, Package Index, README, Vendor identity, and Reusable
-Free-Entry Value terms remain sufficient, so `CONTEXT.md` does not change.

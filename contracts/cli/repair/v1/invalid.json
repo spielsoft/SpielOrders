@@ -1,0 +1,23 @@
+{
+  "contract": "spielorders.repair",
+  "contract_version": 1,
+  "ok": false,
+  "context": {
+    "package_root": null
+  },
+  "data": null,
+  "diagnostics": [],
+  "error": {
+    "code": "package_root_unmanaged",
+    "message": "<PACKAGE_ROOT>/not-a-root is not a SpielOrders Root: it has no .spielorders directory. --root names the Root itself and no ancestor of it is consulted.",
+    "scope": "package",
+    "paths": [
+      {
+        "spelling": "resolved",
+        "path": "<PACKAGE_ROOT>/not-a-root",
+        "package_relative_path": null
+      }
+    ],
+    "identities": []
+  }
+}

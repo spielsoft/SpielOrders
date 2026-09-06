@@ -1,0 +1,18 @@
+{
+  "contract": "spielorders.repair",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>"
+  },
+  "data": {
+    "scope": "package",
+    "valid": true,
+    "cases": [],
+    "unactionable": [],
+    "report": null,
+    "index": null
+  },
+  "diagnostics": [],
+  "error": null
+}

@@ -7,15 +7,7 @@ labels:
 assignee: /root
 ---
 
-## Question
-
-How should the SpielGantt-like sidebar, Order list, filters, detail/editor workspace, Vendor access, Supporting Material actions, lifecycle controls, visibly quarantined Damaged Orders, and explicit repair interactions fit together into a materially Order-specific macOS desktop experience?
-
-## Blocking
-
-Blocked by: [Define lookup and search behavior](005-search-lookup.md), [Define the Rust CLI capability contract](006-cli-contract.md), [Define integrity, validation, and repair boundaries](008-integrity-repair.md), and [Define durable metadata schemas and version evolution](010-metadata-schemas.md). All blockers are closed.
-
-## Resolution
+## Decision
 
 The accepted experience is captured in the [interactive SpielOrders desktop prototype](../prototypes/spielorders-desktop-prototype.html). It is a disposable design artifact, not production application code.
 

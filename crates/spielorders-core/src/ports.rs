@@ -17,6 +17,24 @@ pub enum FileSystemEntryKind {
     Other,
 }
 
+impl FileSystemEntryKind {
+    /// This kind's one stable spelling.
+    ///
+    /// Diagnostic evidence carries an observed entry kind, so a reporting adapter needs
+    /// a name for it. Supplying it here rather than there is what keeps one spelling:
+    /// every other enum a diagnostic carries already has an `as_str`, and this one's
+    /// absence would make an adapter the second place deciding what a symbolic link is
+    /// called.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Directory => "directory",
+            Self::File => "file",
+            Self::SymbolicLink => "symbolic_link",
+            Self::Other => "other",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NewFileLinkOutcome {
     Linked,

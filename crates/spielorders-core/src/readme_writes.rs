@@ -13,7 +13,7 @@ use crate::{
         DestinationExpectation, ValidatedReplacementError, replace_validated_file_expecting,
     },
     mutation::MutationReport,
-    operations::OperationFailure,
+    operations::{FailedPath, OperationFailure},
     order_edits::{OrderResolutionFailure, resolve_order},
     ports::{FileSystem, FileSystemEntryKind},
     readme::{ReadmeKind, ReadmeReference, ReadmeUnavailableReason},
@@ -110,8 +110,13 @@ pub enum ReadmeWritePlanError<E> {
         path: PathBuf,
         reason: ReadmeUnavailableReason,
     },
+    /// **A [`FailedPath`] rather than a `PathBuf`**, for the reason
+    /// [`crate::order_edits::OrderResolutionFailure::FileSystem`] carries one: the
+    /// destination is a managed location inside a Package this plan resolved, while
+    /// resolving an Order Directory up to its Package happens before there is a Root to
+    /// spell anything against.
     FileSystem {
-        path: PathBuf,
+        path: FailedPath,
         error: E,
     },
 }
@@ -181,7 +186,7 @@ fn readme_write_plan<F: FileSystem>(
         filesystem
             .symlink_metadata(&path)
             .map_err(|error| ReadmeWritePlanError::FileSystem {
-                path: path.clone(),
+                path: FailedPath::Located(reference.location().clone()),
                 error,
             })?;
     let (prior_exists, prior_bytes) = match kind {

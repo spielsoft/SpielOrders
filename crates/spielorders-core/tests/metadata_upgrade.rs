@@ -177,6 +177,15 @@ fn vendors_record(root: &Path) -> PathBuf {
     root.join(".spielorders/vendors.json")
 }
 
+/// The absolute paths of a run's reported artifacts, for a claim about which files it
+/// touched rather than about how a Package names them.
+fn absolute(locations: &[spielorders_core::readme::Location]) -> Vec<PathBuf> {
+    locations
+        .iter()
+        .map(|location| location.absolute_path().to_path_buf())
+        .collect()
+}
+
 #[test]
 fn a_package_at_the_newest_version_is_unchanged_by_the_registered_chain() {
     // The running build knows one durable version, so its own registered chain has
@@ -368,11 +377,7 @@ fn the_upgrade_visits_orders_in_order_then_vendors_and_advances_the_marker_last(
         result
             .upgraded()
             .iter()
-            .map(|path| path
-                .strip_prefix(&root)
-                .unwrap()
-                .to_string_lossy()
-                .to_string())
+            .map(|location| location.package_relative_path().unwrap().to_owned())
             .collect::<Vec<_>>(),
         [
             "Orders/2026_08_22_A/.spielorders/order.json",
@@ -948,11 +953,11 @@ fn a_pending_artifact_that_reached_the_target_first_is_not_transformed_twice() {
         panic!("the rest of the Package still completes: {report:?}");
     };
     assert_eq!(
-        result.skipped(),
+        absolute(result.skipped()),
         std::slice::from_ref(&record),
         "the finished record is skipped, not migrated a second time"
     );
-    assert!(!result.upgraded().contains(&record));
+    assert!(!absolute(result.upgraded()).contains(&record));
     assert_eq!(
         fs::read(&record).unwrap(),
         theirs,
@@ -1005,7 +1010,7 @@ fn an_already_upgraded_artifact_that_went_back_is_not_silently_skipped() {
         panic!("the run completes by doing the work again: {report:?}");
     };
     assert!(
-        result.upgraded().contains(&record),
+        absolute(result.upgraded()).contains(&record),
         "the record that went back is upgraded rather than skipped: {:?}",
         result.upgraded()
     );
@@ -1142,7 +1147,7 @@ fn an_interruption_leaves_finished_artifacts_upgraded_and_the_marker_unadvanced(
         "the report names the artifact it stopped at, with its error: {warnings:?}"
     );
     assert_eq!(
-        result.upgraded(),
+        absolute(result.upgraded()),
         [order_record(&root, "2026_08_22_A")],
         "and names exactly what it did upgrade"
     );
@@ -1215,11 +1220,7 @@ fn resumption_reads_current_state_and_neither_redoes_nor_skips_work() {
         result
             .skipped()
             .iter()
-            .map(|path| path
-                .strip_prefix(&root)
-                .unwrap()
-                .to_string_lossy()
-                .to_string())
+            .map(|location| location.package_relative_path().unwrap().to_owned())
             .collect::<Vec<_>>(),
         ["Orders/2026_08_22_A/.spielorders/order.json"],
         "finished work is skipped, not replayed"
@@ -1228,11 +1229,7 @@ fn resumption_reads_current_state_and_neither_redoes_nor_skips_work() {
         result
             .upgraded()
             .iter()
-            .map(|path| path
-                .strip_prefix(&root)
-                .unwrap()
-                .to_string_lossy()
-                .to_string())
+            .map(|location| location.package_relative_path().unwrap().to_owned())
             .collect::<Vec<_>>(),
         [
             "Orders/2026_08_22_B/.spielorders/order.json",

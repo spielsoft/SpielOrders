@@ -1,0 +1,17 @@
+{
+  "contract": "spielorders.package.readme",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>"
+  },
+  "data": {
+    "location": {
+      "absolute_path": "<PACKAGE_ROOT>/README.md",
+      "package_relative_path": "README.md"
+    },
+    "exists": false
+  },
+  "diagnostics": [],
+  "error": null
+}

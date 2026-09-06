@@ -351,7 +351,11 @@ fn rename_retains_identity_updates_live_resolution_and_never_renames_the_order_d
     assert_eq!(
         plan.referencing_orders()
             .iter()
-            .map(|order| (order.order_id(), order.title(), order.directory()))
+            .map(|order| (
+                order.order_id(),
+                order.title(),
+                order.directory().absolute_path()
+            ))
             .collect::<Vec<_>>(),
         [(
             "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
@@ -374,7 +378,10 @@ fn rename_retains_identity_updates_live_resolution_and_never_renames_the_order_d
     assert_eq!(result.vendor().name.as_str(), "Tarnwick Photonics");
     assert_eq!(result.vendor().phone.as_deref(), Some("+1 555 0123"));
     assert_eq!(result.referencing_orders().len(), 1);
-    assert_eq!(result.referencing_orders()[0].directory(), directory);
+    assert_eq!(
+        result.referencing_orders()[0].directory().absolute_path(),
+        directory
+    );
     assert_eq!(result.index().state(), PackageIndexState::Current);
 
     assert!(directory.is_dir(), "the Order Directory keeps its name");
@@ -626,7 +633,11 @@ fn hiding_a_vendor_referenced_by_a_committed_order_keeps_its_facts_resolvable() 
     assert_eq!(
         plan.referencing_orders()
             .iter()
-            .map(|order| (order.order_id(), order.title(), order.directory()))
+            .map(|order| (
+                order.order_id(),
+                order.title(),
+                order.directory().absolute_path()
+            ))
             .collect::<Vec<_>>(),
         [(
             "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
@@ -650,7 +661,10 @@ fn hiding_a_vendor_referenced_by_a_committed_order_keeps_its_facts_resolvable() 
     assert_eq!(result.vendor().name.as_str(), "Tarnwick");
     assert_eq!(result.vendor().email.as_deref(), Some("sales@example.com"));
     assert_eq!(result.referencing_orders().len(), 1);
-    assert_eq!(result.referencing_orders()[0].directory(), directory);
+    assert_eq!(
+        result.referencing_orders()[0].directory().absolute_path(),
+        directory
+    );
     assert_eq!(result.index().state(), PackageIndexState::Current);
 
     // Resolution is proven against the committed Order reloaded from disk, not against
@@ -996,7 +1010,11 @@ fn show_resolves_live_vendor_facts_and_referencing_orders_after_a_rename() {
         projection
             .referencing_orders()
             .iter()
-            .map(|order| (order.order_id(), order.title(), order.directory()))
+            .map(|order| (
+                order.order_id(),
+                order.title(),
+                order.directory().absolute_path()
+            ))
             .collect::<Vec<_>>(),
         [(
             "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
@@ -1325,10 +1343,14 @@ fn a_concurrent_vendor_aggregate_change_rejects_before_any_write() {
     let MutationReport::Rejected { rejection, .. } = report else {
         panic!("a concurrent aggregate change rejects: {report:?}");
     };
-    let VendorMutationRejection::PreconditionsChanged { path } = &rejection else {
+    let VendorMutationRejection::PreconditionsChanged { location } = &rejection else {
         panic!("a concurrent aggregate change is a precondition change: {rejection:?}");
     };
-    assert!(path.ends_with(".spielorders/vendors.json"));
+    assert_eq!(
+        location.package_relative_path(),
+        Some(".spielorders/vendors.json"),
+        "a refusal carries this Package's spelling of the record it names"
+    );
     assert_eq!(fs::read(&vendors_path).unwrap(), before);
 }
 
@@ -1651,7 +1673,7 @@ fn damaged_package_state_rejects_every_vendor_capability() {
 
     for error in [creation, edit, hide, unhide, show] {
         assert!(
-            matches!(error, VendorCapabilityError::DamagedPackage),
+            matches!(error, VendorCapabilityError::DamagedPackage { .. }),
             "a damaged Package is reported as such: {error:?}"
         );
     }

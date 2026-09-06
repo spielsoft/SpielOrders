@@ -1,0 +1,24 @@
+{
+  "contract": "spielorders.order.repair",
+  "contract_version": 1,
+  "ok": false,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>",
+    "order_root": null
+  },
+  "data": null,
+  "diagnostics": [],
+  "error": {
+    "code": "order_root_unmanaged",
+    "message": "<PACKAGE_ROOT>/not-a-root is not one of this Package's Orders: it is not an entry of the configured Orders Directory. For an `order` command --root names the Order Directory itself.",
+    "scope": "order",
+    "paths": [
+      {
+        "spelling": "resolved",
+        "path": "<PACKAGE_ROOT>/not-a-root",
+        "package_relative_path": "not-a-root"
+      }
+    ],
+    "identities": []
+  }
+}

@@ -2,48 +2,51 @@ import assert from "node:assert/strict";
 import { access, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 
-const ticketDirectory = "issues/implementation/m0-contract-baseline/tickets";
-const ticketFiles = (await readdir(ticketDirectory))
-  .filter((file) => /^\d{3}-.+\.md$/.test(file))
-  .sort();
-const requiredSections = [
-  "Outcome",
-  "Decision sources",
-  "Blocking",
-  "Scope",
-  "Acceptance criteria",
-  "Review boundary"
-];
+async function markdown(file) {
+  return readFile(file, "utf8");
+}
 
 function frontmatterValue(text, key) {
   return text.match(new RegExp(`^${key}: (.+)$`, "m"))?.[1];
 }
 
-async function markdown(file) {
-  return readFile(file, "utf8");
-}
-
-for (const file of ticketFiles) {
-  const ticketPath = path.join(ticketDirectory, file);
-  const text = await markdown(ticketPath);
-  for (const section of requiredSections) {
-    assert.match(text, new RegExp(`^## ${section}$`, "m"), `${file}: missing ${section}`);
+async function markdownFiles(directory) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const found = [];
+  for (const entry of entries) {
+    const child = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+      found.push(...(await markdownFiles(child)));
+    } else if (entry.name.endsWith(".md")) {
+      found.push(child);
+    }
   }
+  return found;
+}
 
-  const sourceBlock = text.match(/^## Decision sources\n([\s\S]*?)(?=^## )/m)?.[1] ?? "";
-  const links = [...sourceBlock.matchAll(/\[([^\]]+)\]\(([^)]+)\)/g)];
-  assert.ok(links.length > 0, `${file}: missing linked decision source`);
-  for (const [, name, target] of links) {
-    assert.doesNotMatch(name, /^#?\d+$/, `${file}: decision link uses a bare identifier`);
-    const resolved = path.resolve(path.dirname(ticketPath), target.split("#", 1)[0]);
-    await access(resolved);
+const linked = [...(await markdownFiles("issues")), ...(await markdownFiles("docs"))];
+for (const entry of await readdir(".", { withFileTypes: true })) {
+  if (entry.isFile() && entry.name.endsWith(".md")) linked.push(entry.name);
+}
+
+let checkedLinks = 0;
+const brokenLinks = [];
+for (const file of linked) {
+  const text = await markdown(file);
+  for (const [, , target] of text.matchAll(/\[([^\]]*)\]\(([^)\s]+)\)/g)) {
+    if (/^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith("#")) continue;
+    const relative = decodeURI(target.split("#", 1)[0]);
+    if (relative === "") continue;
+    checkedLinks += 1;
+    try {
+      await access(path.resolve(path.dirname(file), relative));
+    } catch {
+      brokenLinks.push(`${file}: broken link ${target}`);
+    }
   }
 }
-
-const milestone = await markdown("issues/implementation/m0-contract-baseline/README.md");
-for (const file of ticketFiles) {
-  assert.match(milestone, new RegExp(`\\(tickets/${file.replaceAll(".", "\\.")}\\)`), `milestone: missing ${file}`);
-}
+assert.deepEqual(brokenLinks, [], `broken relative links:\n${brokenLinks.join("\n")}`);
 
 const decisionDirectory = "issues/wayfinder/spielorders-product-architecture/tickets";
 const decisionNames = new Set();
@@ -73,4 +76,4 @@ await access("contracts/schemas/v1");
 await access("contracts/examples/v1");
 await access("contracts/fixtures");
 
-console.log(`traceability passed for ${ticketFiles.length} M0 tickets and ${testFiles.length} baseline test files`);
+console.log(`traceability passed for ${checkedLinks} relative links and ${testFiles.length} baseline test files`);

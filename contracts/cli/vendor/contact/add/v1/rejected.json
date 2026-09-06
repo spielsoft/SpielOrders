@@ -1,0 +1,23 @@
+{
+  "contract": "spielorders.vendor.contact.add",
+  "contract_version": 1,
+  "ok": false,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>"
+  },
+  "data": null,
+  "diagnostics": [],
+  "error": {
+    "code": "vendor_contact_name_required",
+    "message": "a Contact requires a Name and this command line assigned none. `vendor contact add \"Tarnwick\" name=\"Katherine Johnson\"` is the least an added Contact needs; its role, phone, and email are optional.",
+    "scope": "package",
+    "paths": [
+      {
+        "spelling": "resolved",
+        "path": "<PACKAGE_ROOT>/.spielorders/vendors.json",
+        "package_relative_path": ".spielorders/vendors.json"
+      }
+    ],
+    "identities": []
+  }
+}

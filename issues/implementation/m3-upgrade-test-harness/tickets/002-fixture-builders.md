@@ -63,7 +63,3 @@ extract a fixture whose only caller is one test.
 
 Review the fixture extraction and the support module. Do not absorb M3 capability work,
 and do not review the domain behavior the tests cover except to confirm it is unchanged.
-
-## Closeout
-
-Pending.
