@@ -60,6 +60,7 @@ use spielorders_core::{
         ConfigurationPathKind, ConfigurationPathReason, Diagnostic, DiagnosticEvidence,
         EvidenceScope, Location,
     },
+    supporting_material::UnavailableReason,
     vendors::ContactPositionRole,
 };
 use std::path::Path;
@@ -950,6 +951,46 @@ pub(crate) enum FailureCode {
     /// A managed file a Metadata Upgrade had to replace could not be replaced, and the run
     /// had written nothing yet. Every managed file holds what it held.
     UpgradeFailed,
+    /// The exact path given is a filesystem link, and links are never followed.
+    ///
+    /// **One code for every command**, whether `--root` names a SpielOrders Root or an
+    /// Order Directory: it is one rule broken one way, and a consumer that had to branch
+    /// per command to recognize it would be branching on which command it ran rather than
+    /// on what happened. Nothing behind the link is opened, so it is neither read,
+    /// renamed, disposed of, nor edited.
+    ///
+    /// **Distinct from [`Self::OrderCandidateLink`]**, which is `adopt-order`'s positional
+    /// candidate rather than a root — a different path on the command line, with a
+    /// different correction — and from [`Self::InitializationDisallowedLink`], which is a
+    /// configured managed path *inside* a Root the command already resolved.
+    RootIsALink,
+    /// This build has no Supporting Material index provider for this platform, so nothing
+    /// looked. SpielOrders never falls back to walking or indexing Supporting Material
+    /// itself, so there is no weaker answer beneath this one.
+    ///
+    /// **The five codes here are one per platform state that prevents an answer**, because
+    /// the state is what a caller acts on and each is a different correction: switching
+    /// indexing on, moving a Package to an indexed volume, granting access, and rewording a
+    /// query are four different things to do, and a build with no provider is none of them.
+    /// Their spellings are the core's own `UnavailableReason::as_str` under one prefix, so a
+    /// state refused here and the same state carried in a snapshot cannot come to be named
+    /// differently; the provider that reported it travels beside them as
+    /// [`Identity::supporting_material_provider`].
+    ///
+    /// **An index that looked and found nothing is none of these.** That is an answer, at
+    /// exit `0`, carrying no Order groups — which is the distinction a user acts on, because
+    /// one of them means the file is not there and the other means nobody looked.
+    SupportingMaterialUnsupported,
+    /// The platform's index is switched off, so it has nothing to answer from.
+    SupportingMaterialIndexingDisabled,
+    /// The volume this Package is on is not indexed, or is one the provider does not index.
+    SupportingMaterialVolumeNotIndexed,
+    /// Access needed to answer was denied: to the index, or to the directories an answer
+    /// would have been about.
+    SupportingMaterialAccessDenied,
+    /// The provider refused this query. Distinct from the four above because the correction
+    /// is in the query rather than in the platform.
+    SupportingMaterialQueryRefused,
     /// A path the response would have to carry is not valid UTF-8.
     PathNotRepresentable,
     /// The command line was wrong.
@@ -1051,6 +1092,12 @@ impl FailureCode {
             Self::RepairRestorationFailed => "repair_restoration_failed",
             Self::UpgradeConfigurationUnusable => "upgrade_configuration_unusable",
             Self::UpgradeFailed => "upgrade_failed",
+            Self::RootIsALink => "root_is_a_link",
+            Self::SupportingMaterialUnsupported => "supporting_material_unsupported",
+            Self::SupportingMaterialIndexingDisabled => "supporting_material_indexing_disabled",
+            Self::SupportingMaterialVolumeNotIndexed => "supporting_material_volume_not_indexed",
+            Self::SupportingMaterialAccessDenied => "supporting_material_access_denied",
+            Self::SupportingMaterialQueryRefused => "supporting_material_query_refused",
             Self::PathNotRepresentable => "path_not_representable",
             Self::UsageInvalid => "usage_invalid",
         }
@@ -1073,6 +1120,21 @@ impl FailureCode {
             ConfigurationPathReason::ReservedMetadata => Self::ConfigurationPathReservedMetadata,
             ConfigurationPathReason::NotDirectChild => Self::ConfigurationPathNotDirectChild,
             ConfigurationPathReason::NotOrdinary => Self::InitializationDestinationOccupied,
+        }
+    }
+
+    /// The code for one platform state that prevented a Supporting Material answer.
+    ///
+    /// Taken from the core's own reason rather than decided per call site, so a state added
+    /// to the core is a compile error here rather than a condition silently folded onto a
+    /// neighbouring code.
+    pub(crate) fn of_supporting_material(reason: UnavailableReason) -> Self {
+        match reason {
+            UnavailableReason::IndexingDisabled => Self::SupportingMaterialIndexingDisabled,
+            UnavailableReason::VolumeNotIndexed => Self::SupportingMaterialVolumeNotIndexed,
+            UnavailableReason::AccessDenied => Self::SupportingMaterialAccessDenied,
+            UnavailableReason::QueryRefused => Self::SupportingMaterialQueryRefused,
+            UnavailableReason::Unsupported => Self::SupportingMaterialUnsupported,
         }
     }
 }
@@ -1268,6 +1330,19 @@ impl Identity {
         Self {
             kind: "configuration_path",
             value: key.as_str().to_owned(),
+        }
+    }
+
+    /// The Supporting Material index provider a failure is about, by its own name.
+    ///
+    /// **Not a path and not a domain identity**, which is why it is here: the failure is
+    /// about a platform service rather than about anything in the Package, and a caller
+    /// acting on a refused query or a denied access needs to know which service refused.
+    /// A build with no provider names none, so this is absent from that one refusal.
+    pub(crate) fn supporting_material_provider(name: &str) -> Self {
+        Self {
+            kind: "supporting_material_provider",
+            value: name.to_owned(),
         }
     }
 }

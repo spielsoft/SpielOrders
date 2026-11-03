@@ -37,7 +37,7 @@ this exact target.
 
 ## Carried forward
 
-Into [M5 Ticket 001](../m5-search-and-native-services/tickets/001-one-answer-about-a-link-a-count-and-a-quantity.md), whole: a link named as a root, which `init` refuses and every other
+Into [M5 Ticket 001](../../implementation/m5-search-and-native-services/tickets/001-one-answer-about-a-link-a-count-and-a-quantity.md), whole: a link named as a root, which `init` refuses and every other
 command follows; a duplicate-Order-ID count naming one directory too many; a Quantity
 rendered as money; one wrong-kind root reaching two stable codes; an empty Order's total of
 negative zero; and one owner question about assigning a Vendor by Name.

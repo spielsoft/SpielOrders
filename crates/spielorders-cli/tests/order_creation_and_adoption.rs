@@ -126,13 +126,18 @@ fn combining_the_two_add_order_forms_is_a_usage_error() {
     }
 }
 
-/// A Vendor Reference is assigned by Vendor ID, and the created Order resolves it.
+/// A Vendor Reference is assigned by Vendor Name, and the created Order resolves it.
+///
+/// **The Name is the selector and the identity is the answer.** A Vendor Name is trimmed
+/// and matched without regard to letter case, which is how a Vendor is selected everywhere
+/// else in this surface; the response carries the Vendor ID the Order now stores, because a
+/// machine response keeps the identities a human surface holds back.
 #[test]
 fn a_created_order_resolves_the_vendor_it_references() {
     let (_tree, root) = crate::support::populated_package("add-order-vendor");
 
     let outcome = Invocation::new(&["add-order", "title=Fiber patch cables", "--json"])
-        .argument(format!("vendor_id={OFFERED_VENDOR_ID}"))
+        .argument("vendor=  tarNWICK ")
         .rooted_at(&root)
         .run();
     let document = response(&outcome);

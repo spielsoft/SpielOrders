@@ -8,9 +8,10 @@
 use crate::support::{
     Invocation, Outcome, damage_index, directory_that_is_not_a_root, initialized_package,
     managed_snapshot, modification_time, order_directory, package_with_a_damaged_order,
-    package_with_a_staging_artifact, package_with_an_impossible_date,
-    package_with_an_overflowing_total, package_with_an_unreadable_order_readme,
-    package_with_duplicate_vendor_names, populated_package, remove_index, response,
+    package_with_a_duplicate_order_id, package_with_a_staging_artifact,
+    package_with_an_impossible_date, package_with_an_overflowing_total,
+    package_with_an_unreadable_order_readme, package_with_duplicate_vendor_names,
+    package_with_three_duplicate_order_ids, populated_package, remove_index, response,
     reversion_index, touch_an_order_record, unmanaged_directory,
 };
 use serde_json::Value;
@@ -826,5 +827,72 @@ fn an_unreadable_order_readme_leaves_its_order_valid() {
     assert_eq!(
         findings(&document),
         [("document".to_owned(), "readme_unavailable".to_owned())]
+    );
+}
+
+/// The duplicate-Order-ID sentence names exactly as many directories as carry that ID.
+///
+/// **The user picks the surviving Order out of this sentence.** Every conflicting
+/// directory is a Damaged Order and the repair asks which one keeps the identity, so a
+/// count that is one too high tells a reader to go looking for a directory that does not
+/// exist — and the two Packages here differ in size so that a count and a count plus one
+/// cannot both satisfy the claim.
+#[test]
+fn the_duplicate_order_id_sentence_counts_the_directories_that_carry_it() {
+    for (participants, label) in [(2, "duplicate-count-two"), (3, "duplicate-count-three")] {
+        let (_tree, root) = if participants == 2 {
+            let (tree, root, _) = package_with_a_duplicate_order_id(label);
+            (tree, root)
+        } else {
+            let (tree, root, _) = package_with_three_duplicate_order_ids(label);
+            (tree, root)
+        };
+
+        let outcome = Invocation::new(&["validate"]).rooted_at(&root).run();
+
+        assert_eq!(outcome.status, Some(1), "{label}");
+        let reported = outcome.stderr_text();
+        assert!(
+            reported.contains(&format!(
+                "one Order ID is carried by {participants} Order Directories at once"
+            )),
+            "{label}: {reported}"
+        );
+    }
+}
+
+/// A link in the Orders Directory is reported, and the sentence says what it is ignored
+/// *for*.
+///
+/// **"Ignored" alone answers the wrong question.** A reader who put a link there wants to
+/// know what it is ignored by — and a link is one of the entries this Package is most
+/// likely to hold on purpose, since an institution-grouped alias view is exactly that. It
+/// is ignored for Order discovery, so it is none of the Package's Orders and nothing about
+/// it is followed; the Orders around it are unaffected, which is the other half of the
+/// claim.
+#[test]
+fn a_link_in_the_orders_directory_is_ignored_for_order_discovery() {
+    let (_tree, root) = populated_package("orders-directory-link");
+    let elsewhere = order_directory(&root, "Laser_components");
+    std::os::unix::fs::symlink(&elsewhere, root.join("Orders").join("alias"))
+        .expect("the alias view is created");
+
+    let outcome = Invocation::new(&["validate"]).rooted_at(&root).run();
+    let listed = response(
+        &Invocation::new(&["validate", "--json"])
+            .rooted_at(&root)
+            .run(),
+    );
+
+    assert_eq!(outcome.status, Some(0), "a link there is not damage");
+    let reported = outcome.stderr_text();
+    assert!(
+        reported.contains("ignored for Order discovery"),
+        "the warning says what the entry is ignored for:\n{reported}"
+    );
+    assert_eq!(
+        listed["data"]["orders"].as_array().map(Vec::len),
+        Some(2),
+        "and the Package still has exactly its own two Orders: {listed}"
     );
 }

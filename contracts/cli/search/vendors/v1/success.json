@@ -1,0 +1,21 @@
+{
+  "contract": "spielorders.search.vendors",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>"
+  },
+  "data": {
+    "query": "tarnwick accounts",
+    "vendors": [
+      {
+        "vendor_id": "e0990d31-06aa-42e9-97c8-088e3e894822",
+        "name": "Tarnwick",
+        "hidden": false
+      }
+    ],
+    "hidden_vendors_included": false
+  },
+  "diagnostics": [],
+  "error": null
+}

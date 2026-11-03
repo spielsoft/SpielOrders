@@ -8,9 +8,8 @@
 //! Decision sources: Define the Rust CLI capability contract.
 
 use crate::support::{
-    Invocation, MISSING_VENDOR_ID, WrittenOption, directory_that_is_not_a_root,
-    initialized_package, package_with_an_unresolved_vendor_reference,
-    package_with_unreadable_readme, placements, response,
+    Invocation, MISSING_VENDOR_ID, directory_that_is_not_a_root, initialized_package,
+    package_with_an_unresolved_vendor_reference, package_with_unreadable_readme, response,
 };
 
 /// Any escape sequence at all. Color is decoration, so its presence anywhere in a
@@ -88,87 +87,79 @@ fn an_unknown_command_in_a_known_family_is_a_usage_error() {
 }
 
 // ---------------------------------------------------------------------------
-// The four modes are mutually exclusive.
+// The command path comes first and its modifiers follow it.
 // ---------------------------------------------------------------------------
 
-/// The defect is a silent precedence: two modes given, one quietly winning. A script
-/// that asked for `--json` and got human text because `--quiet` came later would be
-/// parsing prose, and nothing would have said so.
+/// **Nothing precedes the command path except `--help` and `--version`.**
 ///
-/// **Every placement the command line allows**, because an exclusion a caller can write
-/// around is not one. These options are global, so each stands anywhere among the command
-/// path's segments, and the pair reaching the executable across a subcommand boundary is
-/// the same command line as the pair reaching it together.
-#[test]
-fn two_output_modes_together_are_a_usage_error_in_every_placement() {
-    let (_tree, root) = initialized_package("modes-exclusive");
-
-    for pair in [
-        ["--json", "--quiet"],
-        ["--json", "--verbose"],
-        ["--quiet", "--verbose"],
-    ] {
-        for line in placements(
-            &["package", "readme"],
-            &WrittenOption::anywhere(&[pair[0]]),
-            &WrittenOption::anywhere(&[pair[1]]),
-        ) {
-            let written: Vec<&str> = line.iter().map(String::as_str).collect();
-            let outcome = Invocation::new(&written).rooted_at(&root).run();
-
-            assert_eq!(
-                outcome.status,
-                Some(2),
-                "{line:?}: no mode was selected, so nothing about the subject was attempted"
-            );
-            // A `--json` caller is answered with the one document every usage error
-            // carries; a caller who named no machine mode is answered on standard error,
-            // which is the audience rule the test below states.
-            if line.iter().any(|token| token == "--json") {
-                let document = response(&outcome);
-                assert_eq!(document["contract"], "spielorders.usage", "{line:?}");
-                assert_eq!(
-                    document["error"]["message"],
-                    format!("`{}` and `{}` are mutually exclusive", pair[0], pair[1]),
-                    "{line:?}: one stable sentence, wherever the pair was written"
-                );
-            } else {
-                assert_eq!(outcome.stdout, b"", "{line:?}");
-                let reported = outcome.stderr_text();
-                assert!(
-                    reported.contains(pair[0]) && reported.contains(pair[1]),
-                    "{line:?}: both modes are named: {reported}"
-                );
-            }
-        }
-    }
-}
-
-/// Silence is what a caller asked for, wherever they asked for it.
+/// This is the grammar rule the exclusions below depend on. While an option stood in any
+/// gap between the command path's segments, a pair written on either side of a segment
+/// reached the parser as two sets of matches and no declared conflict ever saw them
+/// together — so an exclusion had to be decided after parsing, over the whole command
+/// line, and three defects were that one cause. Each option is now declared on the
+/// command it modifies, which puts the whole command line in one parse level and leaves
+/// the grammar to the parser.
 ///
-/// The other half of the exclusion above, and the reason it is worth having: while a mode
-/// written on the far side of a subcommand did not conflict, one of the two won, and the
-/// caller who had asked for silence was the one who lost.
+/// Each line runs inside the prepared Package rather than naming it, so a grammar that
+/// regressed would answer about that Package rather than about the repository this test
+/// is checked out in.
 #[test]
-fn quiet_is_silent_on_success_in_every_placement() {
-    let (_tree, root) = initialized_package("quiet-every-placement");
+fn an_option_written_before_the_command_path_is_a_usage_error() {
+    let (_tree, root) = initialized_package("modifiers-follow-the-command");
 
     for line in [
-        vec!["--quiet", "package", "readme"],
-        vec!["package", "--quiet", "readme"],
-        vec!["package", "readme", "--quiet"],
+        vec!["--json", "package", "readme"],
+        vec!["package", "--json", "readme"],
+        vec!["--verbose", "package", "list", "orders"],
+        vec!["--uuid", MISSING_VENDOR_ID, "order", "show"],
+        vec!["order", "--uuid", MISSING_VENDOR_ID, "show"],
+        vec!["--dry-run", "order", "align"],
+        vec!["--case-sensitive", "search", "orders", "laser"],
+        vec!["search", "--case-sensitive", "orders", "laser"],
+        vec!["--all", "search", "vendors", "tarnwick"],
     ] {
-        let outcome = Invocation::new(&line).rooted_at(&root).run();
+        // The one document a usage error carries is how its identity is read, and it is
+        // asked for where the grammar now allows it: after the command path.
+        let mut written = line.clone();
+        written.push("--json");
+        let outcome = Invocation::new(&written).in_directory(&root).run();
+        let document = response(&outcome);
 
         assert_eq!(
             outcome.status,
-            Some(0),
-            "{line:?}: {}",
-            outcome.stderr_text()
+            Some(2),
+            "{line:?}: the command line never named a command: {}",
+            outcome.stdout_text()
         );
-        assert_eq!(outcome.stdout, b"", "{line:?}: nothing is said on success");
-        assert_eq!(outcome.stderr, b"", "{line:?}");
+        assert_eq!(
+            document["contract"], "spielorders.usage",
+            "{line:?}: no command ran, so no command's contract is claimed"
+        );
+        assert_eq!(document["error"]["code"], "usage_invalid", "{line:?}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// The four modes, and the audience a usage error is reported to.
+// ---------------------------------------------------------------------------
+
+/// Silence is what a caller asked for.
+///
+/// The mutual exclusion between the modes is the parser's, asserted pair by pair beside
+/// the group that declares it. This is the half of it that cost a caller something: while
+/// two modes could both be named, one of them won, and the caller who had asked for
+/// silence was the one who lost.
+#[test]
+fn quiet_is_silent_on_success() {
+    let (_tree, root) = initialized_package("quiet-on-success");
+
+    let outcome = Invocation::new(&["package", "readme", "--quiet"])
+        .rooted_at(&root)
+        .run();
+
+    assert_eq!(outcome.status, Some(0), "{}", outcome.stderr_text());
+    assert_eq!(outcome.stdout, b"", "nothing is said on success");
+    assert_eq!(outcome.stderr, b"");
 }
 
 /// **A usage error is reported to whichever audience the command line named.** Parsing
@@ -191,9 +182,12 @@ fn a_usage_error_is_reported_to_the_audience_the_command_line_named() {
     let document = response(&machine);
     assert_eq!(machine.status, Some(2));
     assert_eq!(document["error"]["code"], "usage_invalid");
-    assert_eq!(
-        document["error"]["message"], "`--json` and `--quiet` are mutually exclusive",
-        "one stable sentence, naming both modes in one stable order"
+    let message = document["error"]["message"]
+        .as_str()
+        .expect("a usage error carries its message");
+    assert!(
+        message.contains("--json") && message.contains("--quiet"),
+        "the document names both modes: {message}"
     );
 
     let human = Invocation::new(&["package", "readme", "--quiet", "--verbose"])
@@ -391,7 +385,7 @@ fn a_usage_error_under_json_is_a_document_rather_than_generated_help() {
 /// a JSON document would be answering a different question.
 #[test]
 fn help_stays_reference_text_even_when_json_was_asked_for() {
-    let outcome = Invocation::new(&["--json", "--help"]).run();
+    let outcome = Invocation::new(&["package", "readme", "--json", "--help"]).run();
 
     assert_eq!(outcome.status, Some(0));
     assert_eq!(outcome.stderr, b"");

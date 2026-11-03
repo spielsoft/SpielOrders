@@ -18,10 +18,11 @@
 
 use crate::{
     commands::shared::{
-        Failed, IndexProjection, MetadataProjection, as_given, assessed_package_candidate,
-        damaged_failure, diagnostics, failed_context, failed_document, flattened, human_failure,
-        index, located, metadata, not_representable, operation_failure, package_context,
-        report_diagnostic, text, undeliverable, unmanaged_failure, upgrade_pending_failure,
+        Failed, IndexProjection, MetadataProjection, RootKind, as_given,
+        assessed_package_candidate, damaged_failure, diagnostics, failed_context, failed_document,
+        flattened, human_failure, index, link_named_as_a_root, located, metadata,
+        not_representable, operation_failure, package_context, report_diagnostic, text,
+        undeliverable, unmanaged_failure, upgrade_pending_failure,
     },
     contract::ResponseContract,
     effects::PlatformFileSystem,
@@ -72,6 +73,9 @@ pub(crate) fn status(selected_root: &Path, output: &Output) -> Exit {
 /// complete Package read reaches through the same assessing load: the index is a
 /// projection of those records, so there is nothing to judge it against.
 fn decide_status(selected_root: &Path) -> StatusAnswer {
+    if let Some(failed) = link_named_as_a_root(selected_root, RootKind::Package) {
+        return StatusAnswer::Failed(Box::new(failed));
+    }
     match assessed_package_candidate(
         selected_root,
         assess_package_index(selected_root, &PlatformFileSystem),
@@ -246,6 +250,9 @@ pub(crate) fn rebuild(selected_root: &Path, dry_run: bool, output: &Output) -> E
 }
 
 fn decide_rebuild(selected_root: &Path, dry_run: bool) -> Rebuild {
+    if let Some(failed) = link_named_as_a_root(selected_root, RootKind::Package) {
+        return Rebuild::Failed(Box::new(failed));
+    }
     let plan = match plan_package_index_rebuild(selected_root, &PlatformFileSystem) {
         Ok(plan) => plan,
         Err(reason) => return Rebuild::Failed(Box::new(rebuild_refusal(selected_root, reason))),

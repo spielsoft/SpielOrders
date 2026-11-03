@@ -76,7 +76,7 @@ impl RepairAction {
     pub fn required_values(self) -> &'static [&'static str] {
         match self {
             Self::ReplaceManagedRecord => &["record"],
-            Self::AssignExistingVendor => &["vendor_id"],
+            Self::AssignExistingVendor => &["vendor"],
             Self::CreateAndAssignVendor => &["name"],
             Self::PromoteStagingCandidate
             | Self::ClearVendorReference

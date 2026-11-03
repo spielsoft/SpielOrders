@@ -13,9 +13,11 @@ SpielOrders has one human-first, Git-style `spielorders` executable. The CLI and
 
 SpielGantt is precedent for human-readable defaults, opt-in versioned JSON, typed mutation reports, and a shared Rust package boundary. Its command names and JSON shapes are not SpielOrders requirements.
 
-Every command except the three under `search` is built. `contracts/cli/` records each command's response cells, `crates/spielorders-cli/src/contract.rs` is the registry of response identities and of how a version advances, and `crates/spielorders-cli/src/exit.rs` is the closed set of exits. What follows is what that surface may never become.
+Every command in this contract is built. `contracts/cli/` records each command's response cells, `crates/spielorders-cli/src/contract.rs` is the registry of response identities and of how a version advances, and `crates/spielorders-cli/src/exit.rs` is the closed set of exits. What follows is what that surface may never become.
 
 ### Targeting
+
+The command path comes first and modifiers follow it. Options that govern targeting, output, and execution belong to the command they modify; nothing precedes the command path except `--help` and `--version`, which ask for reference rather than modifying a command. Each option is therefore declared where it applies, and one command line is parsed at one level, so no rule about it depends on where a caller wrote it.
 
 `--root <PATH>` defaults to `.` and names the root of the command's subject: the SpielOrders Root for Package-level and Vendor commands, the Order Directory for `order` commands. The command fails when that exact path is not the required kind of root; it never searches ancestors. There is no separate `--order-root` option.
 
@@ -77,13 +79,13 @@ Post-MVP structured Order filters use assignments such as `status=ordered`, `ven
 
 OS-native Supporting Material search is a required cross-platform core and CLI capability, not a GUI-only feature. `search supporting-material` uses Spotlight on macOS and the applicable native index provider on other platforms. The typed result exposes every provider fact the GUI uses: provider identity and state, complete-versus-partial status, Order grouping, absolute and relative paths, file kind, modification time, rank/quality or its absence, deterministic fallback ordering facts, and provider-specific diagnostics.
 
-The core operation is asynchronous and cancellable so it never blocks the GUI thread, but it returns one settled snapshot rather than a result stream. The CLI waits and prints once. A bounded provider timeout may return available results with `complete: false` and a specific diagnostic. Ctrl-C cancels the CLI query cleanly. There is no JSON-lines contract.
+The core operation is a synchronous call taking a cancellation and a bounded timeout, returning one settled snapshot rather than a result stream. It runs off the caller's UI thread — the desktop shell calls it from a worker — so no async runtime enters the core or the CLI. The CLI waits and prints once. A bounded provider timeout may return available results with `complete: false` and a specific diagnostic. Ctrl-C cancels the CLI query cleanly. There is no JSON-lines contract.
 
 ### Human output and process status
 
 Human-readable output is the default, and it is never a parsing contract. Search preserves decided sorting, and Supporting Material results show Order groups and ranked paths. UUIDs, provider rank, and individual managed-file operations appear only under `--verbose`. Results go to stdout; warnings and errors go to stderr. Interactive color respects `NO_COLOR`, disappears when redirected, and never carries meaning alone. The CLI has no automatic pager or full-screen mode.
 
-The mutually exclusive global output modes are default human output; `--json`, one versioned machine-readable document; `--quiet`, no output on success while retaining errors on stderr; and `--verbose`, additional human detail.
+The output modes are mutually exclusive, and each is written on the command it modifies like any other option. They are default human output; `--json`, one versioned machine-readable document; `--quiet`, no output on success while retaining errors on stderr; and `--verbose`, additional human detail.
 
 Exit status is stable, deliberately coarse, and closed: `0` for success, `1` for an operational or domain failure, `2` for a command-line usage error, and the platform signal conventions such as `130` for Ctrl-C. Three rules bind the mapping. A result is invalid exactly when some finding carries error severity, which is the predicate the core already computes, so severity alone decides an exit status and the availability of a repair never does. A read that answers exits `0` and carries its verdict as a payload member: `repair`'s bare diagnosis is an answer rather than a verdict whatever the severity of what it found, and reaches `1` only when it could not answer or when a requested repair action is refused or fails. `ok` and the exit status are one fact for every command.
 

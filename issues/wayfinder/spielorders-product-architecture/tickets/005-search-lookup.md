@@ -22,6 +22,7 @@ The native query is deterministic:
 - matching is diacritic-insensitive and case-insensitive by default;
 - a visible `Aa` control switches between case-insensitive and case-sensitive matching without changing the other rules;
 - there is no fuzzy matching, stemming, Boolean syntax, phrase grammar, or relevance scoring;
+- a monetary fact matches both the spelling its record stores and the two-decimal spelling a reader is shown, so a Unit Price of `12.5` is found by `12.50`, while a quantity is not money and matches its stored spelling alone;
 - an empty query applies no text restriction.
 
 For an Order, searchable content comprises Order ID; every user-facing canonical Order fact; Order Item descriptions, catalog numbers, quantities, and unit prices; the Order README's text; and every current shared fact of the associated Vendor, including Vendor Contacts and purchasing notes. Vendor changes therefore immediately affect which associated Orders match. For a Vendor, searchable content comprises Vendor ID and every user-facing canonical Vendor fact.
@@ -48,7 +49,7 @@ Results are file-centric but organized around their associated Orders:
 - files within an Order group sort by OS-provided content relevance descending, with filename and then relative path as deterministic fallbacks for equal or unavailable relevance;
 - relevance is not displayed as a score and never reorders Order groups.
 
-The OS query is scoped to files within recognized Order Directories. SpielOrders excludes each Order's conventional `README.md` and its reserved `.spielorders/` subtree so managed Markdown and JSON cannot reappear as file results. It does not exclude unrelated nested Supporting Material merely because a nested file or directory has a familiar name.
+When healthy recognized Orders exist, the macOS provider submits one Spotlight query over the Package's configured Orders Directory rather than querying each Order separately. The core filters the returned paths to healthy recognized Order Directories and excludes each Order's conventional `README.md` and its reserved `.spielorders/` subtree so managed Markdown and JSON cannot reappear as file results. It does not exclude unrelated nested Supporting Material merely because a nested file or directory has a familiar name. With no healthy recognized Orders, no Spotlight query is needed.
 
 Native search yields each matching entity once, irrespective of how many facts match. OS-indexed results are deduplicated only by standardized filesystem path: the same path appears once, while identical contents, repeated filenames, or separate copies at different paths remain distinct Supporting Material. Keeping the two search experiences separate and excluding managed artifacts prevents cross-engine duplicates.
 

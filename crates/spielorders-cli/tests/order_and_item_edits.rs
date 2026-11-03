@@ -14,8 +14,8 @@
 //! metadata bootstrapping.
 
 use crate::support::{
-    ADOPTED_FACTS, Invocation, NEWEST_ORDER_ID, managed_snapshot, order_directory,
-    package_with_a_blocked_index_refresh, package_with_an_adoption_candidate,
+    ADOPTED_FACTS, HIDDEN_VENDOR_ID, Invocation, NEWEST_ORDER_ID, managed_snapshot,
+    order_directory, package_with_a_blocked_index_refresh, package_with_an_adoption_candidate,
     package_with_three_items, populated_package, response, supporting_material_in,
     unmanaged_candidate,
 };
@@ -98,7 +98,7 @@ fn every_mutable_fact_can_be_set_changed_and_where_optional_cleared() {
             "currency=",
             "project=",
             "order_group=",
-            "vendor_id=",
+            "vendor=",
         ],
     );
     assert_eq!(cleared.status, Some(0), "{}", cleared.stderr_text());
@@ -242,7 +242,13 @@ fn every_status_can_be_entered_and_nothing_else_can() {
 }
 
 /// A Vendor Reference can be set to an existing Vendor and cleared, and one that resolves
-/// to nothing is refused naming the Vendor ID it asked for.
+/// to nothing is refused naming the Vendor Name it asked for.
+///
+/// **A Vendor is assigned by its Name**, which is the ordinary Vendor selector everywhere
+/// else in this surface: trimmed, matched without regard to letter case, unique within the
+/// Package, and resolving a Hidden Vendor like any other, because hiding governs what is
+/// offered for new use and never what resolves. The machine response still carries the
+/// Vendor ID, which is what a consumer holds onto.
 ///
 /// The refreshed Order resolves the Vendor it now references, so a caller needs no second
 /// read to display it — which is the half a stored `vendor_id` alone would not give.
@@ -250,32 +256,39 @@ fn every_status_can_be_entered_and_nothing_else_can() {
 fn a_vendor_reference_can_be_set_cleared_and_is_refused_when_it_resolves_to_nothing() {
     let (_tree, directory) = one_order("order-edit-vendor");
 
-    let hidden = response(&edit(
-        &directory,
-        &["vendor_id=1c9a5b7e-3d44-4f21-8a6c-9b0e2d7f4a13"],
-    ));
+    let hidden = response(&edit(&directory, &["vendor=  netherMOOR "]));
     assert_eq!(
         hidden["data"]["order"]["vendor"]["name"], "Nethermoor",
-        "a Hidden Vendor resolves like any other: hiding governs what is offered"
+        "trimmed and without regard to case, and a Hidden Vendor resolves like any other"
     );
     assert_eq!(hidden["data"]["order"]["vendor"]["hidden"], true);
+    assert_eq!(
+        hidden["data"]["order"]["vendor_id"], HIDDEN_VENDOR_ID,
+        "and the machine response keeps the identity"
+    );
 
-    let cleared = response(&edit(&directory, &["vendor_id="]));
+    let cleared = response(&edit(&directory, &["vendor="]));
     assert!(cleared["data"]["order"]["vendor_id"].is_null());
     assert!(cleared["data"]["order"]["vendor"].is_null());
 
     let before = managed_snapshot(&directory);
-    let outcome = edit(
-        &directory,
-        &["vendor_id=8b6e3f0a-8ec5-4d47-95e1-412652a56d16"],
-    );
+    let outcome = edit(&directory, &["vendor=Nonesuch Optics"]);
     let document = response(&outcome);
     assert_eq!(outcome.status, Some(1), "{}", outcome.stdout_text());
     assert_eq!(document["error"]["code"], "order_vendor_unknown");
+    assert_eq!(document["error"]["identities"][0]["kind"], "vendor_name");
     assert_eq!(
         document["error"]["identities"][0]["value"],
-        "8b6e3f0a-8ec5-4d47-95e1-412652a56d16"
+        "Nonesuch Optics"
     );
+    assert_eq!(managed_snapshot(&directory), before);
+
+    // A Vendor ID is not a thing a command line assigns: the surface holds identities back
+    // to `--verbose`, so an assignment reachable only by one was reachable by nobody.
+    let by_identity = edit(&directory, &[&format!("vendor_id={HIDDEN_VENDOR_ID}")]);
+    let refused = response(&by_identity);
+    assert_eq!(by_identity.status, Some(1), "{}", by_identity.stdout_text());
+    assert_eq!(refused["error"]["code"], "order_assignment_rejected");
     assert_eq!(managed_snapshot(&directory), before);
 }
 

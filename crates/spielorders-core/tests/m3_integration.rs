@@ -372,7 +372,7 @@ fn legacy_directory(root: &Path, orders_path: &str, basename: &str) -> PathBuf {
 fn legacy_facts(vendor: Option<&str>) -> OrderAdoptionInput {
     let input = OrderAdoptionInput::new("Laser components", "2026-08-22", OrderStatus::Hold);
     match vendor {
-        Some(vendor) => input.vendor_id(vendor),
+        Some(vendor) => input.vendor_name(vendor),
         None => input,
     }
 }
@@ -683,7 +683,7 @@ fn every_write_capability_composes_over_a_configured_nested_layout() {
         &root,
         &OrderCreationInput::new("Optical table")
             .date_ordered("2026-08-22")
-            .vendor_id(VENDOR_ID),
+            .vendor_name("Precision Optics"),
         &FixedCalendar,
         &RealFileSystem,
     )
@@ -1104,7 +1104,7 @@ fn a_derived_index_that_cannot_be_refreshed_never_makes_a_commit_look_retryable(
         &root,
         &OrderCreationInput::new("Optical table")
             .date_ordered("2026-08-22")
-            .vendor_id(VENDOR_ID),
+            .vendor_name("Precision Optics"),
         &FixedCalendar,
         &RealFileSystem,
     )

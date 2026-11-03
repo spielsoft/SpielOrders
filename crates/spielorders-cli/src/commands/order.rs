@@ -34,10 +34,10 @@ use crate::{
     commands::{
         repair_suggestion::{RepairSuggestion, Rooting},
         shared::{
-            Failed, IndexProjection, OrderPathsProjection, VendorSummary, damaged_failure,
-            diagnostics, failed_document, in_package, index, not_representable, operation_failure,
-            package_candidate, report_diagnostic, resolved, text, undeliverable,
-            upgrade_pending_failure,
+            Failed, IndexProjection, OrderPathsProjection, RootKind, VendorSummary,
+            damaged_failure, diagnostics, failed_document, in_package, index, link_named_as_a_root,
+            not_representable, operation_failure, order_root_not_a_directory, package_candidate,
+            report_diagnostic, resolved, text, undeliverable, upgrade_pending_failure,
         },
     },
     contract::ResponseContract,
@@ -129,14 +129,26 @@ pub(crate) enum Target<'a> {
 /// Both routes end in the same [`OrderRead`], which is why no command in this family can
 /// come to disagree with another about an Order — the reads that answer with one and the
 /// mutations that resolve their subject through it alike: there is one projection of it and
-/// it is the core's.
-fn read(target: &Target) -> Result<OrderRead, OrderReadFailure> {
+/// it is the core's. The typed failure is built here for the same reason: an `order`
+/// command that classified its own would be the second place doing it.
+///
+/// A `--root` naming a link is refused before the core is asked, because a link is never
+/// followed and what stands behind this one is not what the command line named.
+fn read(target: &Target) -> Result<OrderRead, Box<OrderFailed>> {
     match target {
-        Target::Directory(directory) => read_order(directory, &PlatformFileSystem),
+        Target::Directory(directory) => match link_named_as_a_root(directory, RootKind::Order) {
+            Some(failed) => Err(Box::new(OrderFailed {
+                failed,
+                order_root: None,
+            })),
+            None => read_order(directory, &PlatformFileSystem)
+                .map_err(|reason| Box::new(failure(reason))),
+        },
         Target::Identity {
             package_root,
             order_id,
-        } => read_order_by_id(package_root, order_id, &PlatformFileSystem),
+        } => read_order_by_id(package_root, order_id, &PlatformFileSystem)
+            .map_err(|reason| Box::new(failure(reason))),
     }
 }
 
@@ -192,6 +204,9 @@ impl OrderFailed {
 /// be used, a locator that leads somewhere else, and an Order ID that names nothing.
 fn failure(reason: OrderReadFailure) -> OrderFailed {
     match reason {
+        OrderReadFailure::RootNotADirectory { directory } => {
+            order_root_not_a_directory(directory.as_path())
+        }
         OrderReadFailure::NotAnOrderDirectory { directory } => OrderFailed::unresolved(
             FailureCode::OrderRootUnmanaged,
             format!(
@@ -697,7 +712,7 @@ fn present<T: Serialize>(
 ) -> Exit {
     let answer = match read(target) {
         Ok(read) => Answer::Answered(Box::new(read)),
-        Err(reason) => Answer::Failed(failure(reason)),
+        Err(failed) => Answer::Failed(*failed),
     };
     if output.mode().is_json() {
         let (document, exit) = match document(contract, &answer, project) {
@@ -753,7 +768,13 @@ pub(crate) fn failed_order_context(failed: &OrderFailed) -> OrderContext {
 /// Damaged Order the load could identify is a resolution rather than a failure.
 pub(crate) fn targeted_directory(target: &Target) -> Result<PathBuf, Box<OrderFailed>> {
     match target {
-        Target::Directory(directory) => Ok(directory.to_path_buf()),
+        Target::Directory(directory) => match link_named_as_a_root(directory, RootKind::Order) {
+            Some(failed) => Err(Box::new(OrderFailed {
+                failed,
+                order_root: None,
+            })),
+            None => Ok(directory.to_path_buf()),
+        },
         Target::Identity {
             package_root,
             order_id,
@@ -915,9 +936,10 @@ fn human_order(facts: &OrderFacts<'_>, output: &Output) -> io::Result<()> {
 /// number or total one Order's Items differently — a disagreement no reader would notice
 /// until they ran both.
 ///
-/// The Item Total and the Order Total are rendered by the one thing that renders money in
-/// this crate. The numbers themselves are untouched: the machine responses carry the
-/// core's unrounded calculations.
+/// The Unit Price, the Item Total, and the Order Total are rendered by the one thing that
+/// renders money in this crate; the Quantity beside them is not money and is shown as the
+/// record stores it. The numbers themselves are untouched either way: the machine
+/// responses carry the core's unrounded calculations.
 fn human_items(order: &HealthyOrder, output: &Output) -> io::Result<()> {
     let totals = order.item_totals();
     if order.document().items.is_empty() {
@@ -930,7 +952,7 @@ fn human_items(order: &HealthyOrder, output: &Output) -> io::Result<()> {
                 "{}. {}  {} x {}  {}",
                 index + 1,
                 item.description.as_str(),
-                displayed_amount(item.quantity.get()),
+                displayed_quantity(item.quantity.get()),
                 displayed_amount(item.unit_price.get()),
                 match totals.get(index) {
                     Some(total) => displayed_amount(*total),
@@ -944,6 +966,17 @@ fn human_items(order: &HealthyOrder, output: &Output) -> io::Result<()> {
         )?;
     }
     output.summary("Order Total", &text(&displayed_amount(order.order_total())))
+}
+
+/// One Order Item's Quantity, as the record stores it.
+///
+/// **Deliberately not [`displayed_amount`]**, which exists to give a monetary value two
+/// decimal places. A Quantity is a count of things and has no such convention: sent
+/// through the monetary renderer, `0.005` of a kilogram reads as `0.01` and `1.005` metres
+/// reads as `1.00`, and a reader is told nothing was rounded. Nothing here rounds, so what
+/// is displayed is what the record holds.
+fn displayed_quantity(value: f64) -> String {
+    value.to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -1289,6 +1322,9 @@ pub(crate) fn adopt(
 /// about a candidate and a field rather than about a Package's health, and a response that
 /// named no Package would be dropping a fact this command holds.
 fn resolved_package(selected_root: &Path) -> Result<ManagedContext, Box<Failed>> {
+    if let Some(failed) = link_named_as_a_root(selected_root, RootKind::Package) {
+        return Err(Box::new(failed));
+    }
     package_candidate(
         selected_root,
         inspect_canonical_package(selected_root, &PlatformFileSystem),
@@ -1676,7 +1712,7 @@ fn creation_refusal(reason: OrderCreationPlanError<io::Error>, context: &Managed
         | OrderCreationPlanError::UpgradePending
         | OrderCreationPlanError::PackageOperationFailed => preconditions_changed(context),
         OrderCreationPlanError::InvalidFacts => invalid_facts(context),
-        OrderCreationPlanError::UnknownVendor { vendor_id } => unknown_vendor(&vendor_id, context),
+        OrderCreationPlanError::UnknownVendor { name } => unknown_vendor(&name, context),
         OrderCreationPlanError::EmptyProjectedComponent => refused(
             FailureCode::OrderTitleUnusable,
             "this Order Title projects no usable Order Directory name, so there is nothing \
@@ -1824,7 +1860,7 @@ fn adoption_refusal(reason: OrderAdoptionPlanError<io::Error>, context: &Managed
             context,
         ),
         OrderAdoptionPlanError::InvalidFacts => invalid_facts(context),
-        OrderAdoptionPlanError::UnknownVendor { vendor_id } => unknown_vendor(&vendor_id, context),
+        OrderAdoptionPlanError::UnknownVendor { name } => unknown_vendor(&name, context),
         OrderAdoptionPlanError::FileSystem { path, error } => {
             filesystem_refusal(path, &error.to_string(), context)
         }
@@ -2031,18 +2067,28 @@ fn invalid_facts(context: &ManagedContext) -> Failed {
     )
 }
 
-fn unknown_vendor(vendor_id: &str, context: &ManagedContext) -> Failed {
+fn unknown_vendor(name: &str, context: &ManagedContext) -> Failed {
     refused(
         FailureCode::OrderVendorUnknown,
-        format!(
-            "the Package at {} has no Vendor carrying that Vendor ID, so this Order \
-             references none. An Order mutation chooses a Vendor and never creates one; \
-             `spielorders add-vendor` is what creates one, and `spielorders package list \
-             vendors --all` lists every Vendor this Package has.",
-            context.root().absolute_path().display()
-        ),
+        unknown_vendor_message(&context.root().absolute_path().display().to_string(), name),
         context,
-        vec![Identity::vendor(vendor_id)],
+        vec![Identity::vendor_name(name)],
+    )
+}
+
+/// The one sentence a Name that selects no Vendor earns, whichever mutation assigned it.
+///
+/// **A Name rather than a Vendor ID**, because a Name is what a caller writes: it resolves
+/// trimmed and without regard to letter case, it is unique within a Package, and it selects
+/// a Hidden Vendor like any other. The listing the sentence names is the one that shows
+/// every Name there is to choose from.
+fn unknown_vendor_message(root: &str, name: &str) -> String {
+    format!(
+        "the Package at {root} has no Vendor named `{name}`, so this Order references \
+         none. A Vendor Name resolves trimmed and without regard to letter case; an Order \
+         mutation chooses a Vendor and never creates one, `spielorders add-vendor` is what \
+         creates one, and `spielorders package list vendors --all` lists every Vendor this \
+         Package has."
     )
 }
 
@@ -2508,7 +2554,7 @@ impl Alignment {
 pub(crate) fn align(target: &Target, dry_run: bool, output: &Output) -> Exit {
     let decided = match read(target) {
         Ok(read) => aligned(&read, dry_run),
-        Err(reason) => OrderMutation::Failed(Box::new(failure(reason))),
+        Err(failed) => OrderMutation::Failed(failed),
     };
     present_order_mutation(
         ResponseContract::OrderAlign,
@@ -3147,7 +3193,7 @@ impl Disposition {
 pub(crate) fn remove(target: &Target, delete: bool, dry_run: bool, output: &Output) -> Exit {
     let decided = match read(target) {
         Ok(read) => disposed(&read, delete, dry_run),
-        Err(reason) => OrderMutation::Failed(Box::new(failure(reason))),
+        Err(failed) => OrderMutation::Failed(failed),
     };
     present_order_mutation(
         ResponseContract::OrderRemove,
@@ -3634,7 +3680,7 @@ pub(crate) fn edit(
 ) -> Exit {
     let decided = match read(target) {
         Ok(read) => edited(&read, assignments, dry_run),
-        Err(reason) => OrderMutation::Failed(Box::new(failure(reason))),
+        Err(failed) => OrderMutation::Failed(failed),
     };
     present_order_mutation(
         ResponseContract::OrderEdit,
@@ -3908,18 +3954,12 @@ fn edit_refusal(reason: OrderEditPlanError<io::Error>, roots: &OrderRoots) -> Or
             vec![in_package(&roots.order_root)],
             Vec::new(),
         ),
-        OrderEditPlanError::UnknownVendor { vendor_id } => order_mutation_refused(
+        OrderEditPlanError::UnknownVendor { name } => order_mutation_refused(
             FailureCode::OrderVendorUnknown,
-            format!(
-                "the Package at {} has no Vendor carrying that Vendor ID, so this Order \
-                 references none. An Order mutation chooses a Vendor and never creates one; \
-                 `spielorders add-vendor` is what creates one, and `spielorders package list \
-                 vendors --all` lists every Vendor this Package has.",
-                roots.package_path().display()
-            ),
+            unknown_vendor_message(&roots.package_path().display().to_string(), &name),
             roots,
             vec![in_package(&roots.order_root)],
-            vec![Identity::vendor(&vendor_id)],
+            vec![Identity::vendor_name(&name)],
         ),
         // **The range is the positions the *command* can address**, not the collection's
         // own: an insertion may name the place after the last Item, so `add` accepts one
@@ -4323,7 +4363,7 @@ fn item_mutation(
                 Err(failed) => OrderMutation::Failed(failed),
             }
         }
-        Err(reason) => OrderMutation::Failed(Box::new(failure(reason))),
+        Err(failed) => OrderMutation::Failed(failed),
     };
     present_order_mutation(contract, decided, item_payload, human_item_mutation, output)
 }
@@ -4493,8 +4533,8 @@ fn addressed(plan: &OrderItemMutationPlan) -> String {
     }
 }
 
-/// One Item on one line: its Description, its Quantity and Unit Price as money is
-/// displayed, and its Catalog Number where it carries one.
+/// One Item on one line: its Description, its Quantity as the record stores it, its Unit
+/// Price as money is displayed, and its Catalog Number where it carries one.
 ///
 /// The subject line of an Item mutation. Its calculated total is deliberately absent:
 /// [`human_items`] prints the collection with every total below, and the number a mutation
@@ -4503,7 +4543,7 @@ fn item_line(item: &OrderItem) -> String {
     let mut line = format!(
         "{}  {} x {}",
         item.description.as_str(),
-        displayed_amount(item.quantity.get()),
+        displayed_quantity(item.quantity.get()),
         displayed_amount(item.unit_price.get())
     );
     if let Some(catalog_number) = item.catalog_number.as_deref() {

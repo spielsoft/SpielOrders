@@ -218,7 +218,7 @@ fn list_returns_ordered_contacts_with_the_complete_vendor_and_live_references() 
     let tree = package_with_contacts("vendor-contact-list");
     let order = plan_order_creation(
         tree.path(),
-        &OrderCreationInput::new("Laser components").vendor_id(VENDOR_ID),
+        &OrderCreationInput::new("Laser components").vendor_name("Tarnwick"),
         &FixedCalendar,
         &RealFileSystem,
     )
@@ -889,7 +889,7 @@ fn contact_mutation_preserves_vendor_identity_orders_readmes_and_supporting_mate
     let tree = package_with_contacts("vendor-contact-preservation");
     let order_plan = plan_order_creation(
         tree.path(),
-        &OrderCreationInput::new("Laser components").vendor_id(VENDOR_ID),
+        &OrderCreationInput::new("Laser components").vendor_name("Tarnwick"),
         &FixedCalendar,
         &RealFileSystem,
     )

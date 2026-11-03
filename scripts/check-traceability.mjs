@@ -48,6 +48,47 @@ for (const file of linked) {
 }
 assert.deepEqual(brokenLinks, [], `broken relative links:\n${brokenLinks.join("\n")}`);
 
+// A closed list of spellings this repository has actually written, not a claim to catch every way of narrating a change.
+const historyPhrases = [
+  "Owner ruling",
+  "Amended by the owner",
+  "settled by the owner",
+  "ruled by the owner",
+  "used to say",
+  "corrected after",
+  "decomposition audit",
+  "previously said",
+  "superseded by",
+  "Restated by the owner",
+  "have since been"
+];
+
+const live = [
+  ...(await markdownFiles("issues/wayfinder")),
+  ...(await markdownFiles("issues/implementation")),
+  ...(await markdownFiles("issues/roadmaps")),
+  ...(await markdownFiles("docs")),
+  "AGENTS.md",
+  "CONTEXT.md"
+];
+
+const historyHits = [];
+for (const file of live) {
+  const lines = (await markdown(file)).split("\n");
+  lines.forEach((line, index) => {
+    for (const phrase of historyPhrases) {
+      if (line.toLowerCase().includes(phrase.toLowerCase())) {
+        historyHits.push(`${file}:${index + 1}: history phrase "${phrase}"`);
+      }
+    }
+  });
+}
+assert.deepEqual(
+  historyHits,
+  [],
+  `a live document narrates a change instead of stating the current decision:\n${historyHits.join("\n")}`
+);
+
 const decisionDirectory = "issues/wayfinder/spielorders-product-architecture/tickets";
 const decisionNames = new Set();
 for (const file of await readdir(decisionDirectory)) {

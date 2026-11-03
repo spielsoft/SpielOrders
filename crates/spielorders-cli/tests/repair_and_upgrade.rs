@@ -685,7 +685,7 @@ fn a_suggested_command_that_still_needs_a_value_is_refused_rather_than_half_appl
         "assign_existing_vendor",
     );
     assert!(
-        command.ends_with(" vendor_id="),
+        command.ends_with(" vendor="),
         "the offer names the assignment the caller must fill in: {command}"
     );
 
@@ -695,7 +695,7 @@ fn a_suggested_command_that_still_needs_a_value_is_refused_rather_than_half_appl
     assert_eq!(outcome.status, Some(1), "{}", outcome.stdout_text());
     assert_eq!(refused["error"]["code"], "repair_resolution_missing");
     assert_eq!(
-        refused["error"]["identities"][0]["value"], "vendor_id",
+        refused["error"]["identities"][0]["value"], "vendor",
         "and names the resolution still owed"
     );
     assert_eq!(managed_snapshot(&root), before, "nothing was half-applied");
@@ -803,10 +803,7 @@ fn every_allowed_repair_is_applied_and_leaves_its_scope_valid() {
 
     // The three explicit corrections of an Unresolved Vendor Reference.
     for (action, resolution) in [
-        (
-            "assign_existing_vendor",
-            vec![format!("vendor_id={}", crate::support::OFFERED_VENDOR_ID)],
-        ),
+        ("assign_existing_vendor", vec!["vendor=Tarnwick".to_owned()]),
         ("create_and_assign_vendor", vec!["name=Copperwick".to_owned()]),
         ("clear_vendor_reference", Vec::new()),
     ] {

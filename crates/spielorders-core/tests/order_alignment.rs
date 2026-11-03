@@ -100,7 +100,7 @@ fn drifted_order(
     fs::create_dir(&directory).expect("the fixture Order Directory is created");
     let mut input = OrderAdoptionInput::new("Laser components", "2026-08-22", OrderStatus::Hold);
     if let Some(vendor) = vendor {
-        input = input.vendor_id(vendor);
+        input = input.vendor_name(vendor);
     }
     if let Some(orderer) = orderer {
         input = input.orderer(orderer);
@@ -144,8 +144,11 @@ fn the_projection_enumerates_every_optional_component_combination() {
     ] {
         let tree = initialized_package("alignment-projection");
         let root = &fs::canonicalize(tree.path()).unwrap();
-        let vendor = with_vendor.then(|| created_vendor(root, "Tarnwick"));
-        let directory = drifted_order(root, DRIFTED, vendor.as_deref(), orderer);
+        let name = with_vendor.then(|| {
+            created_vendor(root, "Tarnwick");
+            "Tarnwick"
+        });
+        let directory = drifted_order(root, DRIFTED, name, orderer);
 
         let plan = plan_order_alignment(&directory, &RealFileSystem)
             .unwrap_or_else(|error| panic!("{label} can be aligned: {error:?}"));
@@ -207,7 +210,7 @@ fn surrounded_drifted_order(label: &str) -> (TemporaryTree, PathBuf, String) {
         &root,
         &directory,
         &OrderAdoptionInput::new("Laser components", "2026-08-22", OrderStatus::Hold)
-            .vendor_id(&vendor)
+            .vendor_name("Tarnwick")
             .orderer("Ada Lovelace"),
         &RealFileSystem,
     )
@@ -1056,7 +1059,7 @@ fn unconfirmed_facts<E: std::fmt::Debug>(
 
 #[test]
 fn a_different_order_left_at_the_source_path_is_refused_though_it_is_still_a_directory() {
-    let (tree, directory, vendor) = surrounded_drifted_order("alignment-substituted-order");
+    let (tree, directory, _vendor) = surrounded_drifted_order("alignment-substituted-order");
     let root = fs::canonicalize(tree.path()).unwrap();
     let aligned = root.join("Orders").join(ALIGNED);
     let plan = plan_order_alignment(&directory, &RealFileSystem).unwrap();
@@ -1072,7 +1075,7 @@ fn a_different_order_left_at_the_source_path_is_refused_though_it_is_still_a_dir
         &root,
         &directory,
         &OrderAdoptionInput::new("Laser components", "2026-08-22", OrderStatus::Hold)
-            .vendor_id(&vendor)
+            .vendor_name("Tarnwick")
             .orderer("Ada Lovelace"),
         &RealFileSystem,
     )
@@ -1197,7 +1200,7 @@ fn clearing_the_vendor_reference_after_planning_is_refused() {
     // would notice.
     let edit = plan_order_edit(
         &directory,
-        &OrderAssignments::new().assign("vendor_id", ""),
+        &OrderAssignments::new().assign("vendor", ""),
         &FixedCalendar,
         &RealFileSystem,
     )
@@ -1236,10 +1239,10 @@ fn associating_a_vendor_after_planning_is_refused() {
     // The mirror of clearing a reference: a plan authorized against "this Order has no
     // Vendor" must not proceed once it has one, and the projection it would rename to
     // gains a whole component.
-    let vendor = created_vendor(&root, "Tarnwick");
+    created_vendor(&root, "Tarnwick");
     let edit = plan_order_edit(
         &directory,
-        &OrderAssignments::new().assign("vendor_id", &vendor),
+        &OrderAssignments::new().assign("vendor", "Tarnwick"),
         &FixedCalendar,
         &RealFileSystem,
     )

@@ -123,7 +123,7 @@ That review ran in its designed parallel form and returned two blocking findings
 smaller ones. None reached the bar the owner reserved for a further run — none makes a
 machine response lie, loses data, or violates a closed decision — so the gate carried all
 six into
-[M5 Ticket 001](../../m5-search-and-native-services/tickets/001-one-answer-about-a-link-a-count-and-a-quantity.md)
+[M5 Ticket 001](../../../implementation/m5-search-and-native-services/tickets/001-one-answer-about-a-link-a-count-and-a-quantity.md)
 rather than repairing what it was measuring. One of the six is a question for the owner
 rather than a defect.
 

@@ -15,6 +15,7 @@ use crate::{
         DirectoryFileSystem, FileSystem, LocalCalendar, NewDirectoryRenameOutcome, UuidGenerator,
     },
     readme::{Location, package_relative_path_text},
+    vendors::vendor_by_name,
 };
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -26,7 +27,11 @@ pub struct OrderCreationInput {
     title: String,
     date_ordered: Option<String>,
     status: Option<OrderStatus>,
-    vendor_id: Option<String>,
+    /// The Vendor Name that selects this Order's Vendor, which is the ordinary Vendor
+    /// selector: trimmed, matched without regard to letter case, unique within the
+    /// Package, and resolving a Hidden Vendor like any other. The record still stores the
+    /// Vendor ID the Name resolves to.
+    vendor_name: Option<String>,
     orderer: Option<String>,
     ordering_institution: Option<String>,
     currency: Option<String>,
@@ -40,7 +45,7 @@ impl OrderCreationInput {
             title: title.into(),
             date_ordered: None,
             status: None,
-            vendor_id: None,
+            vendor_name: None,
             orderer: None,
             ordering_institution: None,
             currency: None,
@@ -69,7 +74,7 @@ impl OrderCreationInput {
         let mut input = Self::new(title);
         input.date_ordered = facts.optional("date_ordered");
         input.status = facts.status();
-        input.vendor_id = facts.optional("vendor_id");
+        input.vendor_name = facts.optional("vendor");
         input.orderer = facts.optional("orderer");
         input.ordering_institution = facts.optional("ordering_institution");
         input.currency = facts.optional("currency");
@@ -94,8 +99,8 @@ impl OrderCreationInput {
         self
     }
 
-    pub fn vendor_id(mut self, value: impl Into<String>) -> Self {
-        self.vendor_id = Some(value.into());
+    pub fn vendor_name(mut self, value: impl Into<String>) -> Self {
+        self.vendor_name = Some(value.into());
         self
     }
 
@@ -349,8 +354,11 @@ pub enum OrderCreationPlanError<E> {
     UpgradePending,
     PackageOperationFailed,
     InvalidFacts,
+    /// No Vendor of this Package carries the Name the mutation assigned. A Vendor is
+    /// chosen and never created by an Order mutation, so the Name is quoted back as the
+    /// caller wrote it.
     UnknownVendor {
-        vendor_id: String,
+        name: String,
     },
     EmptyProjectedComponent,
     /// Something already occupies the projected Order Directory or the staging name beside
@@ -592,22 +600,23 @@ pub fn plan_order_creation<F: FileSystem>(
             let today = calendar.today();
             format!("{:04}-{:02}-{:02}", today.year, today.month, today.day)
         });
-    let vendor_id = input
-        .vendor_id
+    // The Name selects; the record stores what it selected. `vendor_by_name` is the
+    // Package's own comparison, shared with every other place a Name resolves, so a Vendor
+    // reached here is the one `vendor show` would report for the same text.
+    let vendor = input
+        .vendor_name
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let vendor = vendor_id
-        .map(|vendor_id| {
-            package
-                .vendors()
-                .iter()
-                .find(|vendor| vendor.vendor_id.as_str() == vendor_id)
-                .ok_or_else(|| OrderCreationPlanError::UnknownVendor {
-                    vendor_id: vendor_id.to_owned(),
-                })
+        .filter(|value| !value.is_empty())
+        .map(|name| {
+            vendor_by_name(name, package.vendors()).ok_or_else(|| {
+                OrderCreationPlanError::UnknownVendor {
+                    name: name.to_owned(),
+                }
+            })
         })
         .transpose()?;
+    let vendor_id = vendor.map(|vendor| vendor.vendor_id.as_str());
     let reusable_values = OrderCreationReusableValues {
         orderer: canonical_reusable(input.orderer.as_deref(), package.orderers()),
         ordering_institution: canonical_reusable(

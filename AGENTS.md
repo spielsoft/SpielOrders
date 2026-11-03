@@ -86,6 +86,9 @@ If the parallel mechanism is unavailable, stop and report. Never substitute one 
 - A code comment may name a decision. It does not restate it.
 - Structural tests that grep the source tree are not added. Architecture is enforced by
   visibility (`pub(crate)`), by types, and by clippy.
+- A decision decides; code chooses. A fence in code enforces a sentence a decision states.
+  A choice the code made is a comment that says it is a choice, never a rule, and never a
+  fence.
 
 ## Contradictions
 

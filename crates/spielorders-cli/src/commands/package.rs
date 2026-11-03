@@ -8,15 +8,15 @@ use crate::{
     cli::ValueKind,
     commands::shared::{
         DiagnosticGroupProjection, Failed, IndexProjection, MetadataProjection,
-        OrderPathsProjection, VendorSummary, as_given, assessed_package_candidate,
-        diagnostic_groups, diagnostics, failed_context, failed_document, flattened, index,
-        metadata, not_representable, operation_failure, package_candidate, package_context,
-        report_diagnostic, text, undeliverable, unmanaged_failure,
+        OrderPathsProjection, OrderSummary, RootKind, VendorSummary, as_given,
+        assessed_package_candidate, diagnostic_groups, diagnostics, failed_context,
+        failed_document, flattened, index, link_named_as_a_root, metadata, not_representable,
+        operation_failure, order_summary, package_candidate, package_context, presented_vendor,
+        report_diagnostic, report_order, report_vendor, text, undeliverable, unmanaged_failure,
     },
     contract::ResponseContract,
     effects::PlatformFileSystem,
     exit::Exit,
-    money::displayed_amount,
     output::Output,
     response::{
         Context, FailureCode, FailureScope, LocationProjection, NotRepresentable, Response,
@@ -72,6 +72,9 @@ enum PackageContents {
 /// be is a fact about topology, so it answers a damaged Package rather than failing on
 /// one.
 fn load_package_contents(selected_root: &Path) -> PackageContents {
+    if let Some(failed) = link_named_as_a_root(selected_root, RootKind::Package) {
+        return PackageContents::Failed(failed);
+    }
     contents(package_candidate(
         selected_root,
         inspect_canonical_package(selected_root, &PlatformFileSystem),
@@ -87,6 +90,9 @@ fn load_package_contents(selected_root: &Path) -> PackageContents {
 /// the complete Package read and the command whose whole subject is the index from coming
 /// to disagree about one Package.
 fn load_assessed_package_contents(selected_root: &Path) -> PackageContents {
+    if let Some(failed) = link_named_as_a_root(selected_root, RootKind::Package) {
+        return PackageContents::Failed(failed);
+    }
     contents(assessed_package_candidate(
         selected_root,
         assess_package_index(selected_root, &PlatformFileSystem),
@@ -150,6 +156,9 @@ pub(crate) fn readme(selected_root: &Path, output: &Output) -> Exit {
 /// No ancestor is consulted anywhere on this path, so a directory inside a Package is
 /// not that Package.
 fn decide_readme(selected_root: &Path) -> ReadmeAnswer {
+    if let Some(failed) = link_named_as_a_root(selected_root, RootKind::Package) {
+        return ReadmeAnswer::Failed(failed);
+    }
     // The reading load. `open_package` would durably replace the derived Package Index
     // as a side effect, and `docs/architecture/durable-writes.md` reserves the
     // rebuilding load for the place a canonical write has already happened. A command
@@ -642,19 +651,19 @@ fn show_document(answer: &ShowAnswer) -> Result<(Response<Show>, Exit), NotRepre
     }
 }
 
-/// The Vendors this run presents.
+/// The Vendors of a whole Package this run presents.
 ///
 /// **The default is the Vendors this Package offers for new use, and `--all` is the
-/// complete list.** Both come from the core, which exposes each as its own list and
-/// filters neither: this default is the CLI's presentation choice, and the desktop
-/// Vendors table consumes the complete list for its show/hide control. Every Vendor
-/// carries its visibility either way, so the shape does not depend on the flag.
+/// complete list**, which is [`presented_vendor`]'s decision rather than this function's:
+/// the entity search answers with a list of Vendors too, and one predicate for all three
+/// is what stops a fourth convention appearing beside them. Every Vendor carries its
+/// visibility either way, so the shape does not depend on the flag.
 fn presented_vendors(package: &CurrentPackageCandidate, all: bool) -> Vec<&Vendor> {
-    if all {
-        package.vendors().iter().collect()
-    } else {
-        package.offered_vendors()
-    }
+    package
+        .vendors()
+        .iter()
+        .filter(|vendor| presented_vendor(vendor, all))
+        .collect()
 }
 
 fn package_paths(context: &ManagedContext) -> Result<PackagePaths, NotRepresentable> {
@@ -848,33 +857,7 @@ fn human_orders(package: &CurrentPackageCandidate, output: &Output) -> io::Resul
         return output.summary("Orders", &text("none"));
     }
     for (index, order) in package.healthy_orders().iter().enumerate() {
-        let document = order.document();
-        let vendor = match package.vendor_for_order(index) {
-            Some(vendor) => format!("  {}", vendor.name.as_str()),
-            None => String::new(),
-        };
-        output.summary(
-            "Order",
-            &text(&format!(
-                "{}  {}  {}{vendor}  {} item(s), total {}",
-                document.date_ordered.as_str(),
-                document.title.as_str(),
-                document.status.as_str(),
-                document.items.len(),
-                // The core's unrounded total, rendered for a reader by the one thing
-                // that renders money in this crate. The number itself is untouched:
-                // `OrderProjection::order_total` carries it into `package show`'s
-                // response exactly as the core calculated it.
-                //
-                // This line serves `package list orders` too, and that command's
-                // response carries no total at all — deliberately, as `OrderSummary`
-                // argues below. Sharing the line is what keeps the two commands from
-                // describing one Order two ways; it is not a claim that they carry the
-                // same members.
-                displayed_amount(order.order_total())
-            )),
-        )?;
-        output.detail("Order ID", OsStr::new(document.order_id.as_str()))?;
+        report_order(output, order, package.vendor_for_order(index))?;
     }
     Ok(())
 }
@@ -915,15 +898,7 @@ fn human_vendors(package: &CurrentPackageCandidate, all: bool, output: &Output) 
         output.summary("Vendors", &text("none"))?;
     }
     for vendor in &presented {
-        output.summary(
-            "Vendor",
-            &text(&if vendor.is_hidden() {
-                format!("{} (hidden)", vendor.name.as_str())
-            } else {
-                vendor.name.as_str().to_owned()
-            }),
-        )?;
-        output.detail("Vendor ID", OsStr::new(vendor.vendor_id.as_str()))?;
+        report_vendor(output, vendor)?;
     }
     // Said whether or not any Vendor is hidden, because the point is what the list is:
     // without it a reader cannot tell a Vendor that is hidden from one that is absent.
@@ -988,43 +963,6 @@ fn human_value_list(
 struct OrderListing {
     orders: Vec<OrderSummary>,
     damaged_orders: Vec<DamagedOrderSummary>,
-}
-
-/// One Order, in the least a listing needs to name it.
-///
-/// The identity, the Order Directory root, the four facts an Order carries at every
-/// status, and the Vendor the core resolved for it. The Items, the calculated totals, the
-/// Order Currency, the Reusable Free-Entry Values, and the README text are the *complete*
-/// read — `package show` and, for one Order, `order show` — and a contract that carried
-/// them would be one of those under another name.
-///
-/// **The exclusion is about this contract, not about the human mode.** `list_orders`
-/// hands `present_contents` the same summary line `package show` prints, which names the
-/// Item count and the calculated Order Total — sharing the line is what keeps the two
-/// commands from describing one Order two ways, and human output is never a parsing
-/// contract. A consumer that needs a total asks the command whose contract carries one.
-#[derive(Debug, Serialize)]
-struct OrderSummary {
-    /// The Order Directory root, which is what makes a listed Order actionable.
-    ///
-    /// Named directly rather than nested in a `paths` object holding one member: the
-    /// Order's metadata directory, record, and README are locations the *complete* read
-    /// reports, and a listing is about where the Order is.
-    directory: LocationProjection,
-    order_id: String,
-    title: String,
-    date_ordered: String,
-    status: &'static str,
-    /// The Vendor this Order names, as the record carries it. `null` when it names none.
-    vendor_id: Option<String>,
-    /// That Vendor as the core resolved it, Hidden Vendors included.
-    ///
-    /// **This command has no `--all`, and needs none.** Hiding governs what a Package
-    /// offers for new use and never what is resolved, so resolution goes through the
-    /// core's `vendor_for_order`, which searches the complete list. Resolving against the
-    /// presented list is the defect the Vendor visibility default is most likely to
-    /// cause, and a command with no such option would carry it silently.
-    vendor: Option<VendorSummary>,
 }
 
 /// One Damaged Order, as a placeholder rather than as an Order.
@@ -1302,30 +1240,6 @@ fn order_listing(package: &CurrentPackageCandidate) -> Result<OrderListing, NotR
             .iter()
             .map(damaged_order_summary)
             .collect::<Result<_, _>>()?,
-    })
-}
-
-/// One Order summary, with the Vendor the core resolved for it.
-///
-/// The Vendor arrives as an argument for the same reason it does in `package show`: it
-/// comes from `vendor_for_order`, which searches the complete Vendor list, and an adapter
-/// that looked one up itself would be a second place resolving a Vendor.
-fn order_summary(
-    order: &HealthyOrder,
-    resolved: Option<&Vendor>,
-) -> Result<OrderSummary, NotRepresentable> {
-    let document = order.document();
-    Ok(OrderSummary {
-        directory: LocationProjection::of(order.paths().directory())?,
-        order_id: document.order_id.as_str().to_owned(),
-        title: document.title.as_str().to_owned(),
-        date_ordered: document.date_ordered.as_str().to_owned(),
-        status: document.status.as_str(),
-        vendor_id: document
-            .vendor_id
-            .as_ref()
-            .map(|vendor_id| vendor_id.as_str().to_owned()),
-        vendor: resolved.map(VendorSummary::of),
     })
 }
 

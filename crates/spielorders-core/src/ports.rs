@@ -1,11 +1,11 @@
 //! Ports for effects owned outside the SpielOrders core.
 //!
-//! These interfaces establish substitution boundaries only. Concrete filesystem,
-//! clock, UUID, search, and native-file behavior belongs to later milestones.
+//! These interfaces establish substitution boundaries only: what each effect is asked and
+//! what it answers with, never how a platform supplies it.
 
+use crate::supporting_material::{ProviderAnswer, SupportingMaterialRequest};
 use std::{
     ffi::{OsStr, OsString},
-    future::Future,
     path::{Path, PathBuf},
 };
 
@@ -182,15 +182,31 @@ pub trait Cancellation: Send + Sync {
     fn is_cancelled(&self) -> bool;
 }
 
-/// Starts asynchronous provider work without fixing the later result payload.
-pub trait SupportingMaterialSearch {
-    type Error;
+/// The platform index Supporting Material is looked for in.
+///
+/// **One synchronous call that returns one settled answer**, taking the cancellation the
+/// caller owns and the bound the request carries. Not a stream and not a future: running
+/// the work off a user interface thread is the caller's arrangement, so no asynchronous
+/// runtime enters this core or the adapters over it.
+///
+/// **A provider that cannot look says so rather than failing**, which is why nothing here
+/// returns a `Result`: a switched-off index, an unindexed volume, refused access and a
+/// refused query are states of the platform a caller can act on, and
+/// [`ProviderAnswer::Unavailable`] is where each of them travels.
+///
+/// What a provider does *not* decide is what its hits mean. Grouping them under Orders,
+/// leaving out this application's own managed documents, telling one file reported twice
+/// from two files, and the order they come back in are Package rules, and
+/// [`crate::supporting_material::search_supporting_material`] is where they are applied.
+pub trait SupportingMaterialIndex {
+    /// This provider's own name, which the answer reports.
+    fn name(&self) -> &'static str;
 
     fn search(
         &self,
-        query: String,
+        request: &SupportingMaterialRequest<'_>,
         cancellation: &dyn Cancellation,
-    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    ) -> ProviderAnswer;
 }
 
 /// The narrow platform Trash effect one explicit whole-Order removal may use. It
@@ -218,6 +234,7 @@ pub trait NativeFiles {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::supporting_material::Completeness;
     use std::{convert::Infallible, path::PathBuf};
 
     struct FakeEffects;
@@ -287,15 +304,21 @@ mod tests {
         }
     }
 
-    impl SupportingMaterialSearch for FakeEffects {
-        type Error = Infallible;
+    impl SupportingMaterialIndex for FakeEffects {
+        fn name(&self) -> &'static str {
+            "fixture"
+        }
 
-        async fn search(
+        fn search(
             &self,
-            _query: String,
+            _request: &SupportingMaterialRequest<'_>,
             _cancellation: &dyn Cancellation,
-        ) -> Result<(), Self::Error> {
-            Ok(())
+        ) -> ProviderAnswer {
+            ProviderAnswer::Looked {
+                completeness: Completeness::Complete,
+                hits: Vec::new(),
+                diagnostics: Vec::new(),
+            }
         }
     }
 
@@ -316,7 +339,7 @@ mod tests {
                  impl FileSystem<Error = Infallible>
                  + LocalCalendar
                  + UuidGenerator
-                 + SupportingMaterialSearch<Error = Infallible>
+                 + SupportingMaterialIndex
                  + NativeFiles<Error = Infallible>
              ),
     ) {
@@ -327,7 +350,15 @@ mod tests {
         assert_eq!(effects.generate_v4().len(), 36);
         effects.open(&path).unwrap();
         effects.reveal(&path).unwrap();
-        drop(effects.search("fixture".into(), &FakeEffects));
+        let request = SupportingMaterialRequest::new(
+            "fixture",
+            std::time::Duration::from_secs(1),
+            Vec::new(),
+        );
+        assert!(matches!(
+            effects.search(&request, &FakeEffects),
+            ProviderAnswer::Looked { .. }
+        ));
     }
 
     #[test]

@@ -5,24 +5,29 @@
 //! rule — it does not validate domain facts, compute totals, resolve Vendors, decide
 //! repair actions, or write managed metadata.
 //!
-//! Five things are established here for every later command to consume, each in one
-//! module so that each can be inventoried as a set rather than read as a diff. The first
-//! four are consumed by all of them; the fifth by every command that displays money:
+//! What every later command consumes is established here, a module apiece so that each can
+//! be inventoried as a set rather than read as a diff. The effects, the streams, the exits
+//! and the envelope are consumed by all of them; the two renderers by the commands that
+//! show a monetary value or a moment in time:
 //!
 //! - [`effects`] — every production effect the executable implements;
 //! - [`output`] — every path by which a byte reaches standard output or standard error,
 //!   and the four mutually exclusive output modes;
 //! - [`exit`] — every exit from the process and the status it carried;
 //! - [`contract`] and [`response`] — the response envelope and the registry that keeps
-//!   `contract` identities distinct; and
-//! - [`money`] — the one rendering of a monetary value for a human, so that a Package's
-//!   money reads the same way in every command that shows it.
+//!   `contract` identities distinct;
+//! - [`money`] — the one call site a command reaches the core's monetary spelling
+//!   through, so that a Package's money reads the same way in every command that shows
+//!   it and reads the way a search matches it; and
+//! - [`moment`] — the one place a moment in time is rendered for a human, because a
+//!   filesystem stamp arrives as a count of seconds and a reader cannot use one.
 //!
 //! **The executable is this crate's product; the library exists for its own test
 //! target.** A module is reachable from outside only because that target names something
 //! in it: the platform effects it drives a real Package with, the value kinds it
-//! enumerates against the ones a command line accepts and the global exclusions it sweeps
-//! every command with, and the response contract identities it locates fixtures by.
+//! enumerates against the ones a command line accepts and the option exclusions it sweeps
+//! every command with, and the response contract identities and pure projection it
+//! compares fixtures against.
 //! Everything else is crate-private, so an adapter
 //! boundary is a wall rather than a convention, and `unreachable_pub` keeps a module from
 //! drifting back out.
@@ -58,13 +63,14 @@ pub mod effects;
 
 pub(crate) mod commands;
 pub(crate) mod exit;
+pub(crate) mod moment;
 pub(crate) mod money;
 pub(crate) mod output;
 pub(crate) mod response;
 
 use cli::{
     ContactCommand, Family, IndexCommand, ItemCommand, ListCommand, OrderCommand, PackageCommand,
-    VendorCommand,
+    SearchCommand, VendorCommand,
 };
 use exit::Exit;
 use output::{Mode, Output, color_permitted};
@@ -91,29 +97,38 @@ fn command() -> Exit {
 
     match cli::parse(&arguments) {
         Ok(parsed) => {
-            let output = Output::new(parsed.options.mode(), stdout_color, stderr_color);
+            // Asked of the command that declares the option, before the one `Output` this
+            // process reports through is built. See `cli::Cli::mode`.
+            let output = Output::new(parsed.mode(), stdout_color, stderr_color);
             match parsed.family {
                 Family::Init {
                     assignments,
+                    target,
                     execution,
-                } => commands::init::init(
-                    &parsed.options.root,
-                    &assignments,
-                    execution.dry_run,
-                    &output,
-                ),
+                    ..
+                } => commands::init::init(&target.root, &assignments, execution.dry_run, &output),
                 // The Name shorthand is expanded into the assignment it stands for, so
                 // both `add-vendor` forms reach the core as one assignment set.
-                Family::AddVendor { subject, execution } => commands::vendor::add(
-                    &parsed.options.root,
+                Family::AddVendor {
+                    subject,
+                    target,
+                    execution,
+                    ..
+                } => commands::vendor::add(
+                    &target.root,
                     &cli::subject_assignments(&subject, cli::VENDOR_NAME_FIELD),
                     execution.dry_run,
                     &output,
                 ),
                 // The Title shorthand is expanded into the assignment it stands for, so
                 // both `add-order` forms reach the core as one assignment set.
-                Family::AddOrder { subject, execution } => commands::order::add(
-                    &parsed.options.root,
+                Family::AddOrder {
+                    subject,
+                    target,
+                    execution,
+                    ..
+                } => commands::order::add(
+                    &target.root,
                     &cli::subject_assignments(&subject, cli::ORDER_TITLE_FIELD),
                     execution.dry_run,
                     &output,
@@ -125,11 +140,13 @@ fn command() -> Exit {
                 Family::AdoptOrder {
                     directory,
                     assignments,
+                    target,
                     execution,
+                    ..
                 } => {
                     let (facts, items) = cli::adoption_assignments(&assignments);
                     commands::order::adopt(
-                        &parsed.options.root,
+                        &target.root,
                         &directory,
                         &facts,
                         &items,
@@ -138,192 +155,243 @@ fn command() -> Exit {
                     )
                 }
                 Family::Package {
-                    command: PackageCommand::Readme,
-                } => commands::package::readme(&parsed.options.root, &output),
+                    command: PackageCommand::Readme { target, .. },
+                } => commands::package::readme(&target.root, &output),
                 Family::Package {
-                    command: PackageCommand::Show { all },
-                } => commands::package::show(&parsed.options.root, all, &output),
-                Family::Package {
-                    command:
-                        PackageCommand::List {
-                            command: ListCommand::Orders,
-                        },
-                } => commands::package::list_orders(&parsed.options.root, &output),
+                    command: PackageCommand::Show { all, target, .. },
+                } => commands::package::show(&target.root, all, &output),
                 Family::Package {
                     command:
                         PackageCommand::List {
-                            command: ListCommand::Vendors { all },
+                            command: ListCommand::Orders { target, .. },
                         },
-                } => commands::package::list_vendors(&parsed.options.root, all, &output),
+                } => commands::package::list_orders(&target.root, &output),
                 Family::Package {
-                    command: PackageCommand::Values { kind },
-                } => commands::package::values(&parsed.options.root, kind, &output),
-                Family::Validate => commands::validate::package(&parsed.options.root, &output),
+                    command:
+                        PackageCommand::List {
+                            command: ListCommand::Vendors { all, target, .. },
+                        },
+                } => commands::package::list_vendors(&target.root, all, &output),
+                Family::Package {
+                    command: PackageCommand::Values { kind, target, .. },
+                } => commands::package::values(&target.root, kind, &output),
+                Family::Validate { target, .. } => {
+                    commands::validate::package(&target.root, &output)
+                }
                 // `case=` and `action=` are read here, because which of the command's two
                 // moods a command line is in is a fact about the command line. Every
                 // resolution beside them is still the core's to adjudicate.
                 Family::Repair {
                     assignments,
+                    target,
                     execution,
+                    ..
                 } => commands::repair::package(
-                    &parsed.options.root,
+                    &target.root,
                     &cli::repair_request(&assignments),
                     execution.dry_run,
                     &output,
                 ),
-                Family::Upgrade { execution } => {
-                    commands::upgrade::upgrade(&parsed.options.root, execution.dry_run, &output)
-                }
+                Family::Upgrade {
+                    target, execution, ..
+                } => commands::upgrade::upgrade(&target.root, execution.dry_run, &output),
                 Family::Index {
-                    command: IndexCommand::Status,
-                } => commands::index::status(&parsed.options.root, &output),
+                    command: IndexCommand::Status { target, .. },
+                } => commands::index::status(&target.root, &output),
                 Family::Index {
-                    command: IndexCommand::Rebuild { execution },
-                } => commands::index::rebuild(&parsed.options.root, execution.dry_run, &output),
-                // One targeting decision for every `order` command, made here because it
-                // is a fact about the command line rather than about any one command,
-                // and made once so that a command added to the family is targeted the
-                // same way without deciding anything for itself.
-                // `--root` and `--uuid` are mutually exclusive, so exactly one
-                // route is named; with `--uuid`, `--root` is necessarily its own default
-                // and is therefore the current-directory Package the identity resolves
-                // against.
-                Family::Order { command, targeting } => {
-                    let target = match &targeting.uuid {
-                        Some(order_id) => commands::order::Target::Identity {
-                            package_root: &parsed.options.root,
-                            order_id,
+                    command:
+                        IndexCommand::Rebuild {
+                            target, execution, ..
                         },
-                        None => commands::order::Target::Directory(&parsed.options.root),
-                    };
-                    match command {
-                        OrderCommand::Show => commands::order::show(&target, &output),
+                } => commands::index::rebuild(&target.root, execution.dry_run, &output),
+                Family::Order {
+                    command: OrderCommand::Show { target, .. },
+                } => commands::order::show(&order_route(&target), &output),
+                Family::Order {
+                    command:
                         OrderCommand::Edit {
                             assignments,
+                            target,
                             execution,
-                        } => {
-                            commands::order::edit(&target, &assignments, execution.dry_run, &output)
-                        }
-                        OrderCommand::Readme => commands::order::readme(&target, &output),
-                        OrderCommand::Validate => commands::validate::order(&target, &output),
+                            ..
+                        },
+                } => commands::order::edit(
+                    &order_route(&target),
+                    &assignments,
+                    execution.dry_run,
+                    &output,
+                ),
+                Family::Order {
+                    command: OrderCommand::Readme { target, .. },
+                } => commands::order::readme(&order_route(&target), &output),
+                Family::Order {
+                    command: OrderCommand::Validate { target, .. },
+                } => commands::validate::order(&order_route(&target), &output),
+                Family::Order {
+                    command:
                         OrderCommand::Repair {
                             assignments,
+                            target,
                             execution,
-                        } => commands::repair::order(
-                            &target,
-                            &cli::repair_request(&assignments),
-                            execution.dry_run,
-                            &output,
-                        ),
-                        OrderCommand::Align { execution } => {
-                            commands::order::align(&target, execution.dry_run, &output)
-                        }
-                        OrderCommand::Remove { delete, execution } => {
-                            commands::order::remove(&target, delete, execution.dry_run, &output)
-                        }
+                            ..
+                        },
+                } => commands::repair::order(
+                    &order_route(&target),
+                    &cli::repair_request(&assignments),
+                    execution.dry_run,
+                    &output,
+                ),
+                Family::Order {
+                    command:
+                        OrderCommand::Align {
+                            target, execution, ..
+                        },
+                } => commands::order::align(&order_route(&target), execution.dry_run, &output),
+                Family::Order {
+                    command:
+                        OrderCommand::Remove {
+                            delete,
+                            target,
+                            execution,
+                            ..
+                        },
+                } => commands::order::remove(
+                    &order_route(&target),
+                    delete,
+                    execution.dry_run,
+                    &output,
+                ),
+                Family::Order {
+                    command:
                         OrderCommand::Item {
-                            command: ItemCommand::List,
-                        } => commands::order::item_list(&target, &output),
-                        // The insertion point is taken out of the assignment set here, for
-                        // the reason a Contact's is: where an Item goes in the collection is
-                        // not one of its facts.
+                            command: ItemCommand::List { target, .. },
+                        },
+                } => commands::order::item_list(&order_route(&target), &output),
+                // The insertion point is taken out of the assignment set here, for the
+                // reason a Contact's is: where an Item goes in the collection is not one
+                // of its facts.
+                Family::Order {
+                    command:
                         OrderCommand::Item {
                             command:
                                 ItemCommand::Add {
                                     assignments,
+                                    target,
                                     execution,
+                                    ..
                                 },
-                        } => {
-                            let (position, facts) = cli::insertion_assignments(&assignments);
-                            commands::order::item_add(
-                                &target,
-                                &facts,
-                                position,
-                                execution.dry_run,
-                                &output,
-                            )
-                        }
+                        },
+                } => {
+                    let (position, facts) = cli::insertion_assignments(&assignments);
+                    commands::order::item_add(
+                        &order_route(&target),
+                        &facts,
+                        position,
+                        execution.dry_run,
+                        &output,
+                    )
+                }
+                Family::Order {
+                    command:
                         OrderCommand::Item {
                             command:
                                 ItemCommand::Edit {
                                     position,
                                     assignments,
+                                    target,
                                     execution,
+                                    ..
                                 },
-                        } => commands::order::item_edit(
-                            &target,
-                            &position,
-                            &assignments,
-                            execution.dry_run,
-                            &output,
-                        ),
+                        },
+                } => commands::order::item_edit(
+                    &order_route(&target),
+                    &position,
+                    &assignments,
+                    execution.dry_run,
+                    &output,
+                ),
+                Family::Order {
+                    command:
                         OrderCommand::Item {
                             command:
                                 ItemCommand::Move {
                                     position,
                                     destination,
+                                    target,
                                     execution,
+                                    ..
                                 },
-                        } => commands::order::item_move(
-                            &target,
-                            &position,
-                            &destination.position,
-                            execution.dry_run,
-                            &output,
-                        ),
+                        },
+                } => commands::order::item_move(
+                    &order_route(&target),
+                    &position,
+                    &destination.position,
+                    execution.dry_run,
+                    &output,
+                ),
+                Family::Order {
+                    command:
                         OrderCommand::Item {
                             command:
                                 ItemCommand::Remove {
                                     position,
+                                    target,
                                     execution,
+                                    ..
                                 },
-                        } => commands::order::item_remove(
-                            &target,
-                            &position,
-                            execution.dry_run,
-                            &output,
-                        ),
-                    }
-                }
+                        },
+                } => commands::order::item_remove(
+                    &order_route(&target),
+                    &position,
+                    execution.dry_run,
+                    &output,
+                ),
                 Family::Vendor {
-                    command: VendorCommand::Show { name },
-                } => commands::vendor::show(&parsed.options.root, &name, &output),
+                    command: VendorCommand::Show { name, target, .. },
+                } => commands::vendor::show(&target.root, &name, &output),
                 Family::Vendor {
                     command:
                         VendorCommand::Edit {
                             name,
                             assignments,
+                            target,
                             execution,
+                            ..
                         },
                 } => commands::vendor::edit(
-                    &parsed.options.root,
+                    &target.root,
                     &name,
                     &assignments,
                     execution.dry_run,
                     &output,
                 ),
                 Family::Vendor {
-                    command: VendorCommand::Hide { name, execution },
-                } => {
-                    commands::vendor::hide(&parsed.options.root, &name, execution.dry_run, &output)
-                }
+                    command:
+                        VendorCommand::Hide {
+                            name,
+                            target,
+                            execution,
+                            ..
+                        },
+                } => commands::vendor::hide(&target.root, &name, execution.dry_run, &output),
                 Family::Vendor {
-                    command: VendorCommand::Unhide { name, execution },
-                } => commands::vendor::unhide(
-                    &parsed.options.root,
-                    &name,
-                    execution.dry_run,
-                    &output,
-                ),
+                    command:
+                        VendorCommand::Unhide {
+                            name,
+                            target,
+                            execution,
+                            ..
+                        },
+                } => commands::vendor::unhide(&target.root, &name, execution.dry_run, &output),
                 Family::Vendor {
                     command:
                         VendorCommand::Contact {
-                            command: ContactCommand::List { name },
+                            command: ContactCommand::List { name, target, .. },
                         },
-                } => commands::vendor::contact_list(&parsed.options.root, &name, &output),
+                } => commands::vendor::contact_list(&target.root, &name, &output),
                 // The insertion point is taken out of the assignment set here, because
                 // where a Contact goes in the collection is not one of its facts — see
-                // `cli::contact_assignments`.
+                // `cli::insertion_assignments`.
                 Family::Vendor {
                     command:
                         VendorCommand::Contact {
@@ -331,13 +399,15 @@ fn command() -> Exit {
                                 ContactCommand::Add {
                                     name,
                                     assignments,
+                                    target,
                                     execution,
+                                    ..
                                 },
                         },
                 } => {
                     let (position, facts) = cli::insertion_assignments(&assignments);
                     commands::vendor::contact_add(
-                        &parsed.options.root,
+                        &target.root,
                         &name,
                         &facts,
                         position,
@@ -353,11 +423,13 @@ fn command() -> Exit {
                                     name,
                                     position,
                                     assignments,
+                                    target,
                                     execution,
+                                    ..
                                 },
                         },
                 } => commands::vendor::contact_edit(
-                    &parsed.options.root,
+                    &target.root,
                     &name,
                     &position,
                     &assignments,
@@ -372,11 +444,13 @@ fn command() -> Exit {
                                     name,
                                     position,
                                     destination,
+                                    target,
                                     execution,
+                                    ..
                                 },
                         },
                 } => commands::vendor::contact_move(
-                    &parsed.options.root,
+                    &target.root,
                     &name,
                     &position,
                     &destination.position,
@@ -390,16 +464,57 @@ fn command() -> Exit {
                                 ContactCommand::Remove {
                                     name,
                                     position,
+                                    target,
                                     execution,
+                                    ..
                                 },
                         },
                 } => commands::vendor::contact_remove(
-                    &parsed.options.root,
+                    &target.root,
                     &name,
                     &position,
                     execution.dry_run,
                     &output,
                 ),
+                // The words travel as the shell handed them over. How they become terms is
+                // the core's, so that one quoted argument and the same words split reach one
+                // set of terms; see `commands::search`.
+                Family::Search {
+                    command:
+                        SearchCommand::Orders {
+                            keywords,
+                            matching,
+                            target,
+                            ..
+                        },
+                } => commands::search::orders(
+                    &target.root,
+                    &keywords.keywords,
+                    matching.case_sensitive,
+                    &output,
+                ),
+                Family::Search {
+                    command:
+                        SearchCommand::Vendors {
+                            all,
+                            keywords,
+                            matching,
+                            target,
+                            ..
+                        },
+                } => commands::search::vendors(
+                    &target.root,
+                    &keywords.keywords,
+                    all,
+                    matching.case_sensitive,
+                    &output,
+                ),
+                // The words are joined here, because how a shell handed them over is a fact
+                // about the command line: the provider governs matching, so nothing folds or
+                // tokenizes them and one argument or several is the same query.
+                Family::Search {
+                    command: SearchCommand::SupportingMaterial { query, target, .. },
+                } => commands::search::supporting_material(&target.root, &query.join(" "), &output),
             }
         }
         Err(error) => {
@@ -437,6 +552,25 @@ fn command() -> Exit {
             }
             Exit::Usage
         }
+    }
+}
+
+/// The route one `order` command line names to its Order.
+///
+/// One decision for every `order` command, made here because it is a fact about the
+/// command line rather than about any one command, and made once so that a command added
+/// to the family is targeted the same way without deciding anything for itself.
+///
+/// `--root` and `--uuid` share a group that admits one member, so exactly one route is
+/// ever named; under `--uuid`, `--root` is necessarily its own default and is therefore
+/// the current-directory Package the identity resolves against.
+fn order_route(target: &cli::OrderTarget) -> commands::order::Target<'_> {
+    match &target.uuid {
+        Some(order_id) => commands::order::Target::Identity {
+            package_root: &target.root,
+            order_id,
+        },
+        None => commands::order::Target::Directory(&target.root),
     }
 }
 

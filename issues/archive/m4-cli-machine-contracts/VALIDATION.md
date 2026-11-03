@@ -300,7 +300,7 @@ documented position rather than absent. The bar the owner reserved — a machine
 lies, data lost, or a closed decision violated in substance — is approached but not reached.
 
 **Recommended disposition: fix before M5 implementation begins**, and not as a line item
-inside [M5 Ticket 001](../m5-search-and-native-services/tickets/001-one-answer-about-a-link-a-count-and-a-quantity.md),
+inside [M5 Ticket 001](../../implementation/m5-search-and-native-services/tickets/001-one-answer-about-a-link-a-count-and-a-quantity.md),
 whose subject is a different family. It is plausibly a small change: one conflict declaration
 moved to the level `--root` lives at, plus a test that exercises **both** argument positions.
 The generated help sentence becomes true rather than aspirational at the same moment, which

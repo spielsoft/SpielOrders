@@ -410,7 +410,7 @@ fn dry_run_is_complete_and_has_no_filesystem_or_identity_effect() {
     )
     .unwrap();
     let input = OrderAdoptionInput::new(" Vacuum parts ", "2020-01-02", OrderStatus::Hold)
-        .vendor_id("02b97a0f-d93c-405f-96a4-1e8768cc9d88")
+        .vendor_name("Nethermoor")
         .orderer(" Ada ")
         .ordering_institution(" Northwind ")
         .currency("USD")
@@ -535,9 +535,7 @@ fn managed_partial_invalid_and_damaged_candidates_reject_before_identity_or_writ
         plan_order_adoption(
             tree.path(),
             &invalid,
-            &input
-                .clone()
-                .vendor_id("d598df36-d47a-4efb-8075-f4af337ef0a8"),
+            &input.clone().vendor_name("Nonesuch Optics"),
             &RealFileSystem,
         ),
         Err(OrderAdoptionPlanError::UnknownVendor { .. })

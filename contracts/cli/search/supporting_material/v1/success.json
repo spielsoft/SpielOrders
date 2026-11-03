@@ -1,0 +1,45 @@
+{
+  "contract": "spielorders.search.supporting_material",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>"
+  },
+  "data": {
+    "query": "coherence",
+    "provider": "spotlight",
+    "complete": true,
+    "partial_reason": null,
+    "orders": [
+      {
+        "order": {
+          "directory": {
+            "absolute_path": "<PACKAGE_ROOT>/Orders/Laser_components",
+            "package_relative_path": "Orders/Laser_components"
+          },
+          "order_id": "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
+          "title": "Laser components",
+          "date_ordered": "2026-07-19",
+          "status": "ordered",
+          "vendor_id": null,
+          "vendor": null
+        },
+        "files": [
+          {
+            "location": {
+              "absolute_path": "<PACKAGE_ROOT>/Orders/Laser_components/quote-coherence.txt",
+              "package_relative_path": "Orders/Laser_components/quote-coherence.txt"
+            },
+            "filename": "quote-coherence.txt",
+            "kind": "txt",
+            "modified_unix_seconds": 1784937600,
+            "rank": null
+          }
+        ]
+      }
+    ],
+    "diagnostics": []
+  },
+  "diagnostics": [],
+  "error": null
+}

@@ -25,6 +25,7 @@ pub(crate) mod order;
 pub(crate) mod package;
 pub(crate) mod repair;
 pub(crate) mod repair_suggestion;
+pub(crate) mod search;
 pub(crate) mod shared;
 pub(crate) mod upgrade;
 pub(crate) mod validate;

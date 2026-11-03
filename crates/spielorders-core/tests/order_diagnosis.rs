@@ -74,7 +74,7 @@ fn adopted_order(root: &Path, basename: &str, uuid: &str, vendor: Option<&str>) 
     fs::write(directory.join("quote.bin"), SUPPORTING_A).unwrap();
     let mut input = OrderAdoptionInput::new("Laser components", "2026-08-22", OrderStatus::Hold);
     if let Some(vendor) = vendor {
-        input = input.vendor_id(vendor);
+        input = input.vendor_name(vendor);
     }
     let plan = plan_order_adoption(root, &directory, &input, &RealFileSystem)
         .expect("the fixture directory can be adopted");
@@ -184,12 +184,12 @@ fn every_damaged_order_cause_the_integrity_decision_enumerates_is_diagnosed() {
         ("duplicate id", DiagnosticCode::OrderIdDuplicate),
     ] {
         let (_tree, root) = initialized_package("diagnosis-enumeration");
-        let vendor = created_vendor(&root, "Tarnwick");
+        created_vendor(&root, "Tarnwick");
         let directory = adopted_order(
             &root,
             "2026_08_22_Laser_components",
             ORDER_ID,
-            Some(&vendor),
+            Some("Tarnwick"),
         );
         damage(&directory, shape, &root);
 
@@ -238,12 +238,12 @@ fn an_unreadable_record_is_diagnosed_as_the_decision_names_it() {
 #[test]
 fn a_healthy_order_reports_no_diagnostic_and_no_case() {
     let (_tree, root) = initialized_package("diagnosis-healthy");
-    let vendor = created_vendor(&root, "Tarnwick");
+    created_vendor(&root, "Tarnwick");
     let directory = adopted_order(
         &root,
         "2026_08_22_Laser_components",
         ORDER_ID,
-        Some(&vendor),
+        Some("Tarnwick"),
     );
 
     let diagnosis =
@@ -322,10 +322,10 @@ fn every_actionable_family_offers_only_the_actions_a_repair_ticket_owns() {
     // managed-metadata/staging repair; the Vendor, duplicate-identity, and locator
     // resolutions are owned by the explicit semantic repair.
     let (_tree, root) = initialized_package("diagnosis-actionable");
-    let vendor = created_vendor(&root, "Tarnwick");
+    created_vendor(&root, "Tarnwick");
 
     // Parseable but schema-invalid metadata: one confirmed complete replacement.
-    let directory = adopted_order(&root, "2026_08_22_Shape", ORDER_ID, Some(&vendor));
+    let directory = adopted_order(&root, "2026_08_22_Shape", ORDER_ID, Some("Tarnwick"));
     damage(&directory, "invalid shape", &root);
     let diagnosis = diagnose_order(&directory, &RealFileSystem).unwrap();
     assert_eq!(
@@ -367,8 +367,8 @@ fn every_actionable_family_offers_only_the_actions_a_repair_ticket_owns() {
     // An unresolved Vendor Reference: exactly the three authorized resolutions, and
     // never an inferred one.
     let (_tree, root) = initialized_package("diagnosis-actionable-vendor");
-    let vendor = created_vendor(&root, "Tarnwick");
-    let directory = adopted_order(&root, "2026_08_22_Vendor", ORDER_ID, Some(&vendor));
+    created_vendor(&root, "Tarnwick");
+    let directory = adopted_order(&root, "2026_08_22_Vendor", ORDER_ID, Some("Tarnwick"));
     damage(&directory, "unresolved vendor", &root);
     let diagnosis = diagnose_order(&directory, &RealFileSystem).unwrap();
     assert_eq!(
@@ -381,7 +381,7 @@ fn every_actionable_family_offers_only_the_actions_a_repair_ticket_owns() {
     );
     assert_eq!(
         RepairAction::AssignExistingVendor.required_values(),
-        ["vendor_id"]
+        ["vendor"]
     );
     assert_eq!(
         RepairAction::CreateAndAssignVendor.required_values(),
@@ -459,12 +459,12 @@ fn diagnosis_writes_nothing_for_any_shape_and_never_reads_supporting_material() 
         "duplicate id",
     ] {
         let (_tree, root) = initialized_package("diagnosis-read-only");
-        let vendor = created_vendor(&root, "Tarnwick");
+        created_vendor(&root, "Tarnwick");
         let directory = adopted_order(
             &root,
             "2026_08_22_Laser_components",
             ORDER_ID,
-            Some(&vendor),
+            Some("Tarnwick"),
         );
         if shape != "healthy" {
             damage(&directory, shape, &root);
@@ -515,9 +515,14 @@ fn diagnosis_writes_nothing_for_any_shape_and_never_reads_supporting_material() 
 #[test]
 fn diagnosing_one_order_leaves_its_siblings_usable_and_its_own_bytes_untouched() {
     let (_tree, root) = initialized_package("diagnosis-isolation");
-    let vendor = created_vendor(&root, "Tarnwick");
-    let healthy = adopted_order(&root, "2026_08_22_Healthy", OTHER_ORDER_ID, Some(&vendor));
-    let damaged = adopted_order(&root, "2026_08_22_Damaged", ORDER_ID, Some(&vendor));
+    created_vendor(&root, "Tarnwick");
+    let healthy = adopted_order(
+        &root,
+        "2026_08_22_Healthy",
+        OTHER_ORDER_ID,
+        Some("Tarnwick"),
+    );
+    let damaged = adopted_order(&root, "2026_08_22_Damaged", ORDER_ID, Some("Tarnwick"));
     damage(&damaged, "semantically invalid", &root);
     let damaged_before = fs::read(record(&damaged)).unwrap();
 
@@ -610,9 +615,9 @@ fn case_handles_are_deterministic_for_a_snapshot_and_disappear_once_corrected() 
 #[test]
 fn a_scoped_diagnosis_matches_the_package_wide_evidence_for_the_same_order() {
     let (_tree, root) = initialized_package("diagnosis-parity");
-    let vendor = created_vendor(&root, "Tarnwick");
-    let subject = adopted_order(&root, "2026_08_22_Subject", ORDER_ID, Some(&vendor));
-    let other = adopted_order(&root, "2026_08_22_Other", OTHER_ORDER_ID, Some(&vendor));
+    created_vendor(&root, "Tarnwick");
+    let subject = adopted_order(&root, "2026_08_22_Subject", ORDER_ID, Some("Tarnwick"));
+    let other = adopted_order(&root, "2026_08_22_Other", OTHER_ORDER_ID, Some("Tarnwick"));
     damage(&subject, "semantically invalid", &root);
     damage(&other, "stale locator", &root);
 
@@ -723,7 +728,7 @@ fn a_changed_unresolved_vendor_produces_a_different_handle_at_the_same_path() {
         &root,
         "2026_08_22_Laser_components",
         ORDER_ID,
-        Some(&vendor),
+        Some("Tarnwick"),
     );
 
     // The same Order, at the same path, referencing two different Vendors that both

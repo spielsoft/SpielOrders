@@ -18,6 +18,7 @@ use crate::{
         FileSystemEntryKind, NewFileLinkOutcome, UuidGenerator,
     },
     readme::{Location, located_in_package, package_relative_path_text},
+    vendors::vendor_by_name,
 };
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -72,7 +73,9 @@ pub struct OrderAdoptionInput {
     title: String,
     date_ordered: String,
     status: OrderStatus,
-    vendor_id: Option<String>,
+    /// The Vendor Name that selects this Order's Vendor. See
+    /// [`crate::creation::OrderCreationInput`], whose field this shares its rule with.
+    vendor_name: Option<String>,
     orderer: Option<String>,
     ordering_institution: Option<String>,
     currency: Option<String>,
@@ -101,7 +104,7 @@ impl OrderAdoptionInput {
             .status()
             .expect("the required Order Status was found above");
         let mut input = Self::new(title, date_ordered, status);
-        input.vendor_id = facts.optional("vendor_id");
+        input.vendor_name = facts.optional("vendor");
         input.orderer = facts.optional("orderer");
         input.ordering_institution = facts.optional("ordering_institution");
         input.currency = facts.optional("currency");
@@ -119,7 +122,7 @@ impl OrderAdoptionInput {
             title: title.into(),
             date_ordered: date_ordered.into(),
             status,
-            vendor_id: None,
+            vendor_name: None,
             orderer: None,
             ordering_institution: None,
             currency: None,
@@ -129,8 +132,8 @@ impl OrderAdoptionInput {
         }
     }
 
-    pub fn vendor_id(mut self, value: impl Into<String>) -> Self {
-        self.vendor_id = Some(value.into());
+    pub fn vendor_name(mut self, value: impl Into<String>) -> Self {
+        self.vendor_name = Some(value.into());
         self
     }
 
@@ -375,8 +378,10 @@ pub enum OrderAdoptionPlanError<E> {
         location: Location,
     },
     InvalidFacts,
+    /// No Vendor of this Package carries the Name the adoption assigned. Adoption uses an
+    /// already existing Vendor; `add-vendor` is what creates one.
     UnknownVendor {
-        vendor_id: String,
+        name: String,
     },
     StagingCollision {
         location: Location,
@@ -676,21 +681,22 @@ pub fn plan_order_adoption<F: FileSystem>(
     let package_root_locator = std::iter::repeat_n("..", orders_relative.split('/').count() + 1)
         .collect::<Vec<_>>()
         .join("/");
-    let vendor_id = input
-        .vendor_id
+    // The Name selects; the record stores what it selected. See
+    // [`crate::creation::plan_order_creation`], which resolves it the same way.
+    let vendor = input
+        .vendor_name
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty());
-    if let Some(vendor_id) = vendor_id
-        && !package
-            .vendors()
-            .iter()
-            .any(|vendor| vendor.vendor_id.as_str() == vendor_id)
-    {
-        return Err(OrderAdoptionPlanError::UnknownVendor {
-            vendor_id: vendor_id.into(),
-        });
-    }
+        .filter(|value| !value.is_empty())
+        .map(|name| {
+            vendor_by_name(name, package.vendors()).ok_or_else(|| {
+                OrderAdoptionPlanError::UnknownVendor {
+                    name: name.to_owned(),
+                }
+            })
+        })
+        .transpose()?;
+    let vendor_id = vendor.map(|vendor| vendor.vendor_id.as_str());
     let reusable_values = OrderAdoptionReusableValues {
         orderer: canonical_reusable(input.orderer.as_deref(), package.orderers()),
         ordering_institution: canonical_reusable(
@@ -824,14 +830,7 @@ pub fn plan_order_adoption<F: FileSystem>(
                 None => Some(String::new()),
             },
         ),
-        vendor: vendor_id
-            .and_then(|vendor_id| {
-                package
-                    .vendors()
-                    .iter()
-                    .find(|vendor| vendor.vendor_id.as_str() == vendor_id)
-            })
-            .cloned(),
+        vendor: vendor.cloned(),
         root,
         directory,
         package_root_locator,

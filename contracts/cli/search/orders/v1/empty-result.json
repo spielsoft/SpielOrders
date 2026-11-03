@@ -1,0 +1,14 @@
+{
+  "contract": "spielorders.search.orders",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>"
+  },
+  "data": {
+    "query": "zirconium",
+    "orders": []
+  },
+  "diagnostics": [],
+  "error": null
+}

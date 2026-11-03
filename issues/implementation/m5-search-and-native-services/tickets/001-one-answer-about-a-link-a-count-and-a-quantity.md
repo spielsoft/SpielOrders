@@ -1,6 +1,10 @@
 ---
 title: Answer one way about a link, and state a count and a quantity as they are
-status: ready for agent
+status: closed
+assignee: claude-opus-5
+claimed_at: 2026-09-06T21:10:00Z
+closed_at: 2026-09-06T23:58:00Z
+review_start: 9e7bd82189ec86626d2cf4a0ea8f39e38c5ccd76
 parent: M5 — Search and native platform services
 labels:
   - implementation:m5
@@ -23,18 +27,17 @@ prints about a count, a quantity, or a wrong-kind root says what is actually so.
 ## Blocking
 
 Unblocked. Opened by the fourth run of the
-[M4 acceptance gate](../../m4-cli-machine-contracts/tickets/016-integrate-m4-acceptance.md),
+[M4 acceptance gate](../../../archive/m4-cli-machine-contracts/tickets/016-integrate-m4-acceptance.md),
 whose milestone-wide review returned every item below. A gate that repaired what it found
 would have stopped measuring, so it carried them here and accepted M4.
 
 ## Scope
 
-- **One answer about a link named as a root.** `init` refuses a root that resolves through
-  a link, `adopt-order` refuses a link candidate saying links are never followed, and
-  validation reports a link standing in the Orders Directory as ignored — while every
-  `order` command and every Package-level command resolves one and acts on what stands
-  behind it, disposal of a whole Order Directory included. Settle which answer is right,
-  make every command give that one, and say so where the decisions are read.
+- **A link named as a root is refused, everywhere, under one code.** Links are never
+  followed and never adopted. `init` and `adopt-order` already refuse one; every
+  Package-level command and every `order` command resolves one and acts on what stands
+  behind it, disposal of a whole Order Directory included, and those are the defect. The
+  sentence calling a link in the Orders Directory ignored says what it is ignored *for*.
 - **A count that names one directory more than exist.** The duplicate-Order-ID explanation
   adds one to a list that already holds every conflicting directory, so two directories are
   reported as three. The user picks the surviving Order from that sentence.
@@ -48,18 +51,19 @@ would have stopped measuring, so it carried them here and accepted M4.
   exist.
 - **A total of negative zero.** An Order with no Items reports its Order Total as `-0.0`,
   which is what an empty sum of that kind is and not what a total looks like.
-- **Ask the owner one question**: an Order's Vendor can be assigned only by the Vendor's
-  identity, in a surface that reserves identities for `--verbose`, while Vendor Names are
-  the ordinary Vendor selectors everywhere else. Do not change the assignment vocabulary
-  before that ruling.
+- **`vendor=` takes a Vendor Name.** Vendor Names are the ordinary Vendor selectors,
+  resolved trimmed and case-insensitively, unique within a Package, and resolution ignores
+  visibility; machine responses keep the identities. An assignment reachable only by
+  identity, in a surface that holds identities back to `--verbose`, is the defect. No
+  identity-based assignment survives on the command line.
 
 ## Acceptance criteria
 
-- A link named as a root reaches one outcome across `init`, the Package-level commands, and
-  every `order` command, and a test proves the same path gets the same answer from each.
-- No whole Order Directory is disposed of, renamed, or edited through a path the same
-  Package reports as ignored, unless the settled answer is that it may be — in which case
-  the sentence calling it ignored says what it is ignored *for*.
+- A link named as a root is refused under one code by `init`, by the Package-level
+  commands, and by every `order` command, and a test proves the same path gets the same
+  answer from each.
+- No whole Order Directory is disposed of, renamed, or edited through a link, and the
+  sentence calling a link ignored says what it is ignored *for*.
 - The duplicate-Order-ID explanation names exactly as many directories as carry that ID,
   proven for two and for three, and a test pins the sentence.
 - A stored Quantity is displayed as the stored value; only monetary values pass through the
@@ -69,8 +73,8 @@ would have stopped measuring, so it carried them here and accepted M4.
 - An Order with no Items reports a total of zero, and the recorded cells that carry the
   present value are re-recorded at version 1.
 - Every response contract is still version 1, and `metadata_version` is still 1.
-- The owner's answer on the Vendor selector is recorded in the decision it belongs to, and
-  this ticket implements it or names the ticket that will.
+- An Order's Vendor is assignable by Vendor Name, matching trimmed and case-insensitively
+  and resolving a Hidden Vendor like any other, and no identity-based assignment remains.
 
 ## Exclusions
 
@@ -79,3 +83,20 @@ would have stopped measuring, so it carried them here and accepted M4.
 - Advancing any contract version. Version 1 is edited in place until the owner declares the
   CLI and the agent support tooling released.
 - Re-litigating anything the M4 gate accepted.
+
+## Result
+
+A `--root` naming a link is refused under `root_is_a_link` by `init`, by every
+Package-level command, and by every `order` command, before anything behind it is
+opened; a file named as an `order` root reaches `order_root_unmanaged` across the
+family, and no message names a port operation. The duplicate-Order-ID sentence counts
+the directories that carry the ID, an Order Item's Quantity is displayed as the record
+stores it, an Order with no Items totals zero, and a link in the Orders Directory is
+reported as ignored for Order discovery. `vendor=` takes a Vendor Name — trimmed,
+case-insensitive, Hidden Vendors included — for `add-order`, `adopt-order`,
+`order edit`, and `repair`'s `assign_existing_vendor`; no identity-based assignment
+remains. Six recorded cells are re-recorded in place at version 1 from real runs.
+
+The whole-surface sweeps are in `crates/spielorders-cli/tests/cross_command_conformance.rs`;
+the rest in `displayed_monetary_values.rs`, `validate_and_index.rs`,
+`order_and_item_edits.rs`, and `order_creation_and_adoption.rs`.

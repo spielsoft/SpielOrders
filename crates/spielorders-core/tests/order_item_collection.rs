@@ -986,7 +986,7 @@ fn surrounded_order(label: &str) -> (TemporaryTree, PathBuf, String) {
     fs::write(directory.join("Quotes/drawing.bin"), SUPPORTING_B).unwrap();
 
     let mut input = OrderAdoptionInput::new("Laser components", "2026-08-22", OrderStatus::Hold)
-        .vendor_id(&vendor)
+        .vendor_name("Tarnwick")
         .orderer("Ada Lovelace")
         .ordering_institution("Northwind")
         .currency("USD")

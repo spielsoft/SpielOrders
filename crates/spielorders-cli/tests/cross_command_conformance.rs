@@ -22,11 +22,11 @@
 
 use crate::support::{
     ENVELOPE, Invocation, NEWEST_ORDER_ID, TemporaryTree, directory_that_is_not_a_root,
-    entry_names, fixture_directory, managed_snapshot, order_directory,
-    package_with_an_adoption_candidate, package_with_three_contacts, populated_package, response,
-    unmanaged_directory,
+    entry_names, file_outside_any_package, fixture_directory, link_to, managed_snapshot,
+    order_directory, package_with_an_adoption_candidate, package_with_three_contacts,
+    populated_package, response, supporting_material_provider, unmanaged_directory,
 };
-use spielorders_cli::{cli::GLOBAL_EXCLUSIONS, contract::ResponseContract};
+use spielorders_cli::{cli::exclusions, contract::ResponseContract};
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
@@ -182,11 +182,17 @@ const DECIDED_COMMANDS: &[(&[&str], Disposition)] = &[
         &["vendor", "contact", "remove"],
         Disposition::Own(ResponseContract::VendorContactRemove),
     ),
-    (&["search", "orders"], Disposition::Routed("M5")),
-    (&["search", "vendors"], Disposition::Routed("M5")),
+    (
+        &["search", "orders"],
+        Disposition::Own(ResponseContract::SearchOrders),
+    ),
+    (
+        &["search", "vendors"],
+        Disposition::Own(ResponseContract::SearchVendors),
+    ),
     (
         &["search", "supporting-material"],
-        Disposition::Routed("M5"),
+        Disposition::Own(ResponseContract::SearchSupportingMaterial),
     ),
     (&["validate"], Disposition::Own(ResponseContract::Validate)),
     (&["repair"], Disposition::Own(ResponseContract::Repair)),
@@ -399,6 +405,8 @@ fn matrix(contract: ResponseContract) -> [(&'static str, Supply); 5] {
         | ResponseContract::OrderShow
         | ResponseContract::OrderReadme
         | ResponseContract::VendorShow
+        | ResponseContract::SearchOrders
+        | ResponseContract::SearchVendors
         | ResponseContract::Validate => READ,
         // The mutations of a record that exists, of a collection embedded in one, and of a
         // whole Order Directory.
@@ -498,6 +506,18 @@ fn matrix(contract: ResponseContract) -> [(&'static str, Supply); 5] {
             (
                 "rejected",
                 Supply::Unreachable("index status writes nothing at all"),
+            ),
+        ],
+        // The nonempty response is captured with the real index; its replay does not
+        // depend on the host index having reached a temporary Package.
+        ResponseContract::SearchSupportingMaterial => [
+            ("success", Supply::Recorded),
+            ("empty-result", Supply::Recorded),
+            ("warning", Supply::Recorded),
+            ("invalid", Supply::Recorded),
+            (
+                "rejected",
+                Supply::Unreachable("a read refuses no mutation"),
             ),
         ],
         // The warning every other mutation carries is that its canonical write succeeded
@@ -1148,6 +1168,30 @@ fn shape(contract: ResponseContract) -> Shape {
             arguments: &[],
             mutating: true,
         },
+        // The keyword is a term one Order of the fixture Package carries and no Vendor
+        // does, and the Vendor search's is the other way round: each reaches an answer,
+        // and each reaches one carrying something.
+        ResponseContract::SearchOrders => Shape {
+            line: &["search", "orders"],
+            subject: Subject::PackageRoot,
+            arguments: &["laser"],
+            mutating: false,
+        },
+        ResponseContract::SearchVendors => Shape {
+            line: &["search", "vendors"],
+            subject: Subject::PackageRoot,
+            arguments: &["tarnwick"],
+            mutating: false,
+        },
+        // The query is a word nothing in the fixture Package carries, so what the platform
+        // index holds cannot decide whether this run answers — which is what makes it a run
+        // every claim below can be made over.
+        ResponseContract::SearchSupportingMaterial => Shape {
+            line: &["search", "supporting-material"],
+            subject: Subject::PackageRoot,
+            arguments: &["zirconium"],
+            mutating: false,
+        },
     }
 }
 
@@ -1258,12 +1302,67 @@ fn invocation_at(
     run.rooted_at(root)
 }
 
+/// Whether a run of `contract` reaches an answer on the platform this build is for.
+///
+/// **One command's answer is a platform's to give**, and only one: `search
+/// supporting-material` asks a native index, so a build for a platform with no index answers
+/// with the state that prevented it instead — see `tests/supporting_material_search.rs`,
+/// which holds both sentences and pins which one this build gives. Every other command reads
+/// or writes the Package's own records and answers on every platform.
+///
+/// The claims below branch on this rather than passing over the command, because what a
+/// document owes — its envelope, that envelope's order, its key style, and its identity — is
+/// owed by a failure exactly as much as by an answer.
+fn answers_here(contract: ResponseContract) -> bool {
+    contract != ResponseContract::SearchSupportingMaterial
+        || supporting_material_provider().is_some()
+}
+
 /// Every contract this executable can emit, except the one no command line reaches.
 fn commanded() -> impl Iterator<Item = ResponseContract> {
     ResponseContract::REGISTERED
         .iter()
         .copied()
         .filter(|contract| shape(*contract).subject != Subject::NoCommand)
+}
+
+/// Every command line a caller can write, with the contract it answers under.
+///
+/// **Wider than [`commanded`]**, which walks contracts: a command line that renders
+/// another's contract has no entry of its own there, so a claim made per contract passes
+/// over `order item list` and `vendor contact list` entirely. A claim about what a
+/// *command* does with the root it was pointed at is about the line a caller writes, and
+/// both of those are lines a caller writes.
+///
+/// The subject and the arguments come from the contract the line answers under, which is
+/// what makes them the same run under a different spelling — the property
+/// [`DECIDED_COMMANDS`] records by calling one `Shared`.
+fn command_lines() -> impl Iterator<Item = (&'static [&'static str], ResponseContract)> {
+    DECIDED_COMMANDS
+        .iter()
+        .filter_map(|(line, disposition)| match disposition {
+            Disposition::Own(contract) | Disposition::Shared(contract) => Some((*line, *contract)),
+            Disposition::Routed(_) => None,
+        })
+        .filter(|(_, contract)| shape(*contract).subject != Subject::NoCommand)
+}
+
+/// One command line as the caller writes it, targeted somewhere else.
+fn line_at(
+    line: &[&str],
+    contract: ResponseContract,
+    prepared: &Prepared,
+    root: &std::path::Path,
+) -> Invocation {
+    let shape = shape(contract);
+    let mut run = Invocation::new(line);
+    if let Some(positional) = &prepared.positional {
+        run = run.argument(positional);
+    }
+    for argument in shape.arguments {
+        run = run.argument(argument);
+    }
+    run.rooted_at(root)
 }
 
 // ---------------------------------------------------------------------------
@@ -1286,11 +1385,17 @@ fn every_command_answers_with_one_document_in_the_one_envelope() {
         let outcome = invocation(contract, &prepared).argument("--json").run();
         let document = response(&outcome);
         let name = contract.name();
+        let answers = answers_here(contract);
 
         assert_eq!(
             outcome.status,
-            Some(0),
-            "{name}: this run reaches an answer, and did not: {}",
+            Some(if answers { 0 } else { 1 }),
+            "{name}: this run reaches {}, and did not: {}",
+            if answers {
+                "an answer"
+            } else {
+                "the state that prevented one"
+            },
             outcome.stdout_text()
         );
         assert_eq!(document["contract"], name, "{name}");
@@ -1321,14 +1426,16 @@ fn every_command_answers_with_one_document_in_the_one_envelope() {
             previous = at;
         }
 
-        assert_eq!(document["ok"], true, "{name}: `ok` is the exit status");
-        assert!(
+        assert_eq!(document["ok"], answers, "{name}: `ok` is the exit status");
+        assert_eq!(
             document["error"].is_null(),
-            "{name}: an answer carries no error"
+            answers,
+            "{name}: an answer carries no error, and a failure carries one"
         );
-        assert!(
+        assert_eq!(
             !document["data"].is_null(),
-            "{name}: an answer carries its payload"
+            answers,
+            "{name}: an answer carries its payload, and a failure carries none"
         );
         assert!(
             document["diagnostics"].is_array(),
@@ -1441,6 +1548,122 @@ fn no_command_finds_its_root_by_searching_an_ancestor() {
             outcome.stdout_text()
         );
         assert_eq!(document["ok"], false, "{name}");
+    }
+}
+
+/// No command follows a link named as its root, and every one of them says so the same way.
+///
+/// **Links are never followed and never adopted**, so a path that is one is refused
+/// wherever it is named — and the whole point of naming it a root is that the command
+/// would otherwise act on whatever stands behind it. `order remove` through a link
+/// disposes of a whole Order Directory; `package show` through one reports a Package the
+/// caller did not name.
+///
+/// Swept over every command rather than tested on a few, because one code for all of them
+/// is the claim: a command that grew its own answer would be a second thing a consumer has
+/// to branch on, and a command that grew no answer at all would still be following links.
+#[test]
+fn no_command_follows_a_link_named_as_its_root() {
+    for (line, contract) in command_lines() {
+        let name = line.join(" ");
+        let label = format!("root-link-{}", name.replace(' ', "-"));
+        let prepared = prepare(contract, &label);
+        let (_link_tree, link) = link_to(&label, &prepared.root);
+        let outcome = line_at(line, contract, &prepared, &link)
+            .argument("--json")
+            .run();
+        let document = response(&outcome);
+
+        assert_eq!(
+            outcome.status,
+            Some(1),
+            "{name}: a link is never followed: {}",
+            outcome.stdout_text()
+        );
+        assert_eq!(
+            document["error"]["code"], "root_is_a_link",
+            "{name}: {document}"
+        );
+        assert_eq!(
+            document["error"]["paths"][0]["path"],
+            link.to_str().expect("the test path is UTF-8"),
+            "{name}: the refusal names the link, not what stands behind it"
+        );
+    }
+}
+
+/// Nothing behind a link named as a root is read, renamed, disposed of, or edited.
+///
+/// The companion claim to the codes above: a refusal that answered correctly and had
+/// already acted would be worse than no refusal at all. Every mutating command is run
+/// through a link at the Package it would change, and the Package is compared byte for
+/// byte — the same snapshot the dry-run sweep uses, for the same reason.
+#[test]
+fn nothing_behind_a_link_named_as_a_root_is_touched() {
+    for contract in commanded().filter(|contract| shape(*contract).mutating) {
+        let label = format!("root-link-effects-{}", contract.name().replace('.', "-"));
+        let prepared = prepare(contract, &label);
+        let (_link_tree, link) = link_to(&label, &prepared.root);
+        let before = managed_snapshot(&prepared.package_root);
+
+        let outcome = invocation_at(contract, &prepared, &link)
+            .argument("--json")
+            .run();
+
+        assert_eq!(outcome.status, Some(1), "{}", contract.name());
+        assert_eq!(
+            managed_snapshot(&prepared.package_root),
+            before,
+            "{}: nothing behind the link was created, renamed, replaced, or disposed of",
+            contract.name()
+        );
+    }
+}
+
+/// A wrong-kind `order` root reaches one code, and no message names a port operation.
+///
+/// **A file named as an Order Directory is one refusal, not two.** The reads reported it
+/// as a Package they could not read — quoting an internal port operation and a path under
+/// the file that cannot exist — while the validating commands answered that the root is
+/// not an Order Directory. A consumer branching on the code got a different answer
+/// depending on which `order` command it ran.
+#[test]
+fn a_wrong_kind_order_root_reaches_one_code_across_the_family() {
+    for (line, contract) in
+        command_lines().filter(|(_, contract)| shape(*contract).subject == Subject::OrderRoot)
+    {
+        let name = line.join(" ");
+        let label = format!("order-root-file-{}", name.replace(' ', "-"));
+        let prepared = prepare(contract, &label);
+        let (_file_tree, file) = file_outside_any_package(&label);
+        let outcome = line_at(line, contract, &prepared, &file)
+            .argument("--json")
+            .run();
+        let document = response(&outcome);
+
+        assert_eq!(
+            outcome.status,
+            Some(1),
+            "{name}: a file is not an Order Directory: {}",
+            outcome.stdout_text()
+        );
+        assert_eq!(
+            document["error"]["code"], "order_root_unmanaged",
+            "{name}: {document}"
+        );
+        let message = document["error"]["message"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{name}: a failure carries a message"));
+        for operation in ["observe_kind", "canonicalize", "list_directory"] {
+            assert!(
+                !message.contains(operation),
+                "{name}: no message names the port operation `{operation}`: {message}"
+            );
+        }
+        assert!(
+            !message.contains(".spielorders"),
+            "{name}: and none names a path under a file that cannot exist: {message}"
+        );
     }
 }
 
@@ -1586,7 +1809,10 @@ fn interrupted(contract: ResponseContract) -> Interrupted {
         | ResponseContract::OrderValidate
         | ResponseContract::VendorShow
         | ResponseContract::Validate
-        | ResponseContract::IndexStatus => {
+        | ResponseContract::IndexStatus
+        | ResponseContract::SearchOrders
+        | ResponseContract::SearchVendors
+        | ResponseContract::SearchSupportingMaterial => {
             Interrupted::Unreached("a read replaces no record, so it has no commit to refuse")
         }
     }
@@ -1720,7 +1946,11 @@ fn no_read_offers_to_withhold_a_mutation_it_does_not_have() {
     }
 }
 
-/// `--quiet` says nothing on success, for every command.
+/// `--quiet` says nothing on success, for every command, and still says what failed.
+///
+/// The second half is the one a caller depends on where a command cannot answer: silence on
+/// both streams would read as an answer, so an error is retained on standard error whatever
+/// the output mode.
 #[test]
 fn quiet_says_nothing_on_success_for_every_command() {
     for contract in commanded() {
@@ -1728,39 +1958,52 @@ fn quiet_says_nothing_on_success_for_every_command() {
         let prepared = prepare(contract, &label);
         let outcome = invocation(contract, &prepared).argument("--quiet").run();
         let name = contract.name();
+        let answers = answers_here(contract);
 
-        assert_eq!(outcome.status, Some(0), "{name}: {}", outcome.stderr_text());
+        assert_eq!(
+            outcome.status,
+            Some(if answers { 0 } else { 1 }),
+            "{name}: {}",
+            outcome.stderr_text()
+        );
         assert_eq!(outcome.stdout, b"", "{name}: no output on success");
+        assert_eq!(
+            outcome.stderr.is_empty(),
+            answers,
+            "{name}: `--quiet` withholds an answer and keeps an error"
+        );
     }
 }
 
-/// Every pair of global options one exclusion covers, over every command.
+/// Every pair of options one exclusion covers, over every command.
 ///
-/// **Read out of [`GLOBAL_EXCLUSIONS`] rather than transcribed**, so the next global
-/// option added to one of those sets is swept across the whole command surface without
-/// anyone remembering that this test is here.
-fn excluded_pairs() -> impl Iterator<Item = (&'static str, &'static str)> {
-    GLOBAL_EXCLUSIONS.iter().flat_map(|exclusion| {
-        exclusion.iter().enumerate().flat_map(|(index, first)| {
-            exclusion[index + 1..]
-                .iter()
-                .map(move |second| (*first, *second))
-        })
-    })
+/// **Read out of the parser's own groups rather than transcribed** — see
+/// [`exclusions`] — so an option added to one of them is swept across the whole command
+/// surface without anyone remembering that this test is here.
+fn excluded_pairs() -> Vec<(String, String)> {
+    let mut pairs = Vec::new();
+    for exclusion in exclusions() {
+        for (index, first) in exclusion.iter().enumerate() {
+            for second in &exclusion[index + 1..] {
+                pairs.push((first.clone(), second.clone()));
+            }
+        }
+    }
+    pairs
 }
 
-/// What a command line writes after one global option, where naming it takes a value.
+/// What a command line writes after one excluded option, where naming it takes a value.
 ///
-/// A registry of exclusions says which options exclude each other and not how a caller
-/// writes one, so an option missing here fails by name below rather than being skipped.
-/// `--root` is absent because every line in this sweep already names it once.
+/// A group says which options exclude each other and not what a caller writes after one,
+/// so an option missing here fails by name below rather than being skipped. `--root` is
+/// absent because every line in this sweep already names it once.
 fn value_after(option: &str) -> Option<&'static str> {
     match option {
         "json" | "quiet" | "verbose" => None,
         "uuid" => Some(NEWEST_ORDER_ID),
         other => panic!(
-            "`--{other}` excludes another global option and nothing here says what a \
-             command line writes after it"
+            "`--{other}` excludes another option and nothing here says what a command \
+             line writes after it"
         ),
     }
 }
@@ -1772,27 +2015,25 @@ fn value_after(option: &str) -> Option<&'static str> {
 /// no command has a response to give.
 ///
 /// That, and only that, is what this asserts over the whole command surface. A pair whose
-/// options one command does not both declare — `--uuid` is the `order` family's — is
+/// options one command does not both declare — `--uuid` is the `order` commands' — is
 /// refused there as an unrecognized option instead, which is the same exit and the same
-/// identity for a different reason. **Which refusal each pair earns, and in which
-/// placements, is asserted where that pair is written**: the exclusion itself is decided
-/// once for every command, so it is the placements rather than the commands that can hide
-/// one.
+/// identity for a different reason. **Which refusal each pair earns is asserted where that
+/// pair is declared**, in the unit tests beside the group that declares it.
 ///
 /// Every run is still rooted at a prepared subject, even though the claim is that none of
 /// them reaches one. A command line that named no root would inherit this process's
 /// working directory, so the day an exclusion regressed the failure would be a mutation of
 /// the repository this test is checked out in rather than a red test.
 #[test]
-fn no_command_runs_while_its_line_names_two_excluded_globals() {
+fn no_command_runs_while_its_line_names_two_excluded_options() {
     for contract in commanded() {
-        let label = format!("excluded-globals-{}", contract.name().replace('.', "-"));
+        let label = format!("excluded-options-{}", contract.name().replace('.', "-"));
         let prepared = prepare(contract, &label);
         let name = contract.name();
 
         for (first, second) in excluded_pairs() {
             let mut run = invocation(contract, &prepared);
-            for option in [first, second] {
+            for option in [&first, &second] {
                 // `--root` is written once, by `invocation`, and naming it twice is a
                 // usage error of its own — so the exclusion that names it needs only its
                 // partner written out here.
@@ -1827,22 +2068,19 @@ fn no_command_runs_while_its_line_names_two_excluded_globals() {
     }
 }
 
-/// `--version` is one answer for the executable, in every mode.
+/// `--version` is one answer for the executable.
+///
+/// It names no command, so it carries no output mode either: the modes belong to the
+/// commands, and `--version` is a reference request rather than a modifier.
 #[test]
 fn the_executable_reports_its_version_as_an_answer() {
-    for mode in [None, Some("--json"), Some("--quiet"), Some("--verbose")] {
-        let mut run = Invocation::new(&["--version"]);
-        if let Some(mode) = mode {
-            run = run.argument(mode);
-        }
-        let outcome = run.run();
+    let outcome = Invocation::new(&["--version"]).run();
 
-        assert_eq!(outcome.status, Some(0), "{mode:?}");
-        assert_eq!(outcome.stderr, b"", "{mode:?}: a reference is an answer");
-        assert!(
-            outcome.stdout_text().contains("spielorders"),
-            "{mode:?}: {}",
-            outcome.stdout_text()
-        );
-    }
+    assert_eq!(outcome.status, Some(0));
+    assert_eq!(outcome.stderr, b"", "a reference is an answer");
+    assert!(
+        outcome.stdout_text().contains("spielorders"),
+        "{}",
+        outcome.stdout_text()
+    );
 }

@@ -398,7 +398,7 @@ fn fully_supplied_plan_resolves_vendor_and_reusable_values_into_normalized_facts
     .unwrap();
     let input = OrderCreationInput::new(" Laser / components ")
         .date_ordered("2026-07-19")
-        .vendor_id("e0990d31-06aa-42e9-97c8-088e3e894822")
+        .vendor_name("Tarnwick")
         .orderer(" Ada Lovelace ")
         .ordering_institution(" Northwind ")
         .currency("USD")
@@ -492,7 +492,7 @@ fn invalid_facts_and_unknown_vendor_reject_during_planning_without_creation() {
         OrderCreationInput::new("   "),
         OrderCreationInput::new("Bad date").date_ordered("2026-02-30"),
         OrderCreationInput::new("Bad currency").currency("usd"),
-        OrderCreationInput::new("Unknown vendor").vendor_id("e0990d31-06aa-42e9-97c8-088e3e894822"),
+        OrderCreationInput::new("Unknown vendor").vendor_name("Tarnwick"),
     ];
 
     for input in inputs {
@@ -924,7 +924,7 @@ fn a_commit_is_refused_when_the_vendor_its_directory_name_spells_was_renamed() {
     write_one_vendor(root, "Tarnwick");
     let plan = plan_order_creation(
         root,
-        &OrderCreationInput::new("Laser components").vendor_id(VENDOR_ID),
+        &OrderCreationInput::new("Laser components").vendor_name("Tarnwick"),
         &FixedCalendar,
         &RealFileSystem,
     )
@@ -960,7 +960,7 @@ fn a_commit_is_refused_when_the_vendor_it_resolved_was_deleted() {
     write_one_vendor(root, "Tarnwick");
     let plan = plan_order_creation(
         root,
-        &OrderCreationInput::new("Laser components").vendor_id(VENDOR_ID),
+        &OrderCreationInput::new("Laser components").vendor_name("Tarnwick"),
         &FixedCalendar,
         &RealFileSystem,
     )

@@ -549,7 +549,7 @@ fn one_rejected_assignment_leaves_the_whole_order_untouched() {
             "unresolved Vendor",
             OrderAssignments::new()
                 .assign(valid.0, valid.1)
-                .assign("vendor_id", "e0990d31-06aa-42e9-97c8-088e3e894822"),
+                .assign("vendor", "Nonesuch Optics"),
         ),
         (
             "unconfirmed new reusable value",
@@ -655,7 +655,7 @@ fn fully_populated_order(label: &str) -> (TemporaryTree, PathBuf, String) {
         root,
         &directory,
         &OrderAdoptionInput::new("Laser components", "2026-08-22", OrderStatus::Hold)
-            .vendor_id(&vendor)
+            .vendor_name("Tarnwick")
             .orderer("Ada Lovelace")
             .ordering_institution("Northwind")
             .currency("USD")
@@ -698,7 +698,7 @@ fn every_optional_scalar_clears_explicitly_without_disturbing_the_rest() {
     let (_tree, directory, vendor) = fully_populated_order("order-edit-clearing");
 
     for field in [
-        "vendor_id",
+        "vendor",
         "orderer",
         "ordering_institution",
         "currency",
@@ -715,7 +715,7 @@ fn every_optional_scalar_clears_explicitly_without_disturbing_the_rest() {
 
         let facts = plan.facts();
         let cleared = match field {
-            "vendor_id" => facts.vendor_id(),
+            "vendor" => facts.vendor_id(),
             "orderer" => facts.orderer(),
             "ordering_institution" => facts.ordering_institution(),
             "currency" => facts.currency(),
@@ -730,7 +730,7 @@ fn every_optional_scalar_clears_explicitly_without_disturbing_the_rest() {
         assert_eq!(facts.item_totals(), [169.0, 30.0]);
         assert_eq!(facts.order_total(), 199.0);
         for (other, value) in [
-            ("vendor_id", facts.vendor_id().map(|_| vendor.as_str())),
+            ("vendor", facts.vendor_id().map(|_| vendor.as_str())),
             ("orderer", facts.orderer()),
             ("ordering_institution", facts.ordering_institution()),
             ("currency", facts.currency()),
@@ -750,7 +750,7 @@ fn every_optional_scalar_clears_explicitly_without_disturbing_the_rest() {
     let result = committed_edit(
         &directory,
         OrderAssignments::new()
-            .assign("vendor_id", "")
+            .assign("vendor", "")
             .assign("orderer", "")
             .assign("ordering_institution", "")
             .assign("currency", "")
@@ -925,7 +925,7 @@ fn a_live_vendor_reference_can_be_assigned_and_cleared() {
 
     let plan = plan_order_edit(
         &directory,
-        &OrderAssignments::new().assign("vendor_id", &vendor),
+        &OrderAssignments::new().assign("vendor", "Tarnwick"),
         &FixedCalendar::on(2026, 9, 1),
         &RealFileSystem,
     )
@@ -938,7 +938,7 @@ fn a_live_vendor_reference_can_be_assigned_and_cleared() {
 
     let assigned = committed_edit(
         &directory,
-        OrderAssignments::new().assign("vendor_id", &vendor),
+        OrderAssignments::new().assign("vendor", "Tarnwick"),
         &FixedCalendar::on(2026, 9, 1),
     );
     assert_eq!(
@@ -969,7 +969,7 @@ fn a_live_vendor_reference_can_be_assigned_and_cleared() {
 
     let cleared = committed_edit(
         &directory,
-        OrderAssignments::new().assign("vendor_id", ""),
+        OrderAssignments::new().assign("vendor", ""),
         &FixedCalendar::on(2026, 9, 1),
     );
     assert_eq!(cleared.order().document().vendor_id, None);

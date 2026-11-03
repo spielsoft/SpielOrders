@@ -30,6 +30,24 @@ pub const ENVELOPE: [&str; 7] = [
     "error",
 ];
 
+/// The Supporting Material index provider this build ships, in its own name, or `None` where
+/// its platform has none.
+///
+/// **Asked of the build rather than stated here**, because a suite that decided this for
+/// itself would assert what it had assumed — and a build that shipped no provider where its
+/// platform has one is the defect the milestone's provider ticket was opened for.
+/// `supporting_material_search::this_build_ships_the_provider_its_platform_has` is what makes
+/// reading it safe: it holds this answer against the platform the run is on, so every claim
+/// that branches on it branches on a checked fact.
+///
+/// Here rather than in one of them, because `search supporting-material` is the one command
+/// whose answer a platform decides: the golden comparison, the whole-surface sweeps, and that
+/// command's own suite all have to know which answer this build gives.
+pub fn supporting_material_provider() -> Option<&'static str> {
+    spielorders_cli::effects::supporting_material_index()
+        .map(spielorders_core::ports::SupportingMaterialIndex::name)
+}
+
 /// Distinguishes trees claimed within one process. The whole suite is one test binary,
 /// so two tests that pass the same label share a process id, and a clock read is not
 /// guaranteed to separate two threads that reach it together.
@@ -76,6 +94,29 @@ impl Drop for TemporaryTree {
             );
         }
     }
+}
+
+/// A symbolic link to `target`, standing in a tree of its own.
+///
+/// **Its own tree rather than beside the target**, because a link inside a Package's
+/// Orders Directory is a disallowed entry the Package then diagnoses — a second thing for
+/// a test about a link *named as a root* to trip over.
+pub fn link_to(label: &str, target: &Path) -> (TemporaryTree, PathBuf) {
+    let tree = TemporaryTree::new(label);
+    let link = tree.path().join("link");
+    std::os::unix::fs::symlink(target, &link).expect("the link is created");
+    (tree, link)
+}
+
+/// An ordinary file, standing in a tree of its own.
+///
+/// The wrong kind of thing to name as any root: no Package surrounds it and nothing about
+/// it is a directory.
+pub fn file_outside_any_package(label: &str) -> (TemporaryTree, PathBuf) {
+    let tree = TemporaryTree::new(label);
+    let file = tree.path().join("notes.txt");
+    std::fs::write(&file, b"not a root\n").expect("the fixture file is written");
+    (tree, file)
 }
 
 pub fn entry_names(directory: &Path) -> Vec<String> {
@@ -172,6 +213,11 @@ pub fn package_with_a_nested_orders_directory(label: &str) -> (TemporaryTree, Pa
 /// and this file decides no Package rule — including where the Order Directory goes,
 /// which follows the Package's own configured Orders Directory wherever that is.
 pub fn one_order_created_in(root: &Path, title: &str) -> PathBuf {
+    order_created_in(root, title, NEWEST_ORDER_ID)
+}
+
+/// The same, under an identity the caller names, for a Package that already holds Orders.
+pub fn order_created_in(root: &Path, title: &str, order_id: &str) -> PathBuf {
     use spielorders_cli::effects::PlatformFileSystem;
     use spielorders_core::{
         creation::{OrderCreationInput, commit_order_creation, plan_order_creation},
@@ -187,7 +233,7 @@ pub fn one_order_created_in(root: &Path, title: &str) -> PathBuf {
     .expect("the fixture Order can be planned");
     let report = commit_order_creation(
         plan,
-        &mut QueuedUuids::new(&[NEWEST_ORDER_ID]),
+        &mut QueuedUuids::new(&[order_id]),
         &PlatformFileSystem,
     );
     let MutationReport::Committed { result, .. } = report else {
@@ -247,6 +293,8 @@ pub const OFFERED_VENDOR_ID: &str = "e0990d31-06aa-42e9-97c8-088e3e894822";
 pub const HIDDEN_VENDOR_ID: &str = "1c9a5b7e-3d44-4f21-8a6c-9b0e2d7f4a13";
 pub const NEWEST_ORDER_ID: &str = "8b6e3f0a-8ec5-4d47-95e1-412652a56d16";
 pub const OLDEST_ORDER_ID: &str = "3f2a1c05-7b19-4e63-9d84-5a0c6e8b2f71";
+/// A third identity, for a fixture that needs one more Order than the Package has.
+pub const THIRD_ORDER_ID: &str = "c4d81b62-0e57-4a90-b3f5-6d2170ae9c38";
 
 /// A Package with everything `package show` has to report.
 ///
@@ -314,7 +362,7 @@ pub fn populated_package(label: &str) -> (TemporaryTree, PathBuf) {
             NEWEST_ORDER_ID,
             OrderCreationInput::new("Laser components")
                 .date_ordered("2026-08-22")
-                .vendor_id(OFFERED_VENDOR_ID)
+                .vendor_name("Tarnwick")
                 .orderer("Ada Lovelace")
                 .ordering_institution("Northwind")
                 .currency("USD")
@@ -336,7 +384,7 @@ pub fn populated_package(label: &str) -> (TemporaryTree, PathBuf) {
             OLDEST_ORDER_ID,
             OrderCreationInput::new("Mirror mounts")
                 .date_ordered("2026-08-21")
-                .vendor_id(HIDDEN_VENDOR_ID)
+                .vendor_name("Nethermoor")
                 .orderer("Ada Lovelace")
                 .project("Telescope"),
             vec![
@@ -1392,7 +1440,7 @@ pub fn assert_matches_golden_with_minted_vendor_id(
     );
 }
 
-fn assert_golden(
+pub fn assert_golden(
     contract: spielorders_cli::contract::ResponseContract,
     cell: &str,
     actual: String,
@@ -1479,78 +1527,6 @@ impl Invocation {
             stderr: output.stderr,
         }
     }
-}
-
-/// One global option as a caller writes it, and where a command line may carry it.
-///
-/// A global option stands in any *gap* between the segments of a command path — before the
-/// first segment, between two of them, or after the last — so where it was written is a gap
-/// index rather than "before or after the subcommand". An option a first-level family
-/// declares has one gap fewer: the family has to be named before the parser knows the option
-/// exists at all.
-pub struct WrittenOption {
-    tokens: Vec<String>,
-    earliest_gap: usize,
-}
-
-impl WrittenOption {
-    /// One the executable itself declares, so every gap carries it.
-    pub fn anywhere(tokens: &[&str]) -> Self {
-        Self {
-            tokens: tokens.iter().map(|token| (*token).to_owned()).collect(),
-            earliest_gap: 0,
-        }
-    }
-
-    /// One a first-level family declares, so no gap before that family carries it.
-    pub fn after_the_family(tokens: &[&str]) -> Self {
-        Self {
-            earliest_gap: 1,
-            ..Self::anywhere(tokens)
-        }
-    }
-}
-
-/// Every command line that writes these two options where the parser accepts them.
-///
-/// **Every placement, not a representative one.** A mutual exclusion a caller can write
-/// around is not one, and which placements exist is a fact about the command path rather
-/// than about either option — so they are generated here from the path and not transcribed
-/// into each test that needs them.
-pub fn placements(
-    path: &[&str],
-    first: &WrittenOption,
-    second: &WrittenOption,
-) -> Vec<Vec<String>> {
-    let last_gap = path.len();
-    let mut lines = Vec::new();
-    for first_gap in first.earliest_gap..=last_gap {
-        for second_gap in second.earliest_gap..=last_gap {
-            // Two options sharing one gap are two command lines, because which of them the
-            // caller wrote first is a placement too.
-            if first_gap <= second_gap {
-                lines.push(assembled(path, &[(first_gap, first), (second_gap, second)]));
-            }
-            if second_gap <= first_gap {
-                lines.push(assembled(path, &[(second_gap, second), (first_gap, first)]));
-            }
-        }
-    }
-    lines
-}
-
-/// The command line these options make, each written in its own gap, in the order given.
-fn assembled(path: &[&str], written: &[(usize, &WrittenOption)]) -> Vec<String> {
-    let mut line = Vec::new();
-    for gap in 0..=path.len() {
-        for (_, option) in written.iter().filter(|(at, _)| *at == gap) {
-            line.extend(option.tokens.iter().cloned());
-        }
-        if let Some(segment) = path.get(gap) {
-            line.push((*segment).to_owned());
-        }
-    }
-    line
 }
 
 /// A Package with one unmanaged candidate directory under its Orders Directory.
@@ -1748,6 +1724,31 @@ pub fn package_with_a_duplicate_order_id(label: &str) -> (TemporaryTree, PathBuf
     assert_ne!(text, rewritten, "the Order ID was found");
     std::fs::write(&record, rewritten).expect("the rewritten Order record is written");
     (tree, root, conflicting)
+}
+
+/// [`populated_package`] with three Order Directories carrying one Order ID.
+///
+/// **Two participants cannot tell a count from a count plus one**: where two directories
+/// conflict, a sentence saying two and a sentence saying three are equally consistent with
+/// what a reader sees, so the claim needs a second conflict of a different size.
+///
+/// Returns the Package Root and the third Order Directory.
+pub fn package_with_three_duplicate_order_ids(label: &str) -> (TemporaryTree, PathBuf, PathBuf) {
+    let (tree, root) = populated_package(label);
+    // Created before anything conflicts, because creation checks its minted identity
+    // against the Package and a Package with Damaged Orders is not one a mutation reads.
+    let third = order_created_in(&root, "Optical table", THIRD_ORDER_ID);
+    for (directory, existing) in [
+        (order_directory(&root, "Mirror_mounts"), OLDEST_ORDER_ID),
+        (third.clone(), THIRD_ORDER_ID),
+    ] {
+        let record = directory.join(".spielorders/order.json");
+        let text = std::fs::read_to_string(&record).expect("the fixture Order record can be read");
+        let rewritten = text.replace(existing, NEWEST_ORDER_ID);
+        assert_ne!(text, rewritten, "the Order ID was found");
+        std::fs::write(&record, rewritten).expect("the rewritten Order record is written");
+    }
+    (tree, root, third)
 }
 
 /// [`populated_package`] with a leftover staging artifact beside one Order's record.

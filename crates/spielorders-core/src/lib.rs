@@ -1,9 +1,10 @@
 //! Platform-independent core boundary for SpielOrders.
 //!
 //! Durable metadata, canonical Package read projection, Package Index loading,
-//! separately invoked exhaustive validation, and the domain mutations, repairs and
-//! Metadata Upgrades that write. Effects arrive through narrow ports; nothing here
-//! reaches a filesystem, a clock, or a platform service on its own.
+//! deterministic entity search over a loaded Package, separately invoked exhaustive
+//! validation, and the domain mutations, repairs and Metadata Upgrades that write.
+//! Effects arrive through narrow ports; nothing here reaches a filesystem, a clock, or a
+//! platform service on its own.
 
 pub mod adoption;
 pub mod alignment;
@@ -15,6 +16,7 @@ pub mod filesystem;
 pub mod initialization;
 pub mod metadata;
 pub mod metadata_repair;
+pub mod money;
 pub mod mutation;
 pub mod operations;
 pub mod order;
@@ -30,7 +32,9 @@ pub mod readme;
 pub mod readme_writes;
 pub mod removal;
 pub mod repair_cases;
+pub mod search;
 pub mod semantic_repair;
+pub mod supporting_material;
 pub mod upgrade;
 pub mod vendor_reads;
 pub mod vendors;

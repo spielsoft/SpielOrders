@@ -22,6 +22,7 @@ use crate::{
         repair_suggestion::{RepairSuggestion, Rooting, command_for},
     },
     contract::ResponseContract,
+    effects::PlatformFileSystem,
     exit::Exit,
     output::{Mode, Output},
     response::{
@@ -33,13 +34,13 @@ use serde::Serialize;
 use spielorders_core::{
     canonical::{
         CanonicalPackageLoad, CurrentPackageCandidate, DamagedPackageProjection, DiagnosticGroup,
-        ManagedContext, MetadataState, OrderPaths, PackageIndexRecord, PackageLoad,
+        HealthyOrder, ManagedContext, MetadataState, OrderPaths, PackageIndexRecord, PackageLoad,
         UnmanagedPackage, UpgradeProjection,
     },
     metadata::Vendor,
     operations::{FailedPath, OperationEvidence, OperationFailure},
     order_diagnosis::OrderDiagnosisError,
-    ports::FileSystemEntryKind,
+    ports::{FileSystem, FileSystemEntryKind},
     readme::{
         Diagnostic, DiagnosticEvidence, EvidenceScope, Location, OrderSemanticReason, ReadmeKind,
         ReadmeUnavailableReason, Severity,
@@ -155,6 +156,101 @@ pub(crate) fn resolved(path: &Path) -> FailedPath {
 /// [Decision traceability and contract-test conventions]: ../../../../docs/development/traceability.md
 pub(crate) fn in_package(location: &Location) -> FailedPath {
     location.clone().into()
+}
+
+// ---------------------------------------------------------------------------
+// What a `--root` may name.
+// ---------------------------------------------------------------------------
+
+/// What the `--root` of the command asking names.
+///
+/// Only the noun differs between the two, and it differs in one sentence, so the sentence
+/// is written once and the noun travels to it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RootKind {
+    /// The SpielOrders Root, which is what `--root` names for `init`, for a Package-level
+    /// command, and for a Vendor command.
+    Package,
+    /// The Order Directory, which is what `--root` names for an `order` command.
+    Order,
+}
+
+impl RootKind {
+    fn subject(self) -> &'static str {
+        match self {
+            Self::Package => "SpielOrders Root",
+            Self::Order => "Order Directory",
+        }
+    }
+
+    fn scope(self) -> FailureScope {
+        match self {
+            Self::Package => FailureScope::Package,
+            Self::Order => FailureScope::Order,
+        }
+    }
+}
+
+/// The refusal a `--root` naming a link earns, or `None` where it names something else.
+///
+/// **Targeting, which is this adapter's own work.** Deciding what a `--root` may name is
+/// not a Package rule — the core's own link refusals are about paths it *discovers*: an
+/// entry of the Orders Directory, a configured managed path, an adoption candidate. This
+/// one is about the path a command line handed in, and it is asked before the core is
+/// invoked at all, so nothing behind the link is opened.
+///
+/// **Every command asks it, and asks it here.** Links are never followed and never
+/// adopted; a command that decided for itself would be a second answer to one question,
+/// and `tests/cross_command_conformance.rs` sweeps the whole surface for exactly that.
+///
+/// A path this adapter cannot observe at all is not refused here. Whether it exists, and
+/// what stands there, is then the core's answer to give like any other.
+///
+/// Decision sources: Define the SpielOrders package topology; Define legacy Order
+/// adoption and metadata bootstrapping.
+pub(crate) fn link_named_as_a_root(selected_root: &Path, kind: RootKind) -> Option<Failed> {
+    if PlatformFileSystem.symlink_metadata(selected_root).ok()?
+        != Some(FileSystemEntryKind::SymbolicLink)
+    {
+        return None;
+    }
+    Some(Failed {
+        code: FailureCode::RootIsALink,
+        scope: kind.scope(),
+        message: format!(
+            "{} is a link. Links are never followed, so nothing behind this one is read, \
+             renamed, disposed of, or edited. --root names the {} itself.",
+            selected_root.display(),
+            kind.subject()
+        ),
+        // The caller's own text: this refusal resolved nothing, which is the whole point.
+        paths: vec![as_given(selected_root)],
+        identities: Vec::new(),
+        // Nothing was opened, so no Root was established — including the one the link
+        // happens to point at, which is precisely the Package this command is not about.
+        package_root: None,
+        diagnostics: Vec::new(),
+    })
+}
+
+/// A `--root` naming nothing, or naming something that is not an ordinary directory.
+///
+/// **One sentence for both routes to it.** The reads reach a wrong-kind Order root through
+/// the record they would have opened under it, and the validating commands reach it by
+/// observing the selected path itself; the caller wrote one path and gets one answer,
+/// whichever command they ran. The caller's own text is the path, because nothing resolved
+/// it — a path that is not a directory is one nothing can resolve past.
+pub(crate) fn order_root_not_a_directory(directory: &Path) -> OrderFailed {
+    OrderFailed::unresolved(
+        FailureCode::OrderRootUnmanaged,
+        format!(
+            "{} is not an Order Directory: nothing stands there, or what does is not an \
+             ordinary directory. For an `order` command --root names the Order Directory \
+             itself.",
+            directory.display()
+        ),
+        as_given(directory),
+    )
 }
 
 /// The Package this command is about, or the typed reason there is none.
@@ -667,7 +763,8 @@ fn diagnostic_explanation(diagnostic: &Diagnostic) -> String {
         ),
         DiagnosticEvidence::OrdersDirectoryEntryDisallowed { observed_kind } => format!(
             "a {} stands in the Orders Directory, which holds Order Directories; it is \
-             ignored and nothing is moved or removed.",
+             ignored for Order discovery, so it is never one of this Package's Orders, \
+             and nothing about it is moved, removed, or followed.",
             entry_kind(*observed_kind)
         ),
         DiagnosticEvidence::OrdersDirectoryEntryNameUnusable { observed_kind } => format!(
@@ -740,12 +837,15 @@ fn diagnostic_explanation(diagnostic: &Diagnostic) -> String {
              to this Package: {}.",
             reason.as_str()
         ),
+        // Every directory carrying the Order ID is in `conflict_locations`, the subject's
+        // own included, so the count is the list's length. The user picks the surviving
+        // Order out of this sentence.
         DiagnosticEvidence::OrderIdDuplicate {
             conflict_locations, ..
         } => format!(
             "one Order ID is carried by {} Order Directories at once, so none of them is \
              identified.",
-            conflict_locations.len() + 1
+            conflict_locations.len()
         ),
         DiagnosticEvidence::ReadmeUnavailable {
             document_kind,
@@ -910,18 +1010,9 @@ pub(crate) fn order_diagnosis_failure<E: std::fmt::Display>(
             order_root: None,
             failed: operation_failure(failed.failure(), failed.root()),
         },
-        // The same code, the same scope, and the caller's own text — which is what every
-        // other `order` command reports for a `--root` naming nothing.
-        OrderDiagnosisError::NotAnOrderDirectory { directory } => OrderFailed::unresolved(
-            FailureCode::OrderRootUnmanaged,
-            format!(
-                "{} is not an Order Directory: nothing stands there, or what does is not \
-                 an ordinary directory. For an `order` command --root names the Order \
-                 Directory itself.",
-                directory.display()
-            ),
-            as_given(&directory),
-        ),
+        OrderDiagnosisError::NotAnOrderDirectory { directory } => {
+            order_root_not_a_directory(&directory)
+        }
         OrderDiagnosisError::OrderNotFound { directory, root } => OrderFailed {
             // The selected directory is a resolved path and not an Order Directory, which
             // is precisely what this refusal reports.
@@ -1098,6 +1189,143 @@ impl VendorSummary {
             hidden: vendor.is_hidden(),
         }
     }
+}
+
+/// Whether a run given this `--all` presents one Vendor.
+///
+/// **The one home of the CLI's Vendor visibility default.** `--all` presents every Vendor
+/// with its visibility and its absence presents the Vendors this Package offers for new
+/// use. The core exposes the complete list and the offered-only one and filters neither,
+/// so the default is this adapter's choice — and it is one choice for every command whose
+/// answer is a list of Vendors, rather than three that happen to agree today. A predicate
+/// rather than the core's offered list, because the entity search applies the default to
+/// the Vendors a query retained rather than to the Package's whole list, and one rule
+/// applied in two places has to be a rule that can be.
+///
+/// Resolution is untouched by it: an Order's Vendor comes from the core's
+/// `vendor_for_order`, which searches the complete list, because hiding governs what is
+/// offered and never what is resolved.
+pub(crate) fn presented_vendor(vendor: &Vendor, all: bool) -> bool {
+    all || !vendor.is_hidden()
+}
+
+/// One Order on one line, as a human reads it in a list, with its identity held back to
+/// `--verbose`.
+///
+/// Shared for the reason [`OrderSummary`] is: an Order among the ones a Package holds and
+/// an Order among the ones a query retained are one thing, and two lines carrying these
+/// facts would be two places for the spelling to drift. The line names the calculated
+/// Order Total, which no contract carrying [`OrderSummary`] does and which human output
+/// being no parsing contract is what allows.
+pub(crate) fn report_order(
+    output: &Output,
+    order: &HealthyOrder,
+    resolved: Option<&Vendor>,
+) -> io::Result<()> {
+    let document = order.document();
+    let vendor = match resolved {
+        Some(vendor) => format!("  {}", vendor.name.as_str()),
+        None => String::new(),
+    };
+    output.summary(
+        "Order",
+        &text(&format!(
+            "{}  {}  {}{vendor}  {} item(s), total {}",
+            document.date_ordered.as_str(),
+            document.title.as_str(),
+            document.status.as_str(),
+            document.items.len(),
+            // The core's unrounded total, spelled for a reader by the one thing that
+            // spells money in this application. The number itself is untouched: a response
+            // that carries a total carries it exactly as the core calculated it.
+            crate::money::displayed_amount(order.order_total())
+        )),
+    )?;
+    output.detail("Order ID", OsStr::new(document.order_id.as_str()))
+}
+
+/// One Vendor on one line, as a human reads it in a list, with its identity held back to
+/// `--verbose`.
+///
+/// Shared for the reason [`report_order`] is. Visibility is on the line rather than in the
+/// detail, because a reader given a list that omits Hidden Vendors by default most needs
+/// to know which of the ones in front of them is hidden.
+pub(crate) fn report_vendor(output: &Output, vendor: &Vendor) -> io::Result<()> {
+    output.summary(
+        "Vendor",
+        &text(&if vendor.is_hidden() {
+            format!("{} (hidden)", vendor.name.as_str())
+        } else {
+            vendor.name.as_str().to_owned()
+        }),
+    )?;
+    output.detail("Vendor ID", OsStr::new(vendor.vendor_id.as_str()))
+}
+
+/// One Order, in the least a listing needs to name it.
+///
+/// The identity, the Order Directory root, the four facts an Order carries at every
+/// status, and the Vendor the core resolved for it. The Items, the calculated totals, the
+/// Order Currency, the Reusable Free-Entry Values, and the README text are the *complete*
+/// read — `package show` and, for one Order, `order show` — and a contract that carried
+/// them would be one of those under another name.
+///
+/// **The exclusion is about the contracts that carry this, not about the human mode.**
+/// `package list orders` hands `present_contents` the same summary line `package show`
+/// prints, which names the Item count and the calculated Order Total — sharing the line is
+/// what keeps the two commands from describing one Order two ways, and human output is
+/// never a parsing contract. A consumer that needs a total asks the command whose contract
+/// carries one.
+///
+/// Shared for the reason [`VendorSummary`] is: an Order named in a listing and an Order
+/// named beside the Supporting Material found inside its Directory are one thing, and two
+/// structs with these members would be two places for the spelling to drift.
+#[derive(Debug, Serialize)]
+pub(crate) struct OrderSummary {
+    /// The Order Directory root, which is what makes a listed Order actionable.
+    ///
+    /// Named directly rather than nested in a `paths` object holding one member: the
+    /// Order's metadata directory, record, and README are locations the *complete* read
+    /// reports, and a listing is about where the Order is.
+    directory: LocationProjection,
+    order_id: String,
+    title: String,
+    date_ordered: String,
+    status: &'static str,
+    /// The Vendor this Order names, as the record carries it. `null` when it names none.
+    vendor_id: Option<String>,
+    /// That Vendor as the core resolved it, Hidden Vendors included.
+    ///
+    /// **This command has no `--all`, and needs none.** Hiding governs what a Package
+    /// offers for new use and never what is resolved, so resolution goes through the
+    /// core's `vendor_for_order`, which searches the complete list. Resolving against the
+    /// presented list is the defect the Vendor visibility default is most likely to
+    /// cause, and a command with no such option would carry it silently.
+    vendor: Option<VendorSummary>,
+}
+
+/// One Order summary, with the Vendor the core resolved for it.
+///
+/// The Vendor arrives as an argument for the same reason it does in `package show`: it
+/// comes from `vendor_for_order`, which searches the complete Vendor list, and an adapter
+/// that looked one up itself would be a second place resolving a Vendor.
+pub(crate) fn order_summary(
+    order: &HealthyOrder,
+    resolved: Option<&Vendor>,
+) -> Result<OrderSummary, NotRepresentable> {
+    let document = order.document();
+    Ok(OrderSummary {
+        directory: LocationProjection::of(order.paths().directory())?,
+        order_id: document.order_id.as_str().to_owned(),
+        title: document.title.as_str().to_owned(),
+        date_ordered: document.date_ordered.as_str().to_owned(),
+        status: document.status.as_str(),
+        vendor_id: document
+            .vendor_id
+            .as_ref()
+            .map(|vendor_id| vendor_id.as_str().to_owned()),
+        vendor: resolved.map(VendorSummary::of),
+    })
 }
 
 /// The derived Package Index's state, with the typed reasons behind it.

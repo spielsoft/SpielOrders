@@ -40,10 +40,10 @@ use crate::{
     commands::{
         repair_suggestion::{RepairSuggestion, Rooting},
         shared::{
-            Failed, IndexProjection, damaged_failure, diagnostics, failed_context, failed_document,
-            in_package, index, not_representable, operation_failure, package_candidate,
-            package_context, report_diagnostic, resolved, text, undeliverable, unmanaged_failure,
-            upgrade_pending_failure,
+            Failed, IndexProjection, RootKind, damaged_failure, diagnostics, failed_context,
+            failed_document, in_package, index, link_named_as_a_root, not_representable,
+            operation_failure, package_candidate, package_context, report_diagnostic, resolved,
+            text, undeliverable, unmanaged_failure, upgrade_pending_failure,
         },
     },
     contract::ResponseContract,
@@ -495,9 +495,12 @@ fn present<T: Serialize>(
     human: impl Fn(&VendorRead, &Output) -> io::Result<()>,
     output: &Output,
 ) -> Exit {
-    let answer = match read_vendor_by_name(selected_root, name, &PlatformFileSystem) {
-        Ok(read) => Answer::Answered(Box::new(read)),
-        Err(reason) => Answer::Failed(failure(reason)),
+    let answer = match link_named_as_a_root(selected_root, RootKind::Package) {
+        Some(failed) => Answer::Failed(failed),
+        None => match read_vendor_by_name(selected_root, name, &PlatformFileSystem) {
+            Ok(read) => Answer::Answered(Box::new(read)),
+            Err(reason) => Answer::Failed(failure(reason)),
+        },
     };
     deliver(
         contract,
@@ -882,6 +885,9 @@ fn assigned(assignments: &[FieldAssignment]) -> VendorAssignments {
 /// field rather than about a place, and a response that named no Package would be dropping
 /// a fact this command holds.
 fn resolved_package(selected_root: &Path) -> Result<ManagedContext, Box<Failed>> {
+    if let Some(failed) = link_named_as_a_root(selected_root, RootKind::Package) {
+        return Err(Box::new(failed));
+    }
     package_candidate(
         selected_root,
         inspect_canonical_package(selected_root, &PlatformFileSystem),
@@ -898,6 +904,9 @@ fn resolved_vendor(
     selected_root: &Path,
     name: &str,
 ) -> Result<(ManagedContext, String), Box<Failed>> {
+    if let Some(failed) = link_named_as_a_root(selected_root, RootKind::Package) {
+        return Err(Box::new(failed));
+    }
     match read_vendor_by_name(selected_root, name, &PlatformFileSystem) {
         Ok(read) => Ok((
             read.context().clone(),

@@ -22,9 +22,9 @@
 
 use crate::{
     commands::shared::{
-        Failed, IndexProjection, as_given, failed_context, failed_document, human_failure,
-        in_package, index, located, not_representable, package_context, resolved, text,
-        undeliverable,
+        Failed, IndexProjection, RootKind, as_given, failed_context, failed_document,
+        human_failure, in_package, index, link_named_as_a_root, located, not_representable,
+        package_context, resolved, text, undeliverable,
     },
     contract::ResponseContract,
     effects::PlatformFileSystem,
@@ -152,6 +152,9 @@ fn decide<'a>(
     dry_run: bool,
     registry: &TransformationRegistry<'a>,
 ) -> Upgrade<'a> {
+    if let Some(failed) = link_named_as_a_root(selected_root, RootKind::Package) {
+        return Upgrade::Failed(Box::new(failed));
+    }
     let plan = match plan_metadata_upgrade(selected_root, registry, &PlatformFileSystem) {
         Ok(plan) => plan,
         Err(reason) => return Upgrade::Failed(Box::new(refusal(selected_root, reason))),

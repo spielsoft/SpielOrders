@@ -82,7 +82,14 @@ impl OrderDocument {
                 total: CalculatedTotal::ItemTotal,
             }]);
         }
-        let order_total: f64 = item_totals.iter().sum();
+        // Folded from `0.0` rather than summed, which is a choice this code makes and not
+        // a rule any decision states. `Iterator::sum` for floats seeds at `-0.0`, so an
+        // Order with no Items totals the seed itself and reports a signed zero — what an
+        // empty sum of that kind is, and not what a total looks like. Zero is addition's
+        // ordinary identity and leaves every nonzero total exactly as it was.
+        let order_total: f64 = item_totals
+            .iter()
+            .fold(0.0, |running, total| running + total);
         if !order_total.is_finite() {
             return Err(vec![OrderValidationFailure::NonFiniteTotal {
                 total: CalculatedTotal::OrderTotal,

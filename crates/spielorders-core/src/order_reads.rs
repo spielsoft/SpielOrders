@@ -111,6 +111,15 @@ pub enum OrderReadFailure {
     /// No ancestor was consulted, and neither was any descendant — a SpielOrders Root
     /// passed to an Order command lands here rather than being reinterpreted as one.
     NotAnOrderDirectory { directory: FailedPath },
+    /// The exact path given is not an ordinary directory at all: nothing stands there, or
+    /// what does is a file, a link, or something else a Package has no notion of.
+    ///
+    /// **Its own variant rather than the one above**, because the sentence differs: an
+    /// Order Directory that holds no record is a directory, and telling a caller who named
+    /// a file that it "holds no Order record" describes a place that cannot hold one. It is
+    /// the same answer the diagnosing capability gives, which is what keeps one wrong-kind
+    /// root from reaching two codes across the `order` family.
+    RootNotADirectory { directory: FailedPath },
     /// The Order record could not be read as one. `field` names the first field at fault
     /// where the record was still JSON to inspect, and is `None` where it was not.
     DamagedRecord {
@@ -163,6 +172,22 @@ pub fn read_order<F: FileSystem>(
     order_directory: &Path,
     filesystem: &F,
 ) -> Result<OrderRead, OrderReadFailure> {
+    // The selected path's own kind first. Joining the record's name onto a file yields a
+    // path that cannot exist, and a filesystem asked about one answers that the operation
+    // failed — so a wrong-kind root reached this read as a Package it could not read,
+    // naming an internal operation and a path under a file. What kind of thing was named
+    // is the answer, and it is the one the diagnosing capability already gives.
+    match filesystem.symlink_metadata(order_directory) {
+        Ok(Some(FileSystemEntryKind::Directory)) => {}
+        Ok(_) => {
+            return Err(OrderReadFailure::RootNotADirectory {
+                directory: as_given(order_directory),
+            });
+        }
+        Err(_) => {
+            return Err(operation(FileSystemOperation::ObserveKind, order_directory));
+        }
+    }
     let record = order_directory.join(".spielorders").join("order.json");
     match filesystem.symlink_metadata(&record) {
         Ok(Some(FileSystemEntryKind::File)) => {}

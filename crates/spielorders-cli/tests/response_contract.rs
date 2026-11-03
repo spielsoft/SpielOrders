@@ -11,7 +11,7 @@
 //! schemas and version evolution.
 
 use crate::support::{
-    ENVELOPE, Invocation, NEWEST_ORDER_ID, TemporaryTree, assert_matches_golden,
+    ENVELOPE, Invocation, NEWEST_ORDER_ID, TemporaryTree, assert_golden, assert_matches_golden,
     assert_matches_golden_with_minted_vendor_id, assert_matches_golden_with_substitutions,
     directory_that_is_not_a_root, entry_names, fixture_directory, initialized_package,
     initialized_package_with_a_blocked_index_refresh, order_directory,
@@ -26,7 +26,8 @@ use crate::support::{
     package_with_an_unresolved_vendor_reference, package_with_duplicate_vendor_names,
     package_with_three_contacts, package_with_three_contacts_and_a_blocked_index_refresh,
     package_with_three_items, package_with_three_items_and_a_blocked_index_refresh,
-    package_with_unreadable_readme, populated_package, response, unmanaged_directory,
+    package_with_unreadable_readme, populated_package, response, supporting_material_provider,
+    unmanaged_directory,
 };
 use spielorders_cli::contract::ResponseContract;
 use std::path::{Path, PathBuf};
@@ -303,21 +304,23 @@ fn absent_collections_are_present_and_empty() {
 // The golden fixtures.
 // ---------------------------------------------------------------------------
 
-/// Every recorded cell is one this file compares byte for byte.
+/// Every recorded cell is one this file names for comparison.
 ///
-/// **The bridge between the fixture tree and the comparisons below.** Each golden test
-/// iterates the per-family cell list beside it, so a cell standing in the tree that no list
+/// **The bridge between the fixture tree and automatic comparisons.** Each golden test
+/// names its cells, so a cell standing in the tree that no list
 /// names would never have its bytes compared — and the check that the tree holds the right
 /// set would pass, because the file is there.
 ///
-/// Said once for every contract rather than once per family, and the count is asserted so
-/// that a contract whose bytes nobody compares fails here. Which cells a contract supplies
+/// Supporting Material success is compared here before its key enters the inventory; other cells use
+/// process-level comparisons below. Which cells a contract supplies
 /// and why it supplies no others is not this file's question: it is the matrix in
 /// `tests/cross_command_conformance.rs`.
 #[test]
 fn every_recorded_cell_is_one_this_file_compares() {
     let reads: Vec<&str> = NARROWER_READ_CELLS.iter().map(|cell| cell.name()).collect();
     let mutations: Vec<&str> = MUTATION_CELLS.iter().map(|cell| cell.name()).collect();
+    let mut supporting_cells = SUPPORTING_MATERIAL_CELLS.to_vec();
+    supporting_cells.push(compare_supporting_material_success());
 
     let mut compared: Vec<(ResponseContract, Vec<&str>)> = vec![
         (ResponseContract::PackageReadme, README_CELLS.to_vec()),
@@ -334,7 +337,21 @@ fn every_recorded_cell_is_one_this_file_compares() {
         (ResponseContract::Repair, REPAIR_CELLS.to_vec()),
         (ResponseContract::OrderRepair, REPAIR_CELLS.to_vec()),
         (ResponseContract::Upgrade, UPGRADE_CELLS.to_vec()),
+        (ResponseContract::SearchSupportingMaterial, supporting_cells),
     ];
+    for contract in [
+        ResponseContract::SearchOrders,
+        ResponseContract::SearchVendors,
+    ] {
+        compared.push((
+            contract,
+            ENTITY_SEARCH_CELLS
+                .iter()
+                .filter(|recorded| recorded.contract == contract)
+                .map(|recorded| recorded.cell)
+                .collect(),
+        ));
+    }
     for (contract, _, _) in NARROWER_READS {
         compared.push((contract, reads.clone()));
     }
@@ -1910,7 +1927,7 @@ fn new_order_assignments(contract: ResponseContract, cell: MutationCell) -> Vec<
         (ResponseContract::AddOrder, MutationCell::Success) => vec![
             "title=Laser components",
             "status=ordered",
-            "vendor_id=e0990d31-06aa-42e9-97c8-088e3e894822",
+            "vendor=Tarnwick",
             "orderer=Ada Lovelace",
             "ordering_institution=northwind",
             "currency=USD",
@@ -1927,7 +1944,7 @@ fn new_order_assignments(contract: ResponseContract, cell: MutationCell) -> Vec<
             "title=Fiber patch cable",
             "date_ordered=2009-04-30",
             "status=complete",
-            "vendor_id=e0990d31-06aa-42e9-97c8-088e3e894822",
+            "vendor=Tarnwick",
             "orderer=Ada Lovelace",
             "ordering_institution=Northwind",
             "project=Telescope",
@@ -2981,7 +2998,7 @@ fn every_usage_error_a_repairing_command_reaches_carries_the_shared_identity() {
         // An action this build has no notion of.
         vec!["repair", "case=a", "action=fix_everything"],
         // A resolution with no application to resolve.
-        vec!["repair", "vendor_id=e0990d31-06aa-42e9-97c8-088e3e894822"],
+        vec!["repair", "vendor=Tarnwick"],
         // The broad fix this contract does not have.
         vec!["repair", "--fix"],
         // Two output modes at once.
@@ -3024,4 +3041,290 @@ fn every_usage_error_a_repairing_command_reaches_carries_the_shared_identity() {
         before,
         "a usage error attempts nothing"
     );
+}
+
+// ---------------------------------------------------------------------------
+// `search supporting-material`'s golden fixture.
+// ---------------------------------------------------------------------------
+
+/// The fixture cells `search supporting-material` records.
+///
+/// Success is registered only after its byte comparison in the fixture inventory.
+const SUPPORTING_MATERIAL_CELLS: [&str; 3] = ["empty-result", "warning", "invalid"];
+
+fn compare_supporting_material_success() -> &'static str {
+    use spielorders_core::{
+        canonical::{CanonicalPackageLoad, inspect_canonical_package},
+        ports::{Cancellation, SupportingMaterialIndex},
+        supporting_material::{
+            Completeness, ProviderAnswer, ProviderHit, SupportingMaterialQuery,
+            SupportingMaterialRequest, search_supporting_material,
+        },
+    };
+    struct RecordedIndex(PathBuf);
+    impl SupportingMaterialIndex for RecordedIndex {
+        fn name(&self) -> &'static str {
+            "spotlight"
+        }
+        fn search(
+            &self,
+            _: &SupportingMaterialRequest<'_>,
+            _: &dyn Cancellation,
+        ) -> ProviderAnswer {
+            ProviderAnswer::Looked {
+                completeness: Completeness::Complete,
+                hits: vec![ProviderHit {
+                    path: self.0.clone(),
+                    kind: Some("txt".to_owned()),
+                    modified_unix_seconds: Some(1_784_937_600),
+                    rank: None,
+                }],
+                diagnostics: Vec::new(),
+            }
+        }
+    }
+    struct NotCancelled;
+    impl Cancellation for NotCancelled {
+        fn is_cancelled(&self) -> bool {
+            false
+        }
+    }
+    let (_tree, root) = initialized_package("recorded-file-search-success");
+    let directory = root.join("Orders/Laser_components");
+    std::fs::create_dir_all(directory.join(".spielorders")).unwrap();
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../contracts/examples/v1/minimal/order.json");
+    let mut order: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(source).unwrap()).unwrap();
+    order["status"] = "ordered".into();
+    std::fs::write(
+        directory.join(".spielorders/order.json"),
+        serde_json::to_vec(&order).unwrap(),
+    )
+    .unwrap();
+    let path = directory.join("quote-coherence.txt");
+    std::fs::write(&path, b"Supporting Material contract capture: coherence.\n").unwrap();
+    let CanonicalPackageLoad::CurrentCandidate(package) =
+        inspect_canonical_package(&root, &spielorders_cli::effects::PlatformFileSystem)
+    else {
+        panic!("fixture loads")
+    };
+    let index = RecordedIndex(path);
+    let snapshot = search_supporting_material(
+        &package,
+        &SupportingMaterialQuery::new("coherence", std::time::Duration::from_secs(5)),
+        Some(&index),
+        &NotCancelled,
+    );
+    let bytes =
+        spielorders_cli::contract::supporting_material_document(&package, "coherence", &snapshot)
+            .unwrap();
+    let actual = String::from_utf8(bytes)
+        .unwrap()
+        .replace(root.to_str().unwrap(), "<PACKAGE_ROOT>");
+    assert_golden(
+        ResponseContract::SearchSupportingMaterial,
+        "success",
+        actual,
+    );
+    "success"
+}
+
+/// A word no file in the fixture Packages carries, in its name or its contents.
+///
+/// The recorded bytes must be the same bytes whatever the platform's index holds, and this
+/// is what makes them so: an index that has never looked at a temporary directory and one
+/// that has indexed all of it both report nothing for this word.
+const UNMATCHABLE: &str = "zirconium";
+
+/// Each cell `search supporting-material` records, against its recorded bytes.
+///
+/// Three comparisons in one test because they are one claim about one contract: what the
+/// index answered, that answer beside a Package the load has something to say about, and a
+/// Package it could not trust at all.
+///
+/// **The two cells carrying a provider's answer are the bytes a build with a provider wrote**,
+/// which is the one thing in this file a platform decides. A build with none reaches the state
+/// that prevented an answer for those two runs, which is asserted here rather than passed
+/// over — including that what the load observed still travels beside it, since a Damaged Order
+/// is a fact about the Package whether or not anything could look inside it. `invalid` is the
+/// load refusing before any provider is asked, so it is the one cell whose bytes every build
+/// writes.
+#[test]
+fn every_supporting_material_response_matches_its_golden_fixtures() {
+    for (cell, package, status) in [
+        (
+            "empty-result",
+            populated_package as fn(&str) -> (TemporaryTree, PathBuf),
+            0,
+        ),
+        ("warning", damaged_order_package, 0),
+        ("invalid", package_with_duplicate_vendor_names, 1),
+    ] {
+        let label = format!("golden-supporting-material-{cell}");
+        let (_tree, root) = package(&label);
+
+        let outcome = Invocation::new(&["search", "supporting-material", UNMATCHABLE])
+            .rooted_at(&root)
+            .argument("--json")
+            .run();
+
+        if supporting_material_provider().is_none() && cell != "invalid" {
+            let document = response(&outcome);
+            assert_eq!(outcome.status, Some(1), "{cell}: {}", outcome.stdout_text());
+            assert_eq!(
+                document["error"]["code"], "supporting_material_unsupported",
+                "{cell}: {document}"
+            );
+            assert_eq!(
+                document["diagnostics"].as_array().map(Vec::is_empty),
+                Some(cell != "warning"),
+                "{cell}: what the load observed reaches the caller either way: {document}"
+            );
+            continue;
+        }
+        assert_eq!(
+            outcome.status,
+            Some(status),
+            "{cell}: {}",
+            outcome.stdout_text()
+        );
+        assert_matches_golden(
+            ResponseContract::SearchSupportingMaterial,
+            cell,
+            &outcome,
+            &root,
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The two entity searches' golden fixtures.
+// ---------------------------------------------------------------------------
+
+/// One recorded cell of an entity search.
+struct SearchCell {
+    contract: ResponseContract,
+    /// Which of the response kinds this cell is.
+    cell: &'static str,
+    /// The command line a caller writes, before `--root` and `--json`.
+    line: &'static [&'static str],
+    /// The Package it is recorded against.
+    package: fn(&str) -> (TemporaryTree, PathBuf),
+    status: i32,
+}
+
+/// [`package_with_a_damaged_order`]'s Root, without the Directory it damaged.
+fn damaged_order_package(label: &str) -> (TemporaryTree, PathBuf) {
+    let (tree, root, _damaged) = package_with_a_damaged_order(label);
+    (tree, root)
+}
+
+/// Every cell the two entity searches record.
+///
+/// One table rather than two, because the two record one set of cells: a cell one of them
+/// supplies and the other does not is a hole nobody finds until a consumer hits it, and
+/// `tests/cross_command_conformance.rs` is where the set being the four a read has is
+/// said.
+///
+/// **`empty-result` is a populated Package and a query nothing matches**, rather than an
+/// empty Package. The answer a search can give that no other read can is that a Package
+/// with entities in it holds none that match, and recording an empty Package instead would
+/// record having nothing where the contract's claim is about matching nothing.
+///
+/// **`success` is recorded from one quoted multiword argument** whose two terms land on
+/// two different facts of one Order and on no single fact of either, so the tokenization
+/// this contract depends on is in the recorded bytes rather than only in a live assertion.
+/// `warning` drops one of those terms, so that cell is also where the Vendor's facts
+/// reaching the Order that names it is recorded.
+///
+/// **`warning` is recorded with `--all` for the Vendor search**, the same choice
+/// `package list vendors` made and for the same reason: both halves of the Vendor
+/// visibility default are then in bytes, and the Hidden Vendor a query retains is
+/// reachable in a recorded response rather than only in a live one.
+const ENTITY_SEARCH_CELLS: [SearchCell; 8] = [
+    SearchCell {
+        contract: ResponseContract::SearchOrders,
+        cell: "success",
+        line: &["search", "orders", "laser lovelace"],
+        package: populated_package,
+        status: 0,
+    },
+    SearchCell {
+        contract: ResponseContract::SearchOrders,
+        cell: "empty-result",
+        line: &["search", "orders", "zirconium"],
+        package: populated_package,
+        status: 0,
+    },
+    SearchCell {
+        contract: ResponseContract::SearchOrders,
+        cell: "warning",
+        line: &["search", "orders", "lovelace"],
+        package: damaged_order_package,
+        status: 0,
+    },
+    SearchCell {
+        contract: ResponseContract::SearchOrders,
+        cell: "invalid",
+        line: &["search", "orders", "lovelace"],
+        package: package_with_duplicate_vendor_names,
+        status: 1,
+    },
+    SearchCell {
+        contract: ResponseContract::SearchVendors,
+        cell: "success",
+        line: &["search", "vendors", "tarnwick accounts"],
+        package: populated_package,
+        status: 0,
+    },
+    SearchCell {
+        contract: ResponseContract::SearchVendors,
+        cell: "empty-result",
+        line: &["search", "vendors", "zirconium"],
+        package: populated_package,
+        status: 0,
+    },
+    SearchCell {
+        contract: ResponseContract::SearchVendors,
+        cell: "warning",
+        line: &["search", "vendors", "nethermoor", "--all"],
+        package: damaged_order_package,
+        status: 0,
+    },
+    SearchCell {
+        contract: ResponseContract::SearchVendors,
+        cell: "invalid",
+        line: &["search", "vendors", "tarnwick"],
+        package: package_with_duplicate_vendor_names,
+        status: 1,
+    },
+];
+
+/// Each entity search, in each of its four cells, against its recorded bytes.
+///
+/// Eight comparisons in one test because they are one claim: these two contracts are a
+/// set, and a change to one of them is as much a contract change as a change to both. The
+/// failure names the contract and the cell.
+#[test]
+fn every_entity_search_matches_its_golden_fixtures() {
+    for recorded in ENTITY_SEARCH_CELLS {
+        let name = recorded.contract.name();
+        let label = format!("golden-{}-{}", name.replace('.', "-"), recorded.cell);
+        let (_tree, root) = (recorded.package)(&label);
+
+        let outcome = Invocation::new(recorded.line)
+            .rooted_at(&root)
+            .argument("--json")
+            .run();
+
+        assert_eq!(
+            outcome.status,
+            Some(recorded.status),
+            "{name} {}: {}",
+            recorded.cell,
+            outcome.stdout_text()
+        );
+        assert_matches_golden(recorded.contract, recorded.cell, &outcome, &root);
+    }
 }

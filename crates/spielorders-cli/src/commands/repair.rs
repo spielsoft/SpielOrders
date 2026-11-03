@@ -36,10 +36,11 @@ use crate::{
         order::{OrderFailed, Target, failed_order_context, targeted_directory},
         repair_suggestion::{RepairSuggestion, Rooting, order_repair_at, package_repair_at},
         shared::{
-            Failed, IndexProjection, OfferedActionProjection, UNSPELLABLE_PATH, diagnostics,
-            failed_context, failed_document, human_failure, in_package, index, located,
-            not_representable, offered_actions, operation_failure, order_diagnosis_failure,
-            package_context, report_diagnostic, shell_word, text, undeliverable, unmanaged_failure,
+            Failed, IndexProjection, OfferedActionProjection, RootKind, UNSPELLABLE_PATH,
+            diagnostics, failed_context, failed_document, human_failure, in_package, index,
+            link_named_as_a_root, located, not_representable, offered_actions, operation_failure,
+            order_diagnosis_failure, package_context, report_diagnostic, shell_word, text,
+            undeliverable, unmanaged_failure,
         },
     },
     contract::ResponseContract,
@@ -209,6 +210,9 @@ pub(crate) fn package(
 }
 
 fn decide_package(selected_root: &Path, request: &RepairRequest, dry_run: bool) -> PackageAnswer {
+    if let Some(failed) = link_named_as_a_root(selected_root, RootKind::Package) {
+        return PackageAnswer::Failed(Box::new(failed));
+    }
     let (case, action, resolutions) = match request {
         RepairRequest::Diagnose => return diagnosed_package(selected_root, None),
         RepairRequest::Apply {
@@ -721,7 +725,7 @@ fn routed(action: RepairAction, supplied: &SuppliedResolutions) -> Routed {
         RepairAction::PromoteStagingCandidate => Routed::Record(RepairResolution::None),
         RepairAction::AssignExistingVendor => {
             Routed::Semantic(SemanticResolution::AssignExistingVendor {
-                vendor_id: supplied["vendor_id"].clone(),
+                name: supplied["vendor"].clone(),
             })
         }
         RepairAction::CreateAndAssignVendor => {
@@ -1045,16 +1049,17 @@ fn semantic_refusal<E: std::fmt::Display>(
             action,
             scope,
         } => unauthorized_action(&handle, action, &scope),
-        SemanticRepairError::UnknownVendor { vendor_id, scope } => Failed {
+        SemanticRepairError::UnknownVendor { name, scope } => Failed {
             code: FailureCode::RepairVendorUnknown,
             scope: FailureScope::Order,
             message: format!(
-                "this Package holds no Vendor carrying the Vendor ID {vendor_id}. A repair \
-                 chooses an existing Vendor, deliberately creates a distinct one, or clears \
-                 the reference; it never creates one by accident."
+                "this Package holds no Vendor named `{name}`, under the trimmed, \
+                 case-insensitive comparison that makes Names unique. A repair chooses an \
+                 existing Vendor, deliberately creates a distinct one, or clears the \
+                 reference; it never creates one by accident."
             ),
             paths: vec![in_package(scope.location())],
-            identities: vec![Identity::vendor(&vendor_id)],
+            identities: vec![Identity::vendor_name(&name)],
             package_root: Some(scope.root().to_path_buf()),
             diagnostics: Vec::new(),
         },

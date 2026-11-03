@@ -1,5 +1,17 @@
-//! The command line: Git-style first-level families, their commands, and the global
-//! options that govern targeting, output, and execution.
+//! The command line: Git-style first-level families, their commands, and the options
+//! that govern targeting, output, and execution.
+//!
+//! **The command path comes first and its modifiers follow it.** Each option is declared
+//! on the command it modifies, so a whole command line arrives at one parse level and the
+//! parser decides the whole grammar. Nothing precedes the command path except `--help`
+//! and `--version`, which are reference requests rather than modifiers.
+//!
+//! That is what lets every exclusion be declared on the group that owns it. An option
+//! declared once for the executable stands in any gap between the command path's
+//! segments, and a conflict is resolved against one parse level's own matches — so a pair
+//! written on either side of a segment is never seen together, a repetition is one
+//! occurrence at each level, and the rule has to be decided after parsing over the whole
+//! command line. One parse level is what makes each of those the parser's own refusal.
 //!
 //! **Options never carry domain facts.** Targeting, output mode, and execution are
 //! what an option is for; domain facts arrive as canonical `field=value` assignments
@@ -25,12 +37,11 @@
 
 use crate::output::Mode;
 use clap::{
-    ArgMatches, Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum,
+    Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum,
     error::{ContextKind, ContextValue, ErrorKind},
-    parser::ValueSource,
 };
 use spielorders_core::{readme::ConfigurationPathKind, repair_cases::RepairAction};
-use std::{ffi::OsString, path::PathBuf};
+use std::{collections::BTreeSet, ffi::OsString, path::PathBuf};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -43,9 +54,134 @@ use std::{ffi::OsString, path::PathBuf};
 pub(crate) struct Cli {
     #[command(subcommand)]
     pub family: Family,
+}
 
-    #[command(flatten)]
-    pub options: GlobalOptions,
+impl Cli {
+    /// The output mode the named command carries.
+    ///
+    /// Asked of the command rather than of the executable, because that is where the
+    /// option is now declared. The executable builds one [`crate::output::Output`] before
+    /// it dispatches, so this is the one question it puts to the parsed command line
+    /// ahead of knowing which command it is.
+    pub(crate) fn mode(&self) -> Mode {
+        self.family.mode()
+    }
+}
+
+// Which group answers for each command, in one place rather than beside each enum,
+// because it is one walk down the command path to the command that declares the option.
+//
+// **Exhaustive rather than read back out of the parse.** A command added to the tree does
+// not compile until it says how it is reported in, which is the same guarantee the
+// dispatch in `crate::command` gets and for the same reason: an accessor that searched the
+// matches for whichever level happened to carry the flags would answer for a command that
+// declares no output mode at all.
+
+impl Family {
+    fn mode(&self) -> Mode {
+        match self {
+            Self::Init { output, .. }
+            | Self::AddVendor { output, .. }
+            | Self::AddOrder { output, .. }
+            | Self::AdoptOrder { output, .. }
+            | Self::Validate { output, .. }
+            | Self::Repair { output, .. }
+            | Self::Upgrade { output, .. } => output.mode(),
+            Self::Package { command } => command.mode(),
+            Self::Index { command } => command.mode(),
+            Self::Order { command } => command.mode(),
+            Self::Vendor { command } => command.mode(),
+            Self::Search { command } => command.mode(),
+        }
+    }
+}
+
+impl SearchCommand {
+    fn mode(&self) -> Mode {
+        match self {
+            Self::Orders { output, .. }
+            | Self::Vendors { output, .. }
+            | Self::SupportingMaterial { output, .. } => output.mode(),
+        }
+    }
+}
+
+impl PackageCommand {
+    fn mode(&self) -> Mode {
+        match self {
+            Self::Readme { output, .. }
+            | Self::Show { output, .. }
+            | Self::Values { output, .. } => output.mode(),
+            Self::List { command } => command.mode(),
+        }
+    }
+}
+
+impl ListCommand {
+    fn mode(&self) -> Mode {
+        match self {
+            Self::Orders { output, .. } | Self::Vendors { output, .. } => output.mode(),
+        }
+    }
+}
+
+impl IndexCommand {
+    fn mode(&self) -> Mode {
+        match self {
+            Self::Status { output, .. } | Self::Rebuild { output, .. } => output.mode(),
+        }
+    }
+}
+
+impl OrderCommand {
+    fn mode(&self) -> Mode {
+        match self {
+            Self::Show { output, .. }
+            | Self::Edit { output, .. }
+            | Self::Readme { output, .. }
+            | Self::Validate { output, .. }
+            | Self::Repair { output, .. }
+            | Self::Align { output, .. }
+            | Self::Remove { output, .. } => output.mode(),
+            Self::Item { command } => command.mode(),
+        }
+    }
+}
+
+impl ItemCommand {
+    fn mode(&self) -> Mode {
+        match self {
+            Self::List { output, .. }
+            | Self::Add { output, .. }
+            | Self::Edit { output, .. }
+            | Self::Move { output, .. }
+            | Self::Remove { output, .. } => output.mode(),
+        }
+    }
+}
+
+impl VendorCommand {
+    fn mode(&self) -> Mode {
+        match self {
+            Self::Show { output, .. }
+            | Self::Edit { output, .. }
+            | Self::Hide { output, .. }
+            | Self::Unhide { output, .. } => output.mode(),
+            Self::Contact { command } => command.mode(),
+        }
+    }
+}
+
+impl ContactCommand {
+    fn mode(&self) -> Mode {
+        match self {
+            Self::List { output, .. }
+            | Self::Add { output, .. }
+            | Self::Edit { output, .. }
+            | Self::Move { output, .. }
+            | Self::Remove { output, .. } => output.mode(),
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -69,7 +205,13 @@ pub(crate) enum Family {
         assignments: Vec<Assignment>,
 
         #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
         execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
     },
     // A first-level command, like `init` and unlike the reads, because a Vendor that does
     // not exist yet cannot be selected: there is no `NAME` for a `vendor` subcommand to
@@ -87,7 +229,13 @@ pub(crate) enum Family {
         subject: Vec<SubjectToken>,
 
         #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
         execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
     },
     // First-level and Package-rooted for `add-vendor`'s reason: the Order it creates does
     // not exist yet, so there is no Order Directory for an `order` subcommand's `--root` to
@@ -107,7 +255,13 @@ pub(crate) enum Family {
         subject: Vec<SubjectToken>,
 
         #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
         execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
     },
     // Package-rooted, like `add-order`: `--root` names the SpielOrders Root and `DIRECTORY`
     // names one existing child of its configured Orders Directory. It is not an `order`
@@ -134,7 +288,13 @@ pub(crate) enum Family {
         assignments: Vec<AdoptionToken>,
 
         #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
         execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
     },
     /// Read a SpielOrder Package.
     Package {
@@ -149,7 +309,13 @@ pub(crate) enum Family {
     /// Every Order Directory and every cross-record constraint, with every diagnostic
     /// returned at once rather than stopping at the first. Nothing is changed: there is no
     /// `--fix` and no option that acts on a finding.
-    Validate,
+    Validate {
+        #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
+        output: OutputMode,
+    },
     // A first-level command with no subcommand, because diagnosing this Package's own
     // actionable cases and applying one of them are one command in two moods rather than
     // two commands. `case=` and `action=` are what tell them apart, and they arrive as
@@ -168,7 +334,13 @@ pub(crate) enum Family {
         assignments: Vec<FieldAssignment>,
 
         #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
         execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
     },
     // A first-level command with no subcommand, because there is one thing to do to a
     // Package whose metadata is behind this build: carry it to the newest version this
@@ -181,7 +353,13 @@ pub(crate) enum Family {
     /// Package marker advances only after every artifact has.
     Upgrade {
         #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
         execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
     },
     // Package-rooted, because the derived index belongs to the Package rather than to any
     // Order: `--root` names the SpielOrders Root.
@@ -205,9 +383,6 @@ pub(crate) enum Family {
     Order {
         #[command(subcommand)]
         command: OrderCommand,
-
-        #[command(flatten)]
-        targeting: OrderTargeting,
     },
     // Package-rooted, because Vendors have no directories: `--root` names the SpielOrders
     // Root and `NAME` names the Vendor within it. There is no `--uuid` here and no
@@ -221,6 +396,92 @@ pub(crate) enum Family {
         #[command(subcommand)]
         command: VendorCommand,
     },
+    // Package-rooted, because what a lookup answers about is one Package: `--root` names
+    // the SpielOrders Root, and for the Supporting Material search it is also what the
+    // Order Directories the query is scoped to are taken from.
+    /// Look something up in a SpielOrder Package.
+    Search {
+        #[command(subcommand)]
+        command: SearchCommand,
+    },
+}
+
+// The three in the decided command surface's own order: the two deterministic entity
+// searches, then the one that asks a platform service.
+#[derive(Debug, Subcommand)]
+pub(crate) enum SearchCommand {
+    /// Report the Orders of this Package that match a query.
+    ///
+    /// An Order matches when every term lands on some searchable fact of it or of the
+    /// Vendor it references, so editing a Vendor changes which Orders match. A matching
+    /// query answers with the Orders it retained in the Package's own ordering, and a
+    /// query nothing matches answers with none of them.
+    Orders {
+        #[command(flatten)]
+        keywords: Keywords,
+
+        #[command(flatten)]
+        matching: Matching,
+
+        #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
+        output: OutputMode,
+    },
+    /// Report the Vendors of this Package that match a query.
+    ///
+    /// A Vendor matches on its own identity and shared facts, Contacts included. An
+    /// Order's facts are never among them: which Orders match is the sibling command's
+    /// answer.
+    Vendors {
+        // The same presentation option `package show` and `package list vendors` carry,
+        // with the same default and for the same reason: this answer is a list of Vendors,
+        // and a Vendor list offers only the active ones until `--all` asks for every one
+        // with its visibility.
+        /// Report Hidden Vendors too, each carrying its visibility.
+        ///
+        /// Without it, the Vendors this Package offers for new use are reported.
+        #[arg(long)]
+        all: bool,
+
+        #[command(flatten)]
+        keywords: Keywords,
+
+        #[command(flatten)]
+        matching: Matching,
+
+        #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
+        output: OutputMode,
+    },
+    // No `--case-sensitive` and no structured filter, and that is the decision rather than
+    // an omission: the platform's own index governs matching here, so a control that
+    // changed how a term is compared would be this application claiming a semantics it does
+    // not implement. The two entity searches are where the deterministic query lives.
+    /// Find Supporting Material with the platform's own index.
+    ///
+    /// The query is scoped to this Package's Order Directories and its results are grouped
+    /// under the Orders that hold them. SpielOrders never walks or indexes Supporting
+    /// Material itself: where no provider can look, the answer says which platform state
+    /// prevented one.
+    #[command(name = "supporting-material")]
+    SupportingMaterial {
+        /// The words to look for, in the provider's own matching semantics.
+        ///
+        /// Written as the caller wrote them. Nothing here tokenizes or folds the text, and
+        /// several arguments are one query with a space between them.
+        #[arg(value_name = "QUERY", required = true)]
+        query: Vec<String>,
+
+        #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
+        output: OutputMode,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -230,6 +491,12 @@ pub(crate) enum VendorCommand {
     Show {
         /// The Vendor Name.
         name: String,
+
+        #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
+        output: OutputMode,
     },
     /// Change this Vendor's shared facts.
     ///
@@ -244,7 +511,13 @@ pub(crate) enum VendorCommand {
         assignments: Vec<FieldAssignment>,
 
         #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
         execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
     },
     // A Vendor is never deleted, so there is no `vendor remove`. These two are what
     // replaced deletion: they govern whether a Vendor is offered for new use, never
@@ -259,7 +532,13 @@ pub(crate) enum VendorCommand {
         name: String,
 
         #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
         execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
     },
     /// Offer this Vendor for new use again.
     Unhide {
@@ -267,7 +546,13 @@ pub(crate) enum VendorCommand {
         name: String,
 
         #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
         execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
     },
     /// Work with this Vendor's ordered Contact collection.
     Contact {
@@ -288,6 +573,12 @@ pub(crate) enum ContactCommand {
     List {
         /// The Vendor Name.
         name: String,
+
+        #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
+        output: OutputMode,
     },
     /// Add a Contact to this Vendor's ordered collection.
     ///
@@ -303,7 +594,13 @@ pub(crate) enum ContactCommand {
         assignments: Vec<FieldAssignment>,
 
         #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
         execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
     },
     /// Change the facts of the Contact at this position.
     ///
@@ -322,7 +619,13 @@ pub(crate) enum ContactCommand {
         assignments: Vec<FieldAssignment>,
 
         #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
         execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
     },
     /// Move the Contact at this position to another position.
     ///
@@ -342,7 +645,13 @@ pub(crate) enum ContactCommand {
         destination: Destination,
 
         #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
         execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
     },
     /// Remove the Contact at this position.
     ///
@@ -357,7 +666,13 @@ pub(crate) enum ContactCommand {
         position: String,
 
         #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
         execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
     },
 }
 
@@ -548,7 +863,13 @@ fn incomplete_repair_request(assignments: &[FieldAssignment]) -> Option<String> 
 #[derive(Debug, Subcommand)]
 pub(crate) enum OrderCommand {
     /// Report this Order's complete current facts, its Items, and its calculated totals.
-    Show,
+    Show {
+        #[command(flatten)]
+        target: OrderTarget,
+
+        #[command(flatten)]
+        output: OutputMode,
+    },
     /// Change this Order's facts.
     ///
     /// The assignments are one order-independent atomic mutation over the whole Order. An
@@ -565,13 +886,25 @@ pub(crate) enum OrderCommand {
         assignments: Vec<FieldAssignment>,
 
         #[command(flatten)]
+        target: OrderTarget,
+
+        #[command(flatten)]
         execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
     },
     /// Print the conventional absolute path of this Order's README.
     ///
     /// The path is printed whether or not the document is presently there, so it can be
     /// composed with `cat`, `vi`, or any other ordinary tool.
-    Readme,
+    Readme {
+        #[command(flatten)]
+        target: OrderTarget,
+
+        #[command(flatten)]
+        output: OutputMode,
+    },
     // The one `order` command that answers for a Damaged Order rather than failing on
     // one: judging an Order that cannot be read is the whole reason it exists.
     /// Validate this Order's scope.
@@ -579,7 +912,13 @@ pub(crate) enum OrderCommand {
     /// Every diagnostic in this Order's scope at once, and no sibling's. A problem with
     /// the Package around it is reported as a Package problem rather than as this Order's,
     /// because an Order-scoped answer depends on Package-wide evidence.
-    Validate,
+    Validate {
+        #[command(flatten)]
+        target: OrderTarget,
+
+        #[command(flatten)]
+        output: OutputMode,
+    },
     // The Order-scoped half of `spielorders repair`, in the same two moods and with the
     // same assignment language. A Package-level case is the other command's; neither
     // reaches into the other's scope.
@@ -594,7 +933,13 @@ pub(crate) enum OrderCommand {
         assignments: Vec<FieldAssignment>,
 
         #[command(flatten)]
+        target: OrderTarget,
+
+        #[command(flatten)]
         execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
     },
     // The one command that renames an Order Directory. Drift is ordinary allowed state —
     // editing a fact deliberately leaves the directory alone — so this is asked for
@@ -606,7 +951,13 @@ pub(crate) enum OrderCommand {
     /// resolved with an invented suffix.
     Align {
         #[command(flatten)]
+        target: OrderTarget,
+
+        #[command(flatten)]
         execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
     },
     // The only command that may dispose of Supporting Material, and it disposes of it
     // only as part of one whole Order Directory. Nothing here erases: `--delete` is a
@@ -627,7 +978,13 @@ pub(crate) enum OrderCommand {
         delete: bool,
 
         #[command(flatten)]
+        target: OrderTarget,
+
+        #[command(flatten)]
         execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
     },
     /// Work with this Order's ordered Item collection.
     Item {
@@ -646,7 +1003,13 @@ pub(crate) enum OrderCommand {
 #[derive(Debug, Subcommand)]
 pub(crate) enum ItemCommand {
     /// List this Order's Items, numbered from one, with their calculated totals.
-    List,
+    List {
+        #[command(flatten)]
+        target: OrderTarget,
+
+        #[command(flatten)]
+        output: OutputMode,
+    },
     /// Add an Item to this Order's ordered collection.
     ///
     /// The Item is appended unless `position=N` says where to insert it, in which case the
@@ -659,7 +1022,13 @@ pub(crate) enum ItemCommand {
         assignments: Vec<FieldAssignment>,
 
         #[command(flatten)]
+        target: OrderTarget,
+
+        #[command(flatten)]
         execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
     },
     /// Change the facts of the Item at this position.
     ///
@@ -676,7 +1045,13 @@ pub(crate) enum ItemCommand {
         assignments: Vec<FieldAssignment>,
 
         #[command(flatten)]
+        target: OrderTarget,
+
+        #[command(flatten)]
         execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
     },
     /// Move the Item at this position to another position.
     ///
@@ -693,7 +1068,13 @@ pub(crate) enum ItemCommand {
         destination: Destination,
 
         #[command(flatten)]
+        target: OrderTarget,
+
+        #[command(flatten)]
         execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
     },
     /// Remove the Item at this position.
     ///
@@ -705,7 +1086,13 @@ pub(crate) enum ItemCommand {
         position: String,
 
         #[command(flatten)]
+        target: OrderTarget,
+
+        #[command(flatten)]
         execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
     },
 }
 
@@ -934,14 +1321,67 @@ pub(crate) struct Execution {
     pub dry_run: bool,
 }
 
-/// The second way an `order` command can name its Order.
+/// The SpielOrders Root a Package-level command acts on.
 ///
-/// Flattened into the `order` family rather than declared globally, because it targets an
-/// Order and nothing else does: `package show --uuid` would be an option answering a
-/// question that command does not ask. It is `global` *within* this family so that it may
-/// be written before or after the command, as `--root` may be.
+/// One of the two targeting groups, and the difference between them is the whole rule:
+/// a command carrying this one takes the SpielOrders Root, and a command carrying
+/// [`OrderTarget`] takes the Order Directory. Which root a command takes is therefore
+/// the command's own type rather than a sentence a reader has to remember.
 #[derive(Debug, Args)]
-pub(crate) struct OrderTargeting {
+pub(crate) struct PackageTarget {
+    /// The SpielOrders Root, named exactly. No ancestor is ever searched.
+    #[arg(long, value_name = "PATH", default_value = ".")]
+    pub root: PathBuf,
+}
+
+/// The words an entity search looks for.
+///
+/// One group attached to both entity searches, so the terms are declared once and the two
+/// commands cannot come to accept them differently.
+#[derive(Debug, Args)]
+pub(crate) struct Keywords {
+    /// The words to look for, combined with AND.
+    ///
+    /// Whitespace separates terms wherever it stands, so one quoted multiword argument
+    /// searches as several terms and matches exactly what those terms match when the
+    /// shell splits them. Each term matches a substring of one searchable fact, and two
+    /// terms may land on two different facts of one entity. The text is literal
+    /// throughout: never a phrase, and never a regular expression.
+    ///
+    /// With no words at all the query applies no text restriction.
+    #[arg(value_name = "KEYWORD")]
+    pub keywords: Vec<String>,
+}
+
+/// How an entity search compares letter case.
+///
+/// One group for the same reason [`Keywords`] is one. There is nothing else in it: the
+/// query's other rules — whitespace-separated terms combined with AND, substring
+/// matching, and the fold that keeps a diacritic from distinguishing — are the query's own
+/// and no option governs any of them.
+#[derive(Debug, Args)]
+pub(crate) struct Matching {
+    /// Distinguish letter case.
+    ///
+    /// Without it, matching is case-insensitive. Nothing else about the query changes.
+    #[arg(long)]
+    pub case_sensitive: bool,
+}
+
+/// The Order an `order` command acts on, named by its Directory or by its identity.
+///
+/// **The exclusion is declared on the group**, which is the whole of it: both ways of
+/// naming one Order stand at one parse level, so the parser refuses a command line that
+/// names both and nothing downstream considers an Order named twice.
+#[derive(Debug, Args)]
+#[group(multiple = false)]
+pub(crate) struct OrderTarget {
+    /// The Order Directory, named exactly. No ancestor is ever searched.
+    ///
+    /// The Package is reached from there through the Order's own technical locator.
+    #[arg(long, value_name = "PATH", default_value = ".")]
+    pub root: PathBuf,
+
     // Provisional, reserved for GUI and scripting evaluation during MVP, and it may be
     // removed before the CLI contract is declared stable. Human workflows use Order
     // Directory paths, never UUIDs and never non-unique Order Titles.
@@ -949,10 +1389,44 @@ pub(crate) struct OrderTargeting {
     ///
     /// Cannot be combined with `--root`: the two are different ways of naming the same
     /// Order, and a command line that supplied both would be asking about two.
-    // The exclusion that sentence promises is decided in `parse` over the whole command
-    // line rather than declared here. See `GLOBAL_EXCLUSIONS`.
-    #[arg(long, value_name = "ORDER_ID", global = true)]
+    #[arg(long, value_name = "ORDER_ID")]
     pub uuid: Option<String>,
+}
+
+/// Which of the four decided output modes a command reports in.
+///
+/// **The exclusion is declared on the group**, so it is written once and enforced by the
+/// parser wherever the group is attached. Default human output is the absence of all
+/// three rather than a fourth flag, so it excludes nothing and needs no member here.
+#[derive(Debug, Args)]
+#[group(multiple = false)]
+pub(crate) struct OutputMode {
+    /// Write one versioned machine-readable JSON document on standard output.
+    #[arg(long)]
+    pub json: bool,
+
+    /// Say nothing on success. A failure is still reported on standard error.
+    #[arg(long)]
+    pub quiet: bool,
+
+    /// Add human detail to the result.
+    #[arg(long)]
+    pub verbose: bool,
+}
+
+impl OutputMode {
+    /// The one selected output mode.
+    ///
+    /// At most one of the three flags can be set, because the group they belong to admits
+    /// one member and the parser refuses a command line that names two.
+    pub(crate) fn mode(&self) -> Mode {
+        match (self.json, self.quiet, self.verbose) {
+            (true, _, _) => Mode::Json,
+            (_, true, _) => Mode::Quiet,
+            (_, _, true) => Mode::Verbose,
+            (false, false, false) => Mode::Human,
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -962,7 +1436,13 @@ pub(crate) enum IndexCommand {
     /// Whether it is current, missing, malformed, at a version this build does not
     /// project, or stale, each with its own typed reasons. It writes nothing — asking
     /// what state the index is in must not be the thing that changes it.
-    Status,
+    Status {
+        #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
+        output: OutputMode,
+    },
     /// Replace the derived Package Index from the healthy canonical records.
     ///
     /// Deterministic: the same healthy Package rebuilds to identical bytes. A Damaged
@@ -971,14 +1451,26 @@ pub(crate) enum IndexCommand {
     /// canonical damage and it never becomes one.
     Rebuild {
         #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
         execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
     },
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum PackageCommand {
     /// Print the conventional absolute path of the Package README.
-    Readme,
+    Readme {
+        #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
+        output: OutputMode,
+    },
     /// Report everything needed to open this Package.
     Show {
         // A presentation option, not a domain fact and not a core filter. The core
@@ -992,6 +1484,12 @@ pub(crate) enum PackageCommand {
         /// either way: hiding governs what is offered, never what is resolved.
         #[arg(long)]
         all: bool,
+
+        #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
+        output: OutputMode,
     },
     // A collection belongs to the Package that holds it, and an Order-rooted command that
     // listed the Package's Orders would target one Order to report its siblings.
@@ -1010,6 +1508,12 @@ pub(crate) enum PackageCommand {
     Values {
         /// Which Reusable Free-Entry Value list to report.
         kind: ValueKind,
+
+        #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
+        output: OutputMode,
     },
 }
 
@@ -1023,7 +1527,13 @@ pub(crate) enum ListCommand {
     /// An Order whose record could not be read is listed as a placeholder rather than
     /// omitted, and each Order names the Vendor it references whether or not that
     /// Vendor is hidden.
-    Orders,
+    Orders {
+        #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
+        output: OutputMode,
+    },
     /// List the Vendors this Package offers for new use.
     Vendors {
         // The same presentation option `package show` carries, with the same default.
@@ -1036,6 +1546,12 @@ pub(crate) enum ListCommand {
         /// the same default `package show` uses.
         #[arg(long)]
         all: bool,
+
+        #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
+        output: OutputMode,
     },
 }
 
@@ -1065,130 +1581,36 @@ pub enum ValueKind {
     OrderGroup,
 }
 
-#[derive(Debug, Args)]
-pub(crate) struct GlobalOptions {
-    /// The root of the command's subject, named exactly. No ancestor is ever searched.
-    ///
-    /// The SpielOrders Root for a Package-level or `vendor` command — Vendors have no
-    /// directories — and the Order Directory for an `order` command.
-    #[arg(long, value_name = "PATH", default_value = ".", global = true)]
-    pub root: PathBuf,
-
-    // The three modes exclude each other, and that exclusion is decided in `parse` over
-    // the whole command line rather than declared on each of them. See
-    // `GLOBAL_EXCLUSIONS`.
-    /// Write one versioned machine-readable JSON document on standard output.
-    #[arg(long, global = true)]
-    pub json: bool,
-
-    /// Say nothing on success. A failure is still reported on standard error.
-    #[arg(long, global = true)]
-    pub quiet: bool,
-
-    /// Add human detail to the result.
-    #[arg(long, global = true)]
-    pub verbose: bool,
+/// Every set of options one command line may name at most one of.
+///
+/// **Read out of the parser's own groups rather than transcribed**, so this is what the
+/// grammar is rather than a second statement of it that can disagree: an exclusion is
+/// declared on the group that owns it — see [`OutputMode`] and [`OrderTarget`] — and a
+/// group that admits one member is exactly one of these. The same group is attached to
+/// every command that takes it, so a set is reported once however many commands declare
+/// it.
+///
+/// Each member is the parser's own argument id, which is what a caller writes with `--`
+/// in front of it for every option this command line has.
+pub fn exclusions() -> Vec<Vec<String>> {
+    let mut found = BTreeSet::new();
+    collect_exclusions(&Cli::command(), &mut found);
+    found.into_iter().collect()
 }
 
-impl GlobalOptions {
-    /// The one selected output mode.
-    ///
-    /// At most one of the three flags can be set, because a command line that named two
-    /// is refused as a usage error before this is asked rather than letting one silently
-    /// take precedence. See `GLOBAL_EXCLUSIONS`.
-    pub(crate) fn mode(&self) -> Mode {
-        match (self.json, self.quiet, self.verbose) {
-            (true, _, _) => Mode::Json,
-            (_, true, _) => Mode::Quiet,
-            (_, _, true) => Mode::Verbose,
-            (false, false, false) => Mode::Human,
+fn collect_exclusions(command: &clap::Command, found: &mut BTreeSet<Vec<String>>) {
+    for group in command.get_groups() {
+        // `is_multiple` wants the group by value, and a group is only ever read here.
+        if !group.clone().is_multiple() {
+            let members: Vec<String> = group.get_args().map(ToString::to_string).collect();
+            if members.len() > 1 {
+                found.insert(members);
+            }
         }
     }
-}
-
-/// Every set of global options a command line may name at most one of.
-///
-/// **The exclusion is decided over the whole command line rather than declared on the
-/// options**, because a `conflicts_with` rule is resolved against one parse level's own
-/// matches and a global option stands in any gap between the command path's segments. A
-/// pair written on either side of a subcommand therefore lands in two sets of matches and
-/// such a rule never sees them together — which makes the caller's typing decide whether
-/// the exclusion applies, and an exclusion a caller can write around is not one. See
-/// [`excluded_globals`], which decides these in [`parse`] where no boundary exists.
-///
-/// Each entry is the parser's own argument id. A refusal names the two in the order they
-/// stand here, so one conflict reads as one sentence however the caller wrote it.
-pub const GLOBAL_EXCLUSIONS: &[&[&str]] = &[
-    // The four decided output modes. Default human output is the absence of all three, so
-    // it excludes nothing and is not one of them here.
-    &["json", "quiet", "verbose"],
-    // The two ways of naming one Order — see `OrderTargeting`. `--uuid` belongs to the
-    // `order` family and `--root` to the executable, which is exactly the boundary a
-    // declared conflict could not see across.
-    &["root", "uuid"],
-];
-
-/// Why this command line names two options of one exclusion, where it names two.
-///
-/// The first exclusion with two of its options named is the one reported, and the first
-/// two of those: a command line wrong in more ways than one gets one stable sentence.
-fn excluded_globals(command: &clap::Command, matches: &ArgMatches) -> Option<String> {
-    GLOBAL_EXCLUSIONS.iter().find_map(|exclusion| {
-        let mut named = exclusion
-            .iter()
-            .filter(|option| named_by_the_caller(matches, option));
-        match (named.next(), named.next()) {
-            (Some(first), Some(second)) => Some(format!(
-                "`{}` and `{}` are mutually exclusive",
-                spelled(command, first),
-                spelled(command, second)
-            )),
-            _ => None,
-        }
-    })
-}
-
-/// Whether the caller wrote this option, anywhere on the command line.
-///
-/// **Every level of the parse is asked**, which is the whole point: a global option is
-/// recorded at the level it was written at, so a question put to one of them is exactly
-/// the boundary this exclusion exists to ignore.
-///
-/// A default value is not a caller writing one, which is what tells `--root` left off
-/// apart from `--root .` written out.
-fn named_by_the_caller(matches: &ArgMatches, option: &str) -> bool {
-    // Asked through the fallible accessor: an option one family declares is not an
-    // argument of the levels above that family, and putting the question to one of them
-    // directly is a panic rather than a `false`.
-    let here = matches.try_contains_id(option).unwrap_or(false)
-        && matches.value_source(option) == Some(ValueSource::CommandLine);
-    here || matches
-        .subcommand()
-        .is_some_and(|(_, inner)| named_by_the_caller(inner, option))
-}
-
-/// The option's own spelling, as the parser renders it: `--json`, or `--root <PATH>` where
-/// it takes a value.
-///
-/// Asked of the parser rather than written down a second time, so a renamed option or a
-/// changed value placeholder reaches this sentence without anyone remembering to. An id
-/// the parser has never heard of falls back to its bare long form, and a unit test below
-/// refuses one: an exclusion naming an option that does not exist excludes nothing, and
-/// the fallback would let it read as though it did.
-fn spelled(command: &clap::Command, option: &str) -> String {
-    declared(command, option).map_or_else(|| format!("--{option}"), |argument| argument.to_string())
-}
-
-/// The argument this id names, wherever in the command tree it is declared.
-fn declared<'a>(command: &'a clap::Command, option: &str) -> Option<&'a clap::Arg> {
-    command
-        .get_arguments()
-        .find(|argument| argument.get_id().as_str() == option)
-        .or_else(|| {
-            command
-                .get_subcommands()
-                .find_map(|family| declared(family, option))
-        })
+    for subcommand in command.get_subcommands() {
+        collect_exclusions(subcommand, found);
+    }
 }
 
 /// Parses the command line, leaving every byte of output to the caller.
@@ -1201,12 +1623,6 @@ pub(crate) fn parse(arguments: &[OsString]) -> Result<Cli, clap::Error> {
     let mut command = Cli::command().color(clap::ColorChoice::Always);
     let matches = command.try_get_matches_from_mut(arguments)?;
     let cli = Cli::from_arg_matches(&matches)?;
-    // Before every refusal below, because these are about the options rather than about
-    // any one command's assignments, and because that is where the parser decided them
-    // for as long as they were declared on the options themselves.
-    if let Some(message) = excluded_globals(&command, &matches) {
-        return Err(command.error(ErrorKind::ArgumentConflict, message));
-    }
     if let Family::Init { assignments, .. } = &cli.family
         && let Some(repeated) = repeated_assignment(assignments)
     {
@@ -1226,8 +1642,8 @@ pub(crate) fn parse(arguments: &[OsString]) -> Result<Cli, clap::Error> {
     if let Some((command_name, entity, shorthand, subject)) = creating
         && let Some(message) = combined_subject_forms(command_name, entity, shorthand, subject)
     {
-        // `ValueValidation` rather than `ArgumentConflict`, which this module reserves for
-        // the exclusions it decides between options. See `GLOBAL_EXCLUSIONS`.
+        // `ValueValidation` rather than `ArgumentConflict`, which the parser raises for the
+        // exclusions declared on an option group.
         return Err(command.error(ErrorKind::ValueValidation, message));
     }
     let inserting = match &cli.family {
@@ -1349,10 +1765,10 @@ pub(crate) fn json_requested(arguments: &[OsString]) -> bool {
 ///
 /// The one condition whose wording is chosen here is an unrecognized option, so a
 /// consumer reads the same sentence for it across parser releases. Anything else falls
-/// back to the parser's own first line, which is its terse statement of the problem —
-/// including every refusal this module composes itself, whose whole message is that one
-/// line. The rest of what the parser renders is usage and a pointer to `--help`, and that
-/// belongs on standard error in human mode rather than inside a response document.
+/// back to the parser's own statement of the problem — including every refusal this
+/// module composes itself, whose whole message is that statement. The rest of what the
+/// parser renders is a tip, the usage block, and a pointer to `--help`, and that belongs
+/// on standard error in human mode rather than inside a response document.
 pub(crate) fn usage_message(error: &clap::Error) -> String {
     let named = |kind: ContextKind| match error.get(kind) {
         Some(ContextValue::String(value)) => Some(value.clone()),
@@ -1368,12 +1784,25 @@ pub(crate) fn usage_message(error: &clap::Error) -> String {
     }
 }
 
+/// The parser's own statement of the problem, on one line.
+///
+/// **The whole of it, not its first line.** The statement is what the parser renders
+/// before its first blank line. Most conditions are one line, and two are not: a conflict
+/// among three options names the first and lists the rest beneath it, and an invalid value
+/// for a fixed-choice argument appends the values it would have accepted. Taking only the
+/// first line would put a sentence ending in a colon into a response document, and would
+/// drop the one part of an invalid-value refusal a caller can act on.
 fn terse(error: &clap::Error) -> String {
     let rendered = error.render().to_string();
-    let first = rendered.lines().next().unwrap_or_default();
-    first
+    let statement = rendered
+        .lines()
+        .take_while(|line| !line.trim().is_empty())
+        .map(str::trim)
+        .collect::<Vec<_>>()
+        .join(" ");
+    statement
         .strip_prefix("error: ")
-        .unwrap_or(first)
+        .unwrap_or(&statement)
         .trim()
         .to_owned()
 }
@@ -1390,11 +1819,46 @@ mod tests {
             .collect()
     }
 
+    /// The command every exclusion this executable declares is reachable on.
+    ///
+    /// One command line can name every option of every exclusion, so each pair below is
+    /// written where a caller can write it. A group declared somewhere this command does
+    /// not carry fails in [`written`] by name rather than being quietly skipped.
+    fn every_excluded_option() -> clap::Command {
+        Cli::command()
+            .find_subcommand("order")
+            .and_then(|family| family.find_subcommand("show"))
+            .expect("`order show` is a command")
+            .clone()
+    }
+
+    /// One option as a caller writes it: its long form, and a value where it takes one.
+    ///
+    /// Asked of the parser rather than written down beside the exclusion, so an option
+    /// that comes to take a value is still written correctly here.
+    fn written(command: &clap::Command, option: &str) -> Vec<String> {
+        let argument = command
+            .get_arguments()
+            .find(|argument| argument.get_id().as_str() == option)
+            .expect("every excluded option is one `order show` declares");
+        let mut tokens = vec![format!("--{option}")];
+        if argument.get_action().takes_values() {
+            tokens.push("value".to_owned());
+        }
+        tokens
+    }
+
     #[test]
     fn the_default_target_is_the_working_directory() {
         let cli = parse(&arguments(&["package", "readme"])).expect("the command parses");
-        assert_eq!(cli.options.root, PathBuf::from("."));
-        assert_eq!(cli.options.mode(), Mode::Human);
+        assert_eq!(cli.mode(), Mode::Human);
+        let Family::Package {
+            command: PackageCommand::Readme { target, .. },
+        } = cli.family
+        else {
+            panic!("the command line named `package readme`")
+        };
+        assert_eq!(target.root, PathBuf::from("."));
     }
 
     #[test]
@@ -1405,49 +1869,58 @@ mod tests {
             ("--verbose", Mode::Verbose),
         ] {
             let cli = parse(&arguments(&["package", "readme", flag])).expect("the mode parses");
-            assert_eq!(cli.options.mode(), mode, "{flag}");
+            assert_eq!(cli.mode(), mode, "{flag}");
         }
     }
 
-    /// An exclusion is a set of ids, and an id is tied to the option it names only by
-    /// being spelled the same. A misspelled one excludes nothing and says nothing, because
-    /// nothing was ever written on the command line under that name.
+    /// **Every excluded pair, derived from the group that declares the exclusion.**
+    ///
+    /// The defect each of these ends is a silent precedence: two options given and one
+    /// quietly winning, so a script that asked for `--json` and got human text because
+    /// `--quiet` came later would be parsing prose with nothing having said so.
+    ///
+    /// One placement, because the grammar allows one: each option is declared on the
+    /// command it modifies, so a pair a caller can write is a pair the parser sees
+    /// together. An option added to one of these groups is swept here without anyone
+    /// remembering that this test is where that is asserted.
     #[test]
-    fn every_excluded_option_is_one_the_parser_declares() {
-        let command = Cli::command();
-        for exclusion in GLOBAL_EXCLUSIONS {
-            for option in *exclusion {
-                assert!(
-                    declared(&command, option).is_some(),
-                    "`{option}` excludes another global option and is not one"
-                );
+    fn two_options_of_one_exclusion_are_refused_rather_than_ordered() {
+        let command = every_excluded_option();
+        for exclusion in exclusions() {
+            for (index, first) in exclusion.iter().enumerate() {
+                for second in &exclusion[index + 1..] {
+                    let mut line = vec!["order".to_owned(), "show".to_owned()];
+                    line.extend(written(&command, first));
+                    line.extend(written(&command, second));
+                    let rest: Vec<&str> = line.iter().map(String::as_str).collect();
+
+                    let error = parse(&arguments(&rest)).expect_err("one of the two, or neither");
+                    assert_eq!(error.kind(), ErrorKind::ArgumentConflict, "{line:?}");
+                    let message = usage_message(&error);
+                    assert!(
+                        message.contains(&format!("--{first}"))
+                            && message.contains(&format!("--{second}")),
+                        "{line:?}: the refusal names both options: {message}"
+                    );
+                }
             }
         }
     }
 
+    /// A repeated option is two occurrences at one parse level, which the parser already
+    /// refuses — so nothing in this module says anything about repetition.
+    ///
+    /// It was sayable at all only while an option stood in any gap between the command
+    /// path's segments: one occurrence recorded at each of two levels is not a repetition
+    /// to a parser that resolves one level at a time.
     #[test]
-    fn two_output_modes_are_refused_rather_than_ordered() {
-        for pair in [
-            ["--json", "--quiet"],
-            ["--json", "--verbose"],
-            ["--quiet", "--verbose"],
+    fn an_option_written_twice_is_refused() {
+        for line in [
+            vec!["order", "show", "--json", "--json"],
+            vec!["order", "show", "--root", "here", "--root", "there"],
         ] {
-            // Together and split across the subcommand, because the sentence is composed
-            // from the exclusion rather than from the two the parser happened to see, and
-            // the second of these is where a declared conflict saw neither.
-            for line in [
-                vec!["package", "readme", pair[0], pair[1]],
-                vec![pair[1], "package", "readme", pair[0]],
-            ] {
-                let error =
-                    parse(&arguments(&line)).expect_err("two modes cannot both be selected");
-                assert_eq!(error.kind(), ErrorKind::ArgumentConflict, "{line:?}");
-                assert_eq!(
-                    usage_message(&error),
-                    format!("`{}` and `{}` are mutually exclusive", pair[0], pair[1]),
-                    "{line:?}: the sentence names both modes in one stable order"
-                );
-            }
+            let error = parse(&arguments(&line)).expect_err("one option, one occurrence");
+            assert_eq!(error.kind(), ErrorKind::ArgumentConflict, "{line:?}");
         }
     }
 
@@ -1459,6 +1932,28 @@ mod tests {
         assert_eq!(usage_message(&error), "unrecognized option `--jsom`");
     }
 
+    /// A refused fixed-choice value carries the values that would have been accepted.
+    ///
+    /// The parser renders them after the clause, without a blank line, so they are part of
+    /// its statement of the problem rather than the help that follows it. They are the one
+    /// part of this refusal a caller can act on, and this response's `message` is where a
+    /// caller reads it.
+    #[test]
+    fn a_refused_fixed_choice_value_names_what_would_have_been_accepted() {
+        let error = parse(&arguments(&["package", "values", "bogus"]))
+            .expect_err("`bogus` is not one of the value kinds");
+        let message = usage_message(&error);
+        assert!(
+            message.starts_with("invalid value 'bogus' for "),
+            "{message}"
+        );
+        assert!(
+            message
+                .contains("[possible values: ordering_institution, orderer, project, order_group]"),
+            "{message}"
+        );
+    }
+
     /// A usage message never carries the generated usage block or the pointer to
     /// `--help`: that text is for a human on standard error, and inside a response
     /// document it is the stream contamination the contract forbids.
@@ -1467,6 +1962,9 @@ mod tests {
         for rest in [
             vec!["package", "readme", "--jsom"],
             vec!["package", "readme", "--json", "--quiet"],
+            // The one refusal the parser renders over several lines: it names the first
+            // option and lists the rest of the exclusion beneath it.
+            vec!["package", "readme", "--json", "--quiet", "--verbose"],
             vec!["package", "reamde"],
             vec![],
         ] {

@@ -329,7 +329,7 @@ fn rename_retains_identity_updates_live_resolution_and_never_renames_the_order_d
     let directory = created_order(
         root,
         "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
-        &OrderCreationInput::new("Laser components").vendor_id(vendor.vendor_id.as_str()),
+        &OrderCreationInput::new("Laser components").vendor_name(vendor.name.as_str()),
     );
     let order_path = directory.join(".spielorders/order.json");
     let order_bytes_before = fs::read(&order_path).unwrap();
@@ -619,7 +619,7 @@ fn hiding_a_vendor_referenced_by_a_committed_order_keeps_its_facts_resolvable() 
     let directory = created_order(
         root,
         "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
-        &OrderCreationInput::new("Laser components").vendor_id(vendor.vendor_id.as_str()),
+        &OrderCreationInput::new("Laser components").vendor_name(vendor.name.as_str()),
     );
     let order_path = directory.join(".spielorders/order.json");
     let order_before = fs::read(&order_path).unwrap();
@@ -870,7 +870,7 @@ fn an_order_referencing_a_hidden_vendor_is_still_editable() {
     let directory = created_order(
         root,
         "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
-        &OrderCreationInput::new("Laser components").vendor_id(vendor.vendor_id.as_str()),
+        &OrderCreationInput::new("Laser components").vendor_name(vendor.name.as_str()),
     );
     let plan = plan_vendor_hide(root, vendor.vendor_id.as_str(), &RealFileSystem)
         .expect("the Vendor can be hidden");
@@ -978,12 +978,12 @@ fn show_resolves_live_vendor_facts_and_referencing_orders_after_a_rename() {
     let referencing = created_order(
         root,
         "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
-        &OrderCreationInput::new("Laser components").vendor_id(vendor.vendor_id.as_str()),
+        &OrderCreationInput::new("Laser components").vendor_name(vendor.name.as_str()),
     );
     created_order(
         root,
         "1c4d2e6f-3a5b-4c7d-8e9f-0a1b2c3d4e5f",
-        &OrderCreationInput::new("Optical table").vendor_id(other.vendor_id.as_str()),
+        &OrderCreationInput::new("Optical table").vendor_name(other.name.as_str()),
     );
     let plan = plan_vendor_edit(
         root,
@@ -1762,7 +1762,7 @@ fn vendor_mutations_never_inspect_or_change_supporting_material() {
     let directory = created_order(
         root,
         "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
-        &OrderCreationInput::new("Laser components").vendor_id(vendor.vendor_id.as_str()),
+        &OrderCreationInput::new("Laser components").vendor_name(vendor.name.as_str()),
     );
     let material = directory.join("Quotes/nested");
     fs::create_dir_all(&material).unwrap();

@@ -13,11 +13,18 @@ state and components can compile and run without Tauri. Application preferences
 are a frontend capability, while ephemeral session state remains frontend-local;
 neither enters the Rust core.
 
-OS-indexed search begins asynchronously at the adapter boundary. The caller owns an
-`AbortController` and must discard completion from an aborted request. The native
-provider owns stopping its platform work after cancellation crosses the adapter.
-The settled snapshot payload, provider states, and result algorithm are intentionally
-deferred to M5.
+OS-indexed Supporting Material search is one synchronous core call: it takes a
+cancellation and a bounded timeout and returns one settled snapshot, so no asynchronous
+runtime enters the core or the CLI. Asynchronous means off the caller's user interface
+thread, which the desktop shell arranges by calling it from a worker — so the frontend
+capability over it is asynchronous and its caller owns an `AbortController`. A caller
+discards completion from an aborted request, and the native provider owns stopping its
+platform work after a cancellation crosses the adapter. The snapshot, the provider states,
+and the rules the answer is assembled by are
+`crates/spielorders-core/src/supporting_material.rs`; grouping results under Orders,
+excluding this application's own managed documents, telling one file reported twice from
+two files, and ordering what is left are Package rules and stay there rather than in any
+platform's adapter.
 
 All filesystem mechanics remain local to SpielOrders. No shared crate or frontend
 package with SpielGantt is introduced.

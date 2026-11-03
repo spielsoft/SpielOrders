@@ -106,23 +106,21 @@ fn an_order_that_adds_to_nothing_displays_an_unsigned_zero() {
             !orders.iter().any(|line| line.contains("total -0")),
             "{label}: and never carries a sign, in any spelling: {orders:?}"
         );
-        // The other half of the rule, and the reason the sign is dropped on the value
-        // rather than on the core's number: the response still spells the negative zero
-        // the core calculated. A display rule that reached the response would show up
-        // here as `0.0`.
+        // The machine half, which is the number itself rather than a rendering of it: a
+        // total of nothing is zero, and it carries no sign in the response either.
         //
-        // Read from the bytes because a parsed value cannot answer it, and the `-` is
-        // there because `Iterator::sum` for floats folds from `-0.0`: the core's
-        // `order_total` over no Item Totals is the seed itself. A standard library that
-        // changed that seed would fail here, which is the right place to notice it.
+        // Read from the bytes because a parsed value cannot answer it — `-0.0` and `0.0`
+        // compare equal — and this is exactly where the two spellings had to be told
+        // apart: the human `0.00` was already right while the recorded response said
+        // `-0.0`, which is what a float sum seeded at negative zero leaves behind and not
+        // what a total looks like.
         assert_eq!(
             document["data"]["orders"][0]["order_total"], 0.0,
             "{label}: the response reports a total of nothing"
         );
         assert!(
-            reported.contains("\"order_total\": -0.0"),
-            "{label}: the machine response carries the core's own negative zero \
-             unchanged:\n{reported}"
+            reported.contains("\"order_total\": 0.0"),
+            "{label}: and spells it without a sign:\n{reported}"
         );
     }
 }
@@ -178,5 +176,51 @@ fn precision_beyond_two_places_is_rounded_only_for_the_reader() {
     assert_eq!(
         order["items"][0]["unit_price"], 12.3456,
         "and the Unit Price the record stores"
+    );
+}
+
+/// A Quantity is displayed as the value stored, because a Quantity is not money.
+///
+/// The two-decimal rule is about money, and an Order Item's Quantity is a count of things
+/// — `0.005` of a kilogram of powder and `1.005` metres of cable are both ordinary. Sent
+/// through the monetary renderer, the first reads `0.01` and the second reads `1.00`: one
+/// is two hundred times the stored value and the other is short by a thousandth, and
+/// neither reader is told anything was rounded.
+///
+/// The Unit Price and the Item Total on the same line are money and stay rounded, which is
+/// what makes this a claim about which values are money rather than about rounding.
+#[test]
+fn a_quantity_is_displayed_as_the_value_the_record_stores() {
+    let (_tree, root) =
+        package_with_one_order_priced("quantity-not-money", &[("0.005", "1000"), ("1.005", "2")]);
+    let directory = crate::support::order_directory(&root, "Priced_order");
+
+    let shown = Invocation::new(&["order", "show"])
+        .rooted_at(&directory)
+        .run();
+    let added = Invocation::new(&["order", "item", "add"])
+        .rooted_at(&directory)
+        .argument("description=Cable")
+        .argument("quantity=1.005")
+        .argument("unit_price=2")
+        .run();
+
+    assert_eq!(shown.status, Some(0), "{}", shown.stderr_text());
+    let items = shown.stdout_text();
+    assert!(
+        items.contains("0.005 x 1000.00"),
+        "the stored Quantity, beside a Unit Price that is money:\n{items}"
+    );
+    assert!(
+        items.contains("1.005 x 2.00"),
+        "and one whose third decimal place a monetary rendering drops:\n{items}"
+    );
+
+    // The subject line of a mutation is the other place an Item's Quantity is printed.
+    assert_eq!(added.status, Some(0), "{}", added.stderr_text());
+    assert!(
+        added.stdout_text().contains("Cable  1.005 x 2.00"),
+        "the Item a mutation names carries the same Quantity:\n{}",
+        added.stdout_text()
     );
 }

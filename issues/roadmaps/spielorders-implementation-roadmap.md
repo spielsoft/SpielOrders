@@ -1,6 +1,6 @@
 # SpielOrders implementation roadmap
 
-Status: M0 through M4 are complete and externally validated; the bounded [M3-upgrade test harness milestone](../implementation/m3-upgrade-test-harness/README.md) is in progress.
+Status: M0 through M5 are complete and externally validated; the bounded [M3-upgrade test harness milestone](../implementation/m3-upgrade-test-harness/README.md) is in progress.
 
 Source: [Chart the SpielOrders product and architecture](../wayfinder/spielorders-product-architecture/MAP.md)
 
@@ -76,31 +76,32 @@ Status: externally validated 2026-09-01. Index: [M3 — Domain mutations and saf
 
 ## M4 — CLI and independently versioned machine contracts
 
-Status: externally validated 2026-09-06. Index: [M4 — CLI and machine contracts](../implementation/m4-cli-machine-contracts/README.md), [acceptance record](../implementation/m4-cli-machine-contracts/ACCEPTANCE.md).
+Status: externally validated 2026-09-06. Index: [M4 — CLI and machine contracts](../archive/m4-cli-machine-contracts/README.md), [acceptance record](../archive/m4-cli-machine-contracts/ACCEPTANCE.md).
 
 ## M5 — Search and native platform services
 
-Status: not started. Index: [M5 — Search and native platform services](../implementation/m5-search-and-native-services/README.md), which holds the one ticket the M4 gate carried forward.
+Status: externally validated 2026-11-03. Index: [M5 — Search and native platform services](../implementation/m5-search-and-native-services/README.md), [acceptance record](../implementation/m5-search-and-native-services/ACCEPTANCE.md).
 
 Deliverables:
 
 - Deterministic native Order and Vendor search with whitespace-tokenized AND terms, substring matching, diacritic-insensitive case-insensitive defaults, optional case sensitivity, complete accepted searchable facts, stable sorting, and one result per entity.
 - Exclusion of paths, directory basenames, Supporting Material, Package README, calculated totals, configuration, schema syntax, and derived-index details from native entity search.
-- An asynchronous cancellable OS-indexed Supporting Material search port returning settled snapshots, provider state, partial/complete status, Order groups, standardized-path deduplication, file facts, native rank when available, deterministic fallback ordering, and provider-specific diagnostics.
-- A macOS Spotlight implementation scoped to healthy recognized Order Directories that excludes conventional Order READMEs and reserved `.spielorders` subtrees, plus open and reveal-in-Finder operations and stale-result handling.
+- A synchronous cancellable OS-indexed Supporting Material search port, taking a bounded timeout and returning one settled snapshot with provider state, partial/complete status, Order groups, standardized-path deduplication, file facts, native rank when available, deterministic fallback ordering, and provider-specific diagnostics.
+- A macOS Spotlight implementation following [Define lookup and search behavior](../wayfinder/spielorders-product-architecture/tickets/005-search-lookup.md), plus open and reveal-in-Finder operations and stale-result handling.
 - Explicit unavailable-provider behavior on unsupported platforms; native provider implementations become release gates for those platforms rather than prompting a recursive fallback indexer.
 - The `search orders`, `search vendors`, and `search supporting-material` CLI commands, carrying the response contract, exit statuses, and golden-fixture obligations M4 established. They are M5's, not M4's.
 
 Acceptance gate:
 
-- Search fixtures prove native semantics and live Vendor-fact matching. macOS integration tests prove scoping, exclusions, grouping, deduplication, cancellation, partial and error states, stale-path removal, file open, and exact Finder reveal. Damaged Orders participate in neither search engine.
+- Fixtures and a fake provider prove native semantics, live Vendor-fact matching, scoping, exclusions, grouping, deduplication, cancellation, partial and error states, and stale-path removal. The real Spotlight provider, file open, and Finder reveal are proven by one opt-in script the owner runs by hand once before acceptance, which the acceptance record names. Damaged Orders participate in neither search engine.
 
 ## M6 — Desktop shell and read experience
 
-Status: not started.
+Status: not started. Index: [M6 — Desktop shell and read experience](../implementation/m6-desktop-shell-and-read-experience/README.md), which holds the one ticket the M5 gate carried forward.
 
 Deliverables:
 
+- The platform effects the CLI crate holds — the filesystem, Trash, native files, and Spotlight adapters — moved to one crate both adapters depend on, before the desktop wires any of them. The desktop crate depends on the core and on Tauri and not on the CLI, so a desktop that reached for these where they stand would write its own.
 - Package open, reopen, and initialize flows and one active-Package session in a Tauri 2 desktop shell.
 - Toolbar destinations for Orders, Vendors, and Package README; New Order; Package menu; and a persisted inspector toggle and width.
 - Dense Mantine-based Orders and Vendors tables with decided default columns, stable sorting, selection, compact inspectors, column customization and preferences, contextual actions, and keyboard navigation. The Vendors table omits Hidden Vendors by default and carries the show/hide control that reveals them.

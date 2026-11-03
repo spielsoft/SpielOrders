@@ -68,6 +68,29 @@ impl Location {
         Self::new(absolute_path.into(), Some(package_relative_path.into()))
     }
 
+    /// An OS-reported user file, using platform components rather than managed-path grammar.
+    pub(crate) fn supporting_material(root: &Path, absolute_path: PathBuf) -> Option<Self> {
+        if !absolute_path.is_absolute() {
+            return None;
+        }
+        let relative = absolute_path.strip_prefix(root).ok()?;
+        let components = relative
+            .components()
+            .map(|component| match component {
+                std::path::Component::Normal(name) => name.to_str(),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()?;
+        if components.is_empty() {
+            return None;
+        }
+        let package_relative_path = Some(components.join("/"));
+        Some(Self {
+            absolute_path,
+            package_relative_path,
+        })
+    }
+
     fn new(
         absolute_path: PathBuf,
         package_relative_path: Option<String>,
@@ -107,18 +130,18 @@ fn is_normalized_package_relative(path: &str) -> bool {
                 .all(|segment| !segment.is_empty() && segment != "." && segment != ".."))
 }
 
-/// The normalized Package-relative spelling of `path` within `root`, when this
-/// application has one for it.
+/// The normalized managed-path spelling of `path` relative to `root`.
 ///
 /// `None` when `path` is not inside `root`, when one of the components between
 /// them is not Unicode, or when the joined text is not a normalized
 /// Package-relative path — the three ways a real filesystem entry can exist
 /// inside a Package and still have no name a `Location` will carry.
 ///
-/// This is the only place that answers the question. The code that must judge a
+/// This is the managed-path grammar's only spelling function. The code that must judge a
 /// name a user chose and the code that assembles a path out of this crate's own
 /// literal managed names ask it here rather than each carrying its own copy of
-/// the grammar, because a copy that drifts lets one admit what the other refuses.
+/// the grammar, because a copy that drifts lets one admit what the other refuses. Opaque
+/// user files use `Location::supporting_material` and native components instead.
 pub(crate) fn package_relative_path_text(root: &Path, path: &Path) -> Option<String> {
     let relative = path.strip_prefix(root).ok()?;
     let mut text = relative

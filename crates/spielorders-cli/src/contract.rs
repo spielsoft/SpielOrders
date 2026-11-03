@@ -28,6 +28,8 @@
 //!
 //! Decision sources: Define the Rust CLI capability contract.
 
+pub use crate::commands::search::supporting_material_document;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResponseContract {
     /// Every usage error, whichever command line produced it.
@@ -259,6 +261,37 @@ pub enum ResponseContract {
     /// disposition to report. What it answers is the report of what it removed and the
     /// Vendor that no longer holds it.
     VendorContactRemove,
+    /// `spielorders search orders`
+    ///
+    /// **A sibling of [`Self::SearchVendors`], not a version of it**, for the reason the
+    /// two validating commands are siblings: they answer the same kind of question about
+    /// two different subjects, and the identity is what says which. A change to what a
+    /// matched Order carries must not advance the Vendor search's contract.
+    ///
+    /// **Its Orders are [`Self::PackageListOrders`]'s summaries, under this identity.** A
+    /// matched Order and a listed Order are one thing, so the projection is shared; what
+    /// this contract carries beside them, and what it leaves out, is
+    /// [`crate::commands::search`]'s to say.
+    SearchOrders,
+    /// `spielorders search vendors`
+    ///
+    /// **Its Vendors are [`Self::PackageListVendors`]'s summaries, under this identity**,
+    /// and it carries that command's `hidden_vendors_included` beside them.
+    SearchVendors,
+    /// `spielorders search supporting-material`
+    ///
+    /// **Its own contract beside the two entity searches**, which are one command shape
+    /// each like every other: the three answer different questions about different
+    /// subjects, and this one's payload is a platform provider's answer rather than a
+    /// projection of the Package's own records.
+    ///
+    /// **A provider that could not look is a failure, not an empty answer.** The question
+    /// is which Supporting Material matches, and a state that prevented anything from
+    /// looking is the reason there is no answer rather than an answer — so it reaches
+    /// exit `1`, under a code naming the state, exactly as a read that could not read
+    /// does. An index that looked and found nothing is the other thing entirely: it
+    /// answers, at exit `0`, with no groups.
+    SearchSupportingMaterial,
 }
 
 impl ResponseContract {
@@ -307,6 +340,9 @@ impl ResponseContract {
         Self::Upgrade,
         Self::IndexStatus,
         Self::IndexRebuild,
+        Self::SearchOrders,
+        Self::SearchVendors,
+        Self::SearchSupportingMaterial,
     ];
 
     pub fn name(self) -> &'static str {
@@ -350,6 +386,9 @@ impl ResponseContract {
             Self::Upgrade => "spielorders.upgrade",
             Self::IndexStatus => "spielorders.index.status",
             Self::IndexRebuild => "spielorders.index.rebuild",
+            Self::SearchOrders => "spielorders.search.orders",
+            Self::SearchVendors => "spielorders.search.vendors",
+            Self::SearchSupportingMaterial => "spielorders.search.supporting_material",
         }
     }
 
@@ -392,6 +431,9 @@ impl ResponseContract {
             Self::Upgrade => 1,
             Self::IndexStatus => 1,
             Self::IndexRebuild => 1,
+            Self::SearchOrders => 1,
+            Self::SearchVendors => 1,
+            Self::SearchSupportingMaterial => 1,
         }
     }
 

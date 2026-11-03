@@ -24,6 +24,7 @@ use crate::{
     ports::{FileSystem, UuidGenerator},
     readme::{Location, RootedLocation, located_in_package, rooted_at},
     repair_cases::RepairAction,
+    vendors::{vendor_by_name, vendor_names_match},
 };
 use std::path::{Path, PathBuf};
 
@@ -31,8 +32,12 @@ use std::path::{Path, PathBuf};
 /// none of them is inferred.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SemanticResolution {
-    /// Point the unresolved reference at this existing Vendor.
-    AssignExistingVendor { vendor_id: String },
+    /// Point the unresolved reference at the existing Vendor this Vendor Name selects.
+    ///
+    /// The Name is the ordinary Vendor selector — trimmed, matched without regard to
+    /// letter case, unique within the Package, and resolving a Hidden Vendor like any
+    /// other — and the repaired record stores the Vendor ID it resolves to.
+    AssignExistingVendor { name: String },
     /// Deliberately create one distinct Vendor with this Name and assign it. This is
     /// a new Vendor, never a merge with or a redirection to an existing one.
     CreateAndAssignVendor { name: String },
@@ -179,9 +184,9 @@ pub enum SemanticRepairError<E> {
         action: RepairAction,
         scope: RootedLocation,
     },
-    /// The chosen Vendor is not one this Package has.
+    /// No Vendor of this Package carries the chosen Name.
     UnknownVendor {
-        vendor_id: String,
+        name: String,
         scope: RootedLocation,
     },
     /// A deliberately created Vendor must carry a Name no existing Vendor already
@@ -256,20 +261,16 @@ pub fn plan_semantic_repair<F: FileSystem>(
     }];
 
     match resolution {
-        SemanticResolution::AssignExistingVendor { vendor_id } => {
+        SemanticResolution::AssignExistingVendor { name } => {
             // The chosen Vendor must already exist; nothing here creates one by
             // accident or resolves a reference from anything but this explicit choice.
-            if !prior_vendors
-                .vendors
-                .iter()
-                .any(|vendor| vendor.vendor_id.as_str() == vendor_id)
-            {
+            let Some(vendor) = vendor_by_name(name, &prior_vendors.vendors) else {
                 return Err(SemanticRepairError::UnknownVendor {
-                    vendor_id: vendor_id.clone(),
+                    name: name.clone(),
                     scope: scope(),
                 });
-            }
-            set_vendor(&mut repaired, Some(vendor_id)).map_err(unshapable)?;
+            };
+            set_vendor(&mut repaired, Some(vendor.vendor_id.as_str())).map_err(unshapable)?;
         }
         SemanticResolution::CreateAndAssignVendor { name } => {
             let trimmed = name.trim();
@@ -281,7 +282,7 @@ pub fn plan_semantic_repair<F: FileSystem>(
             if let Some(existing) = prior_vendors
                 .vendors
                 .iter()
-                .find(|vendor| vendor_name_eq(vendor.name.as_str(), trimmed))
+                .find(|vendor| vendor_names_match(vendor.name.as_str(), trimmed))
             {
                 return Err(SemanticRepairError::VendorNameCollision {
                     name: existing.name.as_str().to_owned(),
@@ -410,17 +411,6 @@ fn rebuilt(
         .ok()
         .and_then(|bytes| OrderDocument::from_json_bytes(&bytes).ok())
         .ok_or(UnshapableOrder)
-}
-
-/// Whether two Vendor Names are the same Name in one Package.
-///
-/// Vendor Names are unique after trimming surrounding whitespace and ignoring letter
-/// case, and that comparison is full Unicode case folding rather than lowercasing:
-/// `Straße` and `STRASSE` are one Name. The predicate is the same one canonical Vendor
-/// validation applies, so a repair and the Package it writes into cannot disagree about
-/// which Names a Package already holds.
-fn vendor_name_eq(left: &str, right: &str) -> bool {
-    focaccia::unicode_full_case_eq(left.trim(), right.trim())
 }
 
 #[derive(Clone, Debug, PartialEq)]

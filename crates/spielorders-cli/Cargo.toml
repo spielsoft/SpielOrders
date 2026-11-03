@@ -24,20 +24,20 @@ name = "cli"
 path = "tests/main.rs"
 
 [dependencies]
-clap = { version = "4.6.6", features = ["derive"] }
+clap = { version = "4.6.7", features = ["derive"] }
 # The user's current local calendar date, which `LocalCalendar` is the whole of. A local
 # date needs the platform's time-zone database, which `std` does not expose. See
 # `src/effects.rs`.
-jiff = "0.2.35"
+jiff = "0.2.39"
 # The exclusive directory rename `DirectoryFileSystem::rename_new_directory` promises
 # has no `std` spelling. See `src/effects.rs`.
-libc = "0.2.189"
+libc = "0.2.191"
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
+serde_json = "1.0.154"
 spielorders-core.workspace = true
 # The opaque identities `UuidGenerator` supplies. Version 4 is randomness alone, so the
 # platform's own generator is the whole of the effect. See `src/effects.rs`.
-uuid = { version = "1.26.0", features = ["v4"] }
+uuid = { version = "1.29.0", features = ["v4"] }
 
 # The platform request to trash an item, which `NativeTrash` is the whole of and which
 # `std` does not expose. Apple-only because the request is: a platform this build cannot

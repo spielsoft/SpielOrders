@@ -53,20 +53,17 @@ impl Exit {
 // accessor no code path reads would look like the mechanism while the constructors were
 // actually doing the work, and `tests/response_contract.rs` is where the pair is checked.
 
-// Ctrl-C is deliberately absent from the enum above. This executable installs no
-// signal handler, so an interrupt keeps the platform's default disposition: the
-// process is terminated by SIGINT and a POSIX shell reports `130`. That is the
-// platform signal convention the contract names, and honoring it means not
-// interfering with it — a handler that caught the signal and returned a status of its
-// own would replace `130` with an ordinary exit and tell `wait` the process was never
-// signalled. Nothing here is left half-written by an interrupt because a command's
-// canonical writes are staged and atomically published by the core.
+// Ctrl-C is absent from the enum above, and that is a choice this code makes rather than
+// a rule it is held to. Two things are decided: an interrupted process exits by the
+// platform's convention, `130` on POSIX, and nothing is left half-written — the latter
+// held by the core staging its canonical writes and publishing them atomically, not by
+// anything here.
 //
-// No process can show that absence — an interrupt arrives too late to race a command
-// that finishes in milliseconds — so the platform calls that would install a handler are
-// named in `clippy.toml` instead. What that leaves is a signal-handling library, which
-// this crate does not depend on and which would arrive as a dependency rather than as a
-// line nobody looked at.
+// No command this executable runs today needs more than that, so it installs no signal
+// handler and an interrupt keeps the platform's default disposition. A command that has
+// work to unwind may install one: catching the signal, letting the work settle, and then
+// re-raising or exiting `130` honors both decided constraints. What is fixed is the
+// status a shell sees and the state left on disk, never the mechanism.
 
 #[cfg(test)]
 mod tests {

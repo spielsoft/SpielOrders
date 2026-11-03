@@ -27,8 +27,8 @@ mechanism may be reconsidered after MVP.
 This decision preserves metadata version 1. No timestamp, filesystem identity,
 diagnostic, revision token, or search field is added to `index.json`, and no
 sidecar metadata is introduced. In particular, the required `readme` projection
-remains in the version-1 index for compatibility; removing it would require a
-metadata-version change and is deferred until after MVP.
+remains in the version-1 index for compatibility; from the release the roadmap names on,
+removing it is a metadata-version change, and it is deferred until after MVP.
 
 ### Current-index fast path
 

@@ -27,9 +27,10 @@ Diagnostic codes are compositional condition codes. Typed evidence supplies the
 artifact, path, identity, field, or filesystem phase instead of multiplying one
 code per file kind. Code spelling, meaning, severity, default scope, and required
 evidence are compatibility promises to M2 adapters and tests. Adding a new code or
-a new optional evidence fact is compatible. Renaming, removing, repurposing, or
-changing the severity, scope, or required evidence of an existing code is an
-incompatible change to every later output contract that exposes it. Human wording,
+a new optional evidence fact is compatible. From the release the roadmap names on,
+renaming, removing, repurposing, or changing the severity, scope, or required
+evidence of an existing code is an incompatible change to every output contract
+that exposes it. Human wording,
 source-library messages, and formatting are not stable contracts.
 
 This contract deliberately stops at observed MVP needs. Suggested repairs,

@@ -1,0 +1,31 @@
+{
+  "contract": "spielorders.search.orders",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "package_root": "<PACKAGE_ROOT>"
+  },
+  "data": {
+    "query": "laser lovelace",
+    "orders": [
+      {
+        "directory": {
+          "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace",
+          "package_relative_path": "Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace"
+        },
+        "order_id": "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
+        "title": "Laser components",
+        "date_ordered": "2026-08-22",
+        "status": "in_preparation",
+        "vendor_id": "e0990d31-06aa-42e9-97c8-088e3e894822",
+        "vendor": {
+          "vendor_id": "e0990d31-06aa-42e9-97c8-088e3e894822",
+          "name": "Tarnwick",
+          "hidden": false
+        }
+      }
+    ]
+  },
+  "diagnostics": [],
+  "error": null
+}

@@ -6,8 +6,8 @@ them; the desktop shell is still a stub.
 
 ## Prerequisites
 
-- Rust 1.98.1 (installed automatically by `rustup` from `rust-toolchain.toml`)
-- Node.js 26.8.1 and npm 12.0.2
+- The Rust toolchain selected by `rust-toolchain.toml` (installed automatically by `rustup`)
+- Node.js and npm selected by `.nvmrc` and the package manifests
 - macOS Tauri 2 system prerequisites (Xcode command-line tools and WebKit)
 
 The repository pins Node in `.nvmrc` and npm in both package manifests. From a
@@ -17,12 +17,12 @@ JavaScript toolchain before installing dependencies:
 ```sh
 nvm install
 nvm use
-npm install --global npm@12.0.2
+npm install --global "$(node -p "require('./package.json').packageManager")" --ignore-scripts
 node --version
 npm --version
 ```
 
-The final two commands must print `v26.8.1` and `12.0.2`. Both package manifests
+The final two commands must match the runtime and package-manager selectors. Both package manifests
 also reject `npm install`, `npm clean-install`, and `npm run` commands when either
 the Node runtime or npm package-manager version differs.
 
@@ -34,11 +34,11 @@ From the repository root:
 cargo build --workspace
 cargo test --workspace
 cargo test -p spielorders-core
-npm --prefix apps/desktop clean-install
+npm --prefix apps/desktop clean-install --ignore-scripts
 npm --prefix apps/desktop run test
 npm --prefix apps/desktop run build
 npm --prefix apps/desktop run tauri build -- --no-bundle
-npm clean-install
+npm clean-install --ignore-scripts
 npm run test:schemas
 npm run check:traceability
 ```

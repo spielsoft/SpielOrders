@@ -23,8 +23,8 @@
 use crate::{
     cli::Assignment,
     commands::shared::{
-        Failed, as_given, failed_context, failed_document, not_representable, package_context,
-        resolved, text, undeliverable,
+        Failed, RootKind, as_given, failed_context, failed_document, link_named_as_a_root,
+        not_representable, package_context, resolved, text, undeliverable,
     },
     contract::ResponseContract,
     effects::PlatformFileSystem,
@@ -101,6 +101,9 @@ pub(crate) fn init(
 /// selected root through the filesystem port because its own rules require it, and an
 /// adapter that resolved it first would be a second place deciding what `--root` names.
 fn decide(selected_root: &Path, assignments: &[Assignment], dry_run: bool) -> Answer {
+    if let Some(failed) = link_named_as_a_root(selected_root, RootKind::Package) {
+        return Answer::Failed(failed);
+    }
     let plan = match plan_package_initialization(
         selected_root,
         &options(assignments),

@@ -23,16 +23,22 @@ use crate::{
     package::{ReusableValue, canonicalize_reusable_value},
     ports::{FileSystem, FileSystemEntryKind, LocalCalendar},
     readme::{Location, located_in_package},
+    vendors::vendor_by_name,
 };
 use std::path::{Path, PathBuf};
 
 const REUSABLE_FIELDS: [&str; 4] = ["orderer", "ordering_institution", "project", "order_group"];
 
+/// Every field an Order mutation may assign, in the vocabulary a caller writes.
+///
+/// `vendor` is the Vendor *Name*, which is the ordinary Vendor selector. The record stores
+/// the Vendor ID it resolves to; nothing here takes an identity, because a surface that
+/// holds identities back offers no way to learn one.
 const ASSIGNABLE_FIELDS: [&str; 9] = [
     "title",
     "date_ordered",
     "status",
-    "vendor_id",
+    "vendor",
     "orderer",
     "ordering_institution",
     "currency",
@@ -484,8 +490,10 @@ pub enum OrderEditPlanError<E> {
         field: String,
         proposed: String,
     },
+    /// No Vendor of this Package carries the Name the mutation assigned. An Order
+    /// mutation chooses a Vendor and never creates one.
     UnknownVendor {
-        vendor_id: String,
+        name: String,
     },
     /// A one-based Item position outside the pre-mutation collection the operation
     /// evaluates it against. An append alone may name one position beyond the last.
@@ -562,6 +570,29 @@ pub fn plan_order_edit<F: FileSystem>(
         if field == "date_ordered" {
             continue;
         }
+        // The one assigned field whose name is not the record's. `vendor` selects by
+        // Vendor Name and the record stores the Vendor ID that Name resolves to, so the
+        // assignment is translated here rather than copied — including the empty value,
+        // which clears the stored Reference.
+        if field == "vendor" {
+            match value.trim() {
+                "" => {
+                    object.remove("vendor_id");
+                }
+                name => {
+                    let vendor = vendor_by_name(name, package.vendors()).ok_or_else(|| {
+                        OrderEditPlanError::UnknownVendor {
+                            name: name.to_owned(),
+                        }
+                    })?;
+                    object.insert(
+                        "vendor_id".into(),
+                        serde_json::Value::String(vendor.vendor_id.as_str().to_owned()),
+                    );
+                }
+            }
+            continue;
+        }
         if value.trim().is_empty() {
             object.remove(field);
         } else {
@@ -573,16 +604,6 @@ pub fn plan_order_edit<F: FileSystem>(
     }
 
     let reusable_values = resolve_reusable_values(&assignments, &mut object, &package)?;
-    if let Some(vendor_id) = object.get("vendor_id").and_then(serde_json::Value::as_str)
-        && !package
-            .vendors()
-            .iter()
-            .any(|vendor| vendor.vendor_id.as_str() == vendor_id)
-    {
-        return Err(OrderEditPlanError::UnknownVendor {
-            vendor_id: vendor_id.to_owned(),
-        });
-    }
 
     order_record_plan(
         &package,

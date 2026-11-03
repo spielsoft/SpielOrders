@@ -54,6 +54,12 @@ use std::{
     path::Path,
 };
 
+pub(crate) fn write_document(stream: &mut impl Write, response: &impl Serialize) -> io::Result<()> {
+    serde_json::to_writer_pretty(&mut *stream, response).map_err(io::Error::other)?;
+    stream.write_all(b"\n")?;
+    stream.flush()
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Mode {
     Human,
@@ -240,10 +246,7 @@ impl Output {
     /// Formatting is not part of any contract's version, so this may change without
     /// advancing one; the fixtures move with it.
     pub(crate) fn document(&self, response: &impl Serialize) -> io::Result<()> {
-        let mut stream = io::stdout().lock();
-        serde_json::to_writer_pretty(&mut stream, response).map_err(io::Error::other)?;
-        stream.write_all(b"\n")?;
-        stream.flush()
+        write_document(&mut io::stdout().lock(), response)
     }
 
     /// Generated reference text — `--help` or `--version` — on standard output.

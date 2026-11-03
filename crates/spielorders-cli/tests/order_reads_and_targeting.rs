@@ -12,12 +12,11 @@
 //! and lifecycle contract; Define durable metadata schemas and version evolution.
 
 use crate::support::{
-    Invocation, NEWEST_ORDER_ID, OFFERED_VENDOR_ID, OLDEST_ORDER_ID, WrittenOption,
-    directory_that_is_not_a_root, managed_snapshot, order_directory,
-    order_whose_locator_names_another_package, package_with_a_damaged_order,
-    package_with_a_nested_orders_directory, package_with_an_impossible_date,
-    package_with_an_unreadable_order_readme, package_with_one_locator_rewritten,
-    package_with_one_order_priced, placements, populated_package, response,
+    Invocation, NEWEST_ORDER_ID, OFFERED_VENDOR_ID, OLDEST_ORDER_ID, directory_that_is_not_a_root,
+    managed_snapshot, order_directory, order_whose_locator_names_another_package,
+    package_with_a_damaged_order, package_with_a_nested_orders_directory,
+    package_with_an_impossible_date, package_with_an_unreadable_order_readme,
+    package_with_one_locator_rewritten, package_with_one_order_priced, populated_package, response,
 };
 
 /// Standing in an Order Directory with no options at all is the ordinary human
@@ -260,83 +259,65 @@ fn uuid_resolves_an_order_of_the_current_directory_package() {
 }
 
 /// The two routes are two ways of naming one Order, so a command line supplying both is
-/// asking about two and is refused before anything is read.
+/// asking about two — and it is refused before anything is read or written.
 ///
-/// **Every placement the command line allows.** `--root` is the executable's option and
-/// `--uuid` this family's, so each stands in any gap after whatever declares it, and the
-/// refusal held only where both landed in one subcommand's own matches. Written the way
-/// the top-level help teaches — `spielorders --root … order show` — the command answered
-/// instead, having quietly read `--root` as the Package to resolve the identity against.
+/// The read is the visible half of the defect this ends and the mutation is the costly
+/// one. While `--root` was the executable's option and `--uuid` this family's, the two
+/// landed in one subcommand's own matches only at some of the placements a caller could
+/// write; at the others — including the one the top-level help taught,
+/// `spielorders --root … order show` — the command answered instead, having quietly read
+/// `--root` as the Package to resolve the identity against, and an `order edit` written
+/// that way resolved the Order and **committed**. Both options are now the command's own,
+/// so there is one placement and the parser refuses it.
 ///
 /// A usage error carries the one shared `spielorders.usage` identity and never the
 /// command's own: exit `2` exists because nothing about the subject was attempted, so no
 /// command shape ran to be identified.
 #[test]
-fn uuid_together_with_root_is_a_usage_error_in_every_placement() {
+fn naming_one_order_both_ways_reads_nothing_and_changes_nothing() {
     let (_tree, root) = populated_package("order-uuid-and-root");
-
+    let before = managed_snapshot(&root);
     // The SpielOrders Root rather than an Order Directory, because that is the value the
     // unenforced placement quietly gave a second meaning: `--root` names the Order
     // Directory for every `order` command, and there it was consumed as the Package the
     // identity resolves against, so the command answered about a real Order.
-    for command in [vec!["order", "show"], vec!["order", "item", "list"]] {
-        for line in placements(
-            &command,
-            &WrittenOption::anywhere(&["--root", &root.display().to_string()]),
-            &WrittenOption::after_the_family(&["--uuid", NEWEST_ORDER_ID]),
-        ) {
-            let written: Vec<&str> = line.iter().map(String::as_str).collect();
-            let outcome = Invocation::new(&written).argument("--json").run();
-            let document = response(&outcome);
+    let package_root = root.display().to_string();
 
-            assert_eq!(outcome.status, Some(2), "{line:?}");
-            assert_eq!(document["contract"], "spielorders.usage", "{line:?}");
-            assert_eq!(document["error"]["code"], "usage_invalid", "{line:?}");
-            assert_eq!(document["error"]["scope"], "usage", "{line:?}");
-            // Named rather than classified: these two are targeting routes, and a sentence
-            // that called them output modes was the defect this pins shut.
-            assert_eq!(
-                document["error"]["message"],
-                "`--root <PATH>` and `--uuid <ORDER_ID>` are mutually exclusive",
-                "{line:?}"
-            );
-        }
-    }
-}
-
-/// No placement lets a mutation through that another placement refuses.
-///
-/// The read above is the visible half of the defect and this is the costly one: the
-/// position where the exclusion went unnoticed also resolved the Order and **committed**
-/// the edit, so which Order a caller changed depended on where they had written `--root`.
-#[test]
-fn no_placement_of_uuid_beside_root_commits_an_edit() {
-    let (_tree, root) = populated_package("order-uuid-and-root-edit");
-    let before = managed_snapshot(&root);
-
-    for line in placements(
-        &["order", "edit"],
-        &WrittenOption::anywhere(&["--root", &root.display().to_string()]),
-        &WrittenOption::after_the_family(&["--uuid", NEWEST_ORDER_ID]),
-    ) {
-        let written: Vec<&str> = line.iter().map(String::as_str).collect();
-        let outcome = Invocation::new(&written)
-            .argument("project=Telescope")
-            .argument("--json")
-            .run();
+    for line in [
+        vec!["order", "show"],
+        vec!["order", "item", "list"],
+        vec!["order", "edit", "project=Telescope"],
+    ] {
+        let mut written = line.clone();
+        written.extend([
+            "--root",
+            package_root.as_str(),
+            "--uuid",
+            NEWEST_ORDER_ID,
+            "--json",
+        ]);
+        let outcome = Invocation::new(&written).run();
+        let document = response(&outcome);
 
         assert_eq!(outcome.status, Some(2), "{line:?}");
-        assert_eq!(
-            response(&outcome)["contract"],
-            "spielorders.usage",
-            "{line:?}"
+        assert_eq!(document["contract"], "spielorders.usage", "{line:?}");
+        assert_eq!(document["error"]["code"], "usage_invalid", "{line:?}");
+        assert_eq!(document["error"]["scope"], "usage", "{line:?}");
+        // Named rather than classified: these two are targeting routes, and a sentence
+        // that called them output modes was the defect this pins shut.
+        let message = document["error"]["message"]
+            .as_str()
+            .expect("a usage error carries its message");
+        assert!(
+            message.contains("--root") && message.contains("--uuid"),
+            "{line:?}: the refusal names both routes: {message}"
         );
     }
 
     assert_eq!(
         managed_snapshot(&root),
         before,
-        "a refused command line changes nothing, wherever its options were written"
+        "a refused command line changes nothing"
     );
 }
 
@@ -524,10 +505,8 @@ fn a_locator_naming_another_package_is_refused_rather_than_followed() {
 ///
 /// The defect this catches is an omitted key: a consumer written against every other
 /// Order would have to null-check `items` and `order_total` for this one, and once one
-/// command omits an empty collection the rule is gone. The total's bytes are `-0.0`
-/// rather than `0.0` because the core sums Item Totals with `Iterator::sum` and `f64`'s
-/// `Sum` folds from `-0.0` — the number the core calculated, reported as it calculated
-/// it. Displayed money is a separate question and reads `0.00`.
+/// command omits an empty collection the rule is gone. The total's bytes are `0.0`: a
+/// total of nothing is zero and carries no sign, in the response as on the screen.
 #[test]
 fn an_order_with_no_items_reports_an_empty_collection_and_a_present_total() {
     let (_tree, root) = package_with_one_order_priced("order-no-items", &[]);
@@ -554,7 +533,7 @@ fn an_order_with_no_items_reports_an_empty_collection_and_a_present_total() {
         // Asserted on the bytes, because that is the claim: `-0.0` reads back through a
         // JSON parse as a float equal to `0.0`, so comparing values would pass either way.
         assert!(
-            outcome.stdout_text().contains("\"order_total\": -0.0"),
+            outcome.stdout_text().contains("\"order_total\": 0.0"),
             "{contract}: {}",
             outcome.stdout_text()
         );
@@ -695,13 +674,14 @@ fn an_unreadable_order_readme_is_a_warning_beside_the_answer() {
     );
 }
 
-/// The Items and the totals appear in the human surface too, numbered from one and
-/// rendered to two decimal places.
+/// The Items and the totals appear in the human surface too, numbered from one and with
+/// every monetary value rendered to two decimal places.
 ///
 /// The defect this catches is a human surface that numbered from zero, or that showed a
 /// total of `12` where the machine response carries `12.0` — a column of totals a reader
-/// cannot align. The money goes through the crate's one renderer; the numbers themselves
-/// are untouched, which the machine assertions above pin.
+/// cannot align. The money goes through the crate's one renderer; the Quantity beside it
+/// is not money and reads as the record stores it. The numbers themselves are untouched,
+/// which the machine assertions above pin.
 #[test]
 fn the_human_surface_numbers_the_items_and_renders_their_totals() {
     let (_tree, root) = populated_package("order-human-items");
@@ -712,11 +692,11 @@ fn the_human_surface_numbers_the_items_and_renders_their_totals() {
         let printed = outcome.stdout_text();
         assert_eq!(outcome.status, Some(0), "{command:?}");
         assert!(
-            printed.contains("Item: 1. Fiber collimator  4.00 x 3.00  12.00"),
+            printed.contains("Item: 1. Fiber collimator  4 x 3.00  12.00"),
             "{command:?}: {printed}"
         );
         assert!(
-            printed.contains("Item: 2. Mirror mount  2.00 x 84.50  169.00"),
+            printed.contains("Item: 2. Mirror mount  2 x 84.50  169.00"),
             "{command:?}: {printed}"
         );
         assert!(

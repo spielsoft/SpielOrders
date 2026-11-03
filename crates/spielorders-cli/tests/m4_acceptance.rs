@@ -154,7 +154,7 @@ fn populated(root: &Path) -> (String, PathBuf) {
         &[
             "title=Laser components",
             "date_ordered=2026-08-22",
-            &format!("vendor_id={vendor_id}"),
+            "vendor=Tarnwick",
             "orderer=Ada Lovelace",
             "ordering_institution=Northwind",
             "project=Telescope",

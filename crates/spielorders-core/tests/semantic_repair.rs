@@ -197,7 +197,7 @@ fn an_unresolved_vendor_reference_can_be_pointed_at_an_existing_vendor() {
         &directory,
         &handle,
         &SemanticResolution::AssignExistingVendor {
-            vendor_id: existing.clone(),
+            name: "  tarNWICK ".into(),
         },
         &RealFileSystem,
     )
@@ -357,7 +357,7 @@ fn a_vendor_is_never_inferred_from_anything_but_the_explicit_choice() {
         &directory,
         &handle,
         &SemanticResolution::AssignExistingVendor {
-            vendor_id: "11111111-1111-4111-8111-111111111111".into(),
+            name: "Nonesuch Optics".into(),
         },
         &RealFileSystem,
     )
@@ -907,14 +907,14 @@ fn every_semantic_repair_reaches_the_real_package_under_a_nested_orders_path() {
     // the user's, and a repair that wrote there would rewrite the wrong Package or
     // refuse a healthy one.
     let (_tree, root, directory) = unresolved_vendor_order_at("semantic-nested", NESTED_ORDERS);
-    let existing = created_vendor(&root, "Tarnwick", VENDOR_ID);
+    created_vendor(&root, "Tarnwick", VENDOR_ID);
     repair_reaches_the_real_package(
         "assigning an existing Vendor",
         &root,
         &directory,
         DiagnosticCode::VendorReferenceUnresolved,
         &SemanticResolution::AssignExistingVendor {
-            vendor_id: existing,
+            name: "Tarnwick".into(),
         },
         &[],
     );
@@ -979,13 +979,13 @@ fn every_semantic_repair_reaches_the_real_package_under_a_nested_orders_path() {
 fn a_changed_conflict_set_or_record_rejects_before_acting() {
     // The record changed since the plan was built.
     let (_tree, _root, directory) = unresolved_vendor_order("semantic-record-changed");
-    let existing = created_vendor(&_root, "Tarnwick", VENDOR_ID);
+    created_vendor(&_root, "Tarnwick", VENDOR_ID);
     let handle = handle_for(&directory, DiagnosticCode::VendorReferenceUnresolved);
     let plan = plan_semantic_repair(
         &directory,
         &handle,
         &SemanticResolution::AssignExistingVendor {
-            vendor_id: existing.clone(),
+            name: "  tarNWICK ".into(),
         },
         &RealFileSystem,
     )

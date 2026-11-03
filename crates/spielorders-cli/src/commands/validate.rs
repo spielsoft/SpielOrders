@@ -35,10 +35,11 @@ use crate::{
         order::{OrderFailed, Target, failed_order_context, targeted_directory},
         repair_suggestion::{RepairSuggestion, Rooting},
         shared::{
-            Failed, OfferedRepairProjection, OrderPathsProjection, diagnostics, failed_context,
-            failed_document, flattened, human_failure, not_representable, offered_repairs,
-            operation_failure, order_diagnosis_failure, package_context, report_diagnostic,
-            report_diagnostic_groups, text, undeliverable, unmanaged_failure,
+            Failed, OfferedRepairProjection, OrderPathsProjection, RootKind, diagnostics,
+            failed_context, failed_document, flattened, human_failure, link_named_as_a_root,
+            not_representable, offered_repairs, operation_failure, order_diagnosis_failure,
+            package_context, report_diagnostic, report_diagnostic_groups, text, undeliverable,
+            unmanaged_failure,
         },
     },
     contract::ResponseContract,
@@ -109,6 +110,9 @@ pub(crate) fn package(selected_root: &Path, output: &Output) -> Exit {
 /// command classifies them, through the shared constructors — a validating command is not
 /// licensed to invent a second answer for "there is no Package here".
 fn decide_package(selected_root: &Path) -> PackageAnswer {
+    if let Some(failed) = link_named_as_a_root(selected_root, RootKind::Package) {
+        return PackageAnswer::Failed(Box::new(failed));
+    }
     match validate_package_exhaustively(selected_root, &PlatformFileSystem) {
         ExhaustivePackageValidation::Complete(report) => PackageAnswer::Examined(Box::new(report)),
         ExhaustivePackageValidation::Unmanaged(package) => {

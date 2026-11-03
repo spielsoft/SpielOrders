@@ -74,10 +74,9 @@ replacing it. Every other byte is compared exactly, so a fixture diff is a contr
 and the causing ticket says what changed and why. No contract advances before the release
 [the roadmap](../../issues/roadmaps/spielorders-implementation-roadmap.md) names: a change
 edits version 1 in place and re-records its cells. Adding a
-placeholder belongs to a ticket that says why.
-
-Owner ruling (2026-09-03): the placeholder set is extended rather than the `success` cell
-omitted, for a command whose response has no byte-stable value to record.
+placeholder belongs to a ticket that says why. For a command whose response has no
+byte-stable value to record, the placeholder set is extended rather than the `success`
+cell omitted.
 
 A path a response reports carries its Package-relative spelling whenever there is a Package
 around it, in a refusal exactly as in a success. `null` is for a path with no Package to be
