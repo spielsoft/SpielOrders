@@ -29,9 +29,9 @@ decisions govern compatibility. A different frontend alone needs no metadata cha
 | R1 — Rust backend reduction | Accepted | None |
 | R2 — Rust library follow-ups | Accepted | None |
 | R3 — Provider path remediation | Accepted | None |
-| [R4 — CLI test surface removal](../implementation/r4-cli-test-surface/README.md) | All tickets closed; awaiting owner acceptance | None |
+| R4 — CLI test surface removal | Accepted | None |
 | M6 — Native foundation and integration | Accepted | None |
-| M7 — Browse and search | Not decomposed | None |
+| M7 — Browse and search | Accepted | None |
 | M8 — Create and edit | Not decomposed | M7 |
 | M9 — Removal and recovery | Not decomposed | M8 |
 | [M10 — Agent Ready](../implementation/m10-agent-ready/README.md) | Bundled CLI ticket deferred; remaining work not decomposed | M9 |
@@ -45,15 +45,6 @@ and external-agent validation do not block GUI milestones or run alongside them.
 Existing CLI regression checks remain in the repository gate.
 [AGENTS.md](../../AGENTS.md) governs concurrent worktrees and landing. The interface choice is settled by
 [Effect and adapter boundaries](../../docs/architecture/boundaries.md).
-
-## M7 — Browse and search
-
-Outcome: Package open/initialize/reopen, Orders and Vendors tables, sorting and columns,
-inspectors, damaged placeholders, both search modes, Finder actions, README editing,
-and preferences from [the desktop decision](../wayfinder/spielorders-product-architecture/tickets/007-desktop-experience.md).
-
-Gate: the complete read experience works on the isolated archive copy, with real
-Rust results, native interaction evidence, and no Package rules implemented in Swift.
 
 ## M8 — Create and edit
 

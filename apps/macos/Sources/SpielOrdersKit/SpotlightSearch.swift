@@ -4,9 +4,11 @@ import Foundation
 
 @MainActor public final class SpotlightSearch {
     private var operation: Task<MaterialBatch, Never>?
+    private var stopRequested = false
     public init() {}
 
     public func run(directory: URL?, text: String) async -> MaterialBatch {
+        if stopRequested { return MaterialBatch(state: SPIELORDERS_PROVIDER_STATE_CANCELLED) }
         let running = Task { await self.perform(directory: directory, text: text) }
         operation = running
         defer { operation = nil }
@@ -15,7 +17,10 @@ import Foundation
         } onCancel: { running.cancel() }
     }
 
-    public func cancel() { operation?.cancel() }
+    public func cancel() {
+        stopRequested = true
+        operation?.cancel()
+    }
 
     private func perform(directory: URL?, text: String) async -> MaterialBatch {
         guard let directory else { return MaterialBatch(state: SPIELORDERS_PROVIDER_STATE_COMPLETE) }

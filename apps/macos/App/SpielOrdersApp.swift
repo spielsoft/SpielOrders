@@ -35,11 +35,15 @@ private struct ApplicationCommands: Commands {
     private let lifecycle = Logger(subsystem: Bundle.main.bundleIdentifier ?? "SpielOrders", category: "Lifecycle")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1440, height: 860),
+        let initialSize = NSSize(width: 1440, height: 860)
+        let window = NSWindow(contentRect: NSRect(origin: .zero, size: initialSize),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable],
                               backing: .buffered, defer: false)
         window.title = "SpielOrders"
-        window.contentView = NSHostingView(rootView: PackageWindow(model: model))
+        let content = NSHostingView(rootView: PackageWindow(model: model))
+        content.sizingOptions = [.minSize]
+        window.contentView = content
+        window.setContentSize(initialSize)
         window.delegate = self
         window.center()
         window.makeKeyAndOrderFront(nil)

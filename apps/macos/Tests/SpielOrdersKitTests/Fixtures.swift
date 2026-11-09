@@ -16,7 +16,7 @@ func initializedPackage() throws -> URL {
     return root
 }
 
-func createOrder(in root: URL, title: String = "Optics") throws -> URL {
+func createOrder(in root: URL, title: String = "Optics", itemPrice: String? = nil, vendor: String? = nil) throws -> URL {
     var package: UnsafeMutablePointer<SpielordersPackage>?
     var draft: UnsafeMutablePointer<SpielordersDraft>?
     var plan: UnsafeMutablePointer<SpielordersPlan>?
@@ -32,8 +32,45 @@ func createOrder(in root: URL, title: String = "Optics") throws -> URL {
     #expect(spielorders_package_new_order_draft(try #require(package), &draft, nil) == SPIELORDERS_RESULT_OK)
     let set = title.withCString { spielorders_draft_set(draft!, SPIELORDERS_ORDER_FIELD_TITLE, $0, nil) }
     #expect(set == SPIELORDERS_RESULT_OK)
+    if let vendor {
+        #expect(vendor.withCString { spielorders_draft_set(draft!, SPIELORDERS_ORDER_FIELD_VENDOR, $0, nil) } == SPIELORDERS_RESULT_OK)
+    }
+    if let itemPrice {
+        #expect(spielorders_draft_row_insert(draft!, 0, nil) == SPIELORDERS_RESULT_OK)
+        for (field, value) in [(SPIELORDERS_ITEM_FIELD_DESCRIPTION, "Part"),
+                               (SPIELORDERS_ITEM_FIELD_QUANTITY, "1"), (SPIELORDERS_ITEM_FIELD_UNIT_PRICE, itemPrice)] {
+            #expect(value.withCString { spielorders_draft_row_set(draft!, 0, field, $0, nil) } == SPIELORDERS_RESULT_OK)
+        }
+    }
     #expect(spielorders_draft_plan(try #require(draft), 0, &plan, nil) == SPIELORDERS_RESULT_OK)
     #expect(spielorders_plan_commit(try #require(plan), &report, nil) == SPIELORDERS_RESULT_OK)
     return URL(fileURLWithFileSystemRepresentation: spielorders_report_final_path(try #require(report)),
                isDirectory: true, relativeTo: nil)
+}
+
+func createVendor(in root: URL, name: String, contactEmail: String? = nil) throws -> String {
+    var package: UnsafeMutablePointer<SpielordersPackage>?
+    var draft: UnsafeMutablePointer<SpielordersDraft>?
+    var plan: UnsafeMutablePointer<SpielordersPlan>?
+    var report: UnsafeMutablePointer<SpielordersReport>?
+    defer {
+        spielorders_report_free(report); spielorders_plan_free(plan); spielorders_draft_free(draft)
+        spielorders_package_free(package)
+    }
+    #expect(root.withUnsafeFileSystemRepresentation { spielorders_package_open($0!, 0, &package, nil) } == SPIELORDERS_RESULT_OK)
+    #expect(spielorders_package_new_vendor_draft(try #require(package), &draft, nil) == SPIELORDERS_RESULT_OK)
+    #expect(name.withCString { spielorders_draft_set(draft!, SPIELORDERS_VENDOR_FIELD_NAME, $0, nil) } == SPIELORDERS_RESULT_OK)
+    if let contactEmail {
+        #expect(spielorders_draft_row_insert(draft!, 0, nil) == SPIELORDERS_RESULT_OK)
+        #expect(spielorders_draft_row_set(draft!, 0, SPIELORDERS_CONTACT_FIELD_NAME, "Sales", nil) == SPIELORDERS_RESULT_OK)
+        #expect(contactEmail.withCString {
+            spielorders_draft_row_set(draft!, 0, SPIELORDERS_CONTACT_FIELD_EMAIL, $0, nil)
+        } == SPIELORDERS_RESULT_OK)
+    }
+    #expect(spielorders_draft_plan(draft!, 0, &plan, nil) == SPIELORDERS_RESULT_OK)
+    #expect(spielorders_plan_commit(try #require(plan), &report, nil) == SPIELORDERS_RESULT_OK)
+    let committedReport = try #require(report)
+    let vendor = try #require(spielorders_report_vendor(committedReport))
+    defer { spielorders_vendor_free(vendor) }
+    return String(cString: spielorders_vendor_field(vendor, SPIELORDERS_VENDOR_FIELD_VENDOR_ID))
 }

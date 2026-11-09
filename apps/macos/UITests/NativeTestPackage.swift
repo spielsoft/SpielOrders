@@ -17,7 +17,7 @@ func makeNativeTestPackage(in parent: URL = FileManager.default.temporaryDirecto
     return root
 }
 
-func addNativeTestOrder(in root: URL) throws {
+func addNativeTestOrder(in root: URL, title: String = "Lifecycle optics", date: String? = nil) throws {
     var package: UnsafeMutablePointer<SpielordersPackage>?
     var draft: UnsafeMutablePointer<SpielordersDraft>?
     var plan: UnsafeMutablePointer<SpielordersPlan>?
@@ -28,7 +28,11 @@ func addNativeTestOrder(in root: URL) throws {
     }
     XCTAssertEqual(root.withUnsafeFileSystemRepresentation { spielorders_package_open($0!, 0, &package, nil) }, SPIELORDERS_RESULT_OK)
     XCTAssertEqual(spielorders_package_new_order_draft(try XCTUnwrap(package), &draft, nil), SPIELORDERS_RESULT_OK)
-    XCTAssertEqual(spielorders_draft_set(try XCTUnwrap(draft), SPIELORDERS_ORDER_FIELD_TITLE, "Lifecycle optics", nil), SPIELORDERS_RESULT_OK)
+    let editing = try XCTUnwrap(draft)
+    XCTAssertEqual(title.withCString { spielorders_draft_set(editing, SPIELORDERS_ORDER_FIELD_TITLE, $0, nil) }, SPIELORDERS_RESULT_OK)
+    if let date {
+        XCTAssertEqual(date.withCString { spielorders_draft_set(editing, SPIELORDERS_ORDER_FIELD_DATE_ORDERED, $0, nil) }, SPIELORDERS_RESULT_OK)
+    }
     XCTAssertEqual(spielorders_draft_plan(try XCTUnwrap(draft), 0, &plan, nil), SPIELORDERS_RESULT_OK)
     XCTAssertEqual(spielorders_plan_commit(try XCTUnwrap(plan), &report, nil), SPIELORDERS_RESULT_OK)
     let directory = URL(fileURLWithFileSystemRepresentation: spielorders_report_final_path(try XCTUnwrap(report)),
@@ -37,11 +41,25 @@ func addNativeTestOrder(in root: URL) throws {
 }
 
 @MainActor func openNativeTestPackage(_ root: URL, in app: XCUIApplication) {
-    app.buttons["Open Package…"].click()
+    packageMenu(in: app).click()
+    app.menuItems["Open Package…"].click()
     app.typeKey("g", modifierFlags: [.command, .shift])
     app.typeText(root.path)
     app.typeKey(.return, modifierFlags: [])
     app.buttons["Open Package"].click()
+    XCTAssertTrue(app.buttons["Save"].waitForExistence(timeout: 10))
+}
+
+@MainActor func packageMenu(in app: XCUIApplication) -> XCUIElement {
+    app.descendants(matching: .any).matching(identifier: "Package").firstMatch
+}
+
+@MainActor func showPackageReadme(in app: XCUIApplication) {
+    if !app.textViews["Package README"].exists {
+        let destination = app.descendants(matching: .any).matching(identifier: "Package README").firstMatch
+        XCTAssertTrue(destination.waitForExistence(timeout: 10))
+        destination.click()
+    }
     XCTAssertTrue(app.textViews["Package README"].waitForExistence(timeout: 10))
 }
 

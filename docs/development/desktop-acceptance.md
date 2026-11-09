@@ -21,8 +21,7 @@ all draft data. Editing preserves numeric precision; formatted monetary text is 
 replacement for the stored value. A committed result with refresh warnings remains
 committed; the UI must not encourage a duplicate retry. Older previews or search
 responses cannot replace the current draft or query.
-When the Order README editor ships, observe its editable committed-with-warnings state
-natively.
+Observe the Order README editor's editable committed-with-warnings state natively.
 
 ## Native interaction
 

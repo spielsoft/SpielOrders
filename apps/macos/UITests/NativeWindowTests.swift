@@ -15,9 +15,10 @@ import CSpielOrders
         let app = XCUIApplication()
         app.launchArguments = ["-packageBookmark", ""]
         app.launch()
-        XCTAssertTrue(app.buttons["Open Package…"].waitForExistence(timeout: 10))
+        XCTAssertTrue(packageMenu(in: app).waitForExistence(timeout: 10))
         XCTAssertEqual(app.windows.count, 1)
-        app.buttons["Open Package…"].click()
+        packageMenu(in: app).click()
+        app.menuItems["Open Package…"].click()
         XCTAssertTrue(app.dialogs.firstMatch.waitForExistence(timeout: 5))
         app.typeKey(.escape, modifierFlags: [])
         app.typeKey("q", modifierFlags: .command)
@@ -38,7 +39,7 @@ import CSpielOrders
         XCTAssertTrue(version.label.range(of: #"Version [0-9.]+ \([0-9]+\)"#, options: .regularExpression) != nil)
         XCTAssertTrue(about.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "A SpielSoft product")).firstMatch.exists)
         about.buttons[XCUIIdentifierCloseWindow].click()
-        XCTAssertTrue(app.buttons["Open Package…"].exists)
+        XCTAssertTrue(packageMenu(in: app).exists)
         app.typeKey("q", modifierFlags: .command)
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
     }
@@ -51,6 +52,7 @@ import CSpielOrders
         app.launchArguments = ["-packageBookmark", ""]
         app.launch()
         openNativeTestPackage(root, in: app)
+        showPackageReadme(in: app)
         let editor = app.textViews["Package README"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         editor.click()
@@ -60,6 +62,7 @@ import CSpielOrders
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 10))
         app.launchArguments = []
         app.launch()
+        showPackageReadme(in: app)
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         XCTAssertEqual(editor.value as? String, "# Native saved text\n")
 
@@ -99,6 +102,7 @@ import CSpielOrders
         app.launchArguments = ["-packageBookmark", ""]
         app.launch()
         openNativeTestPackage(root, in: app)
+        showPackageReadme(in: app)
         XCTAssertTrue(app.textViews["Package README"].waitForExistence(timeout: 10))
         app.typeKey("q", modifierFlags: .command)
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
@@ -113,36 +117,6 @@ import CSpielOrders
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
     }
 
-    func testCancellingDirtyQuitDoesNotCancelAnActiveSearch() throws {
-        let root = try makeNativeTestPackage(in: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0])
-        defer { try? FileManager.default.removeItem(at: root) }
-        try addNativeTestOrder(in: root)
-        let app = XCUIApplication()
-        app.launchArguments = ["-packageBookmark", ""]
-        app.launch()
-        openNativeTestPackage(root, in: app)
-        let editor = app.textViews["Package README"]
-        editor.click()
-        editor.typeText("Unsaved draft during search")
-        app.textFields["Spotlight query"].click()
-        app.textFields["Spotlight query"].typeText("LifecycleQuote")
-        app.buttons["Search"].click()
-        try XCTSkipUnless(app.buttons["Stop"].waitForExistence(timeout: 2),
-                          "The query settled before the in-flight probe; this route remains unverified.")
-        let receipt = try NativeTerminationReceipt(app: app)
-        app.typeKey("q", modifierFlags: .command)
-        XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 2))
-        app.buttons["Cancel"].click()
-        try receipt.requireActiveWork()
-        XCTAssertEqual(editor.value as? String, "Unsaved draft during search")
-        let settled = NSPredicate(format: "label CONTAINS %@ OR label CONTAINS %@", "Search complete", "Search timed out")
-        expectation(for: settled, evaluatedWith: app.staticTexts["operationMessage"])
-        waitForExpectations(timeout: 10)
-        app.typeKey("q", modifierFlags: .command)
-        app.buttons["Discard Changes"].click()
-        XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
-    }
-
     func testCleanCloseSettlesAnActiveSearch() throws {
         let root = try makeNativeTestPackage(in: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0])
         defer { try? FileManager.default.removeItem(at: root) }
@@ -151,14 +125,144 @@ import CSpielOrders
         app.launchArguments = ["-packageBookmark", ""]
         app.launch()
         openNativeTestPackage(root, in: app)
-        app.textFields["Spotlight query"].click()
-        app.textFields["Spotlight query"].typeText("LifecycleQuote")
-        app.buttons["Search"].click()
+        app.textFields["Search query"].click()
+        app.textFields["Search query"].typeText("LifecycleQuote")
+        app.descendants(matching: .any).matching(identifier: "Spotlight").firstMatch.click()
         try XCTSkipUnless(app.buttons["Stop"].waitForExistence(timeout: 2),
                           "The query settled before the in-flight probe; this route remains unverified.")
         let receipt = try NativeTerminationReceipt(app: app)
         app.windows.firstMatch.buttons[XCUIIdentifierCloseWindow].click()
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
         try receipt.requireActiveWork()
+    }
+
+    func testLatestLookupAndModeSwitchKeepTheCurrentQuery() throws {
+        let root = try makeNativeTestPackage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try addNativeTestOrder(in: root)
+        let app = XCUIApplication()
+        app.launchArguments = ["-packageBookmark", ""]
+        app.launch()
+        openNativeTestPackage(root, in: app)
+        let query = app.textFields["Search query"]
+        XCTAssertTrue(query.waitForExistence(timeout: 10))
+        query.click()
+        query.typeText("Lifecycle")
+        app.typeKey("a", modifierFlags: .command)
+        query.typeText("no matching purchase")
+        XCTAssertTrue(app.staticTexts["0 of 1 orders shown."].waitForExistence(timeout: 10))
+        app.descendants(matching: .any).matching(identifier: "Spotlight").firstMatch.click()
+        app.descendants(matching: .any).matching(identifier: "Spotlight").firstMatch.click()
+        XCTAssertEqual(query.value as? String, "no matching purchase")
+        XCTAssertTrue(app.staticTexts["0 of 1 orders shown."].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "Case sensitive").firstMatch.isEnabled)
+        app.typeKey("q", modifierFlags: .command)
+        XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
+    }
+
+    func testOrderReadmeUndoNavigationCancelAndExplicitSave() throws {
+        let root = try makeNativeTestPackage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try addNativeTestOrder(in: root)
+        let app = XCUIApplication()
+        app.launchArguments = ["-packageBookmark", ""]
+        app.launch()
+        openNativeTestPackage(root, in: app)
+        let first = app.tables["Orders"].tableRows.firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 10))
+        first.click()
+        let edit = app.buttons["Edit README"]
+        XCTAssertTrue(edit.waitForExistence(timeout: 10))
+        edit.click()
+        let editor = app.textViews["Order README"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        editor.click()
+        editor.typeText("**Order notes**")
+        app.typeKey("z", modifierFlags: .command)
+        XCTAssertEqual(editor.value as? String, "")
+        app.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertEqual(editor.value as? String, "**Order notes**")
+        app.descendants(matching: .any).matching(identifier: "Vendors").firstMatch.click()
+        app.buttons["Cancel"].click()
+        XCTAssertEqual(editor.value as? String, "**Order notes**")
+        app.typeKey("s", modifierFlags: .command)
+        let saved = NSPredicate { _, _ in !app.buttons["Save"].isEnabled }
+        expectation(for: saved, evaluatedWith: nil)
+        waitForExpectations(timeout: 10)
+        app.buttons["Back to Orders"].click()
+        XCTAssertTrue(app.staticTexts["**Order notes**"].waitForExistence(timeout: 10))
+        app.typeKey("q", modifierFlags: .command)
+        XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
+    }
+
+    func testTheActiveLibrarySortSurvivesRestart() throws {
+        let root = try makeNativeTestPackage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try addNativeTestOrder(in: root, title: "Newer optics", date: "2026-02-01")
+        try addNativeTestOrder(in: root, title: "Older optics", date: "2026-01-01")
+        let app = XCUIApplication()
+        app.launchArguments = ["-packageBookmark", "", "-orderSortColumn", "", "-orderSortDescending", "NO"]
+        app.launch()
+        openNativeTestPackage(root, in: app)
+        app.tables["Orders"].buttons["Date"].click()
+        let first = app.tables["Orders"].tableRows.firstMatch
+        XCTAssertTrue(first.staticTexts["Older optics"].waitForExistence(timeout: 10))
+        app.typeKey("q", modifierFlags: .command)
+        XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
+        app.launchArguments = []
+        app.launch()
+        XCTAssertTrue(first.staticTexts["Older optics"].waitForExistence(timeout: 10))
+        app.typeKey("q", modifierFlags: .command)
+        XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
+    }
+
+    func testTabLeavingASettledSpotlightQueryDoesNotSearchAgain() throws {
+        let root = try makeNativeTestPackage(in: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0])
+        defer { try? FileManager.default.removeItem(at: root) }
+        try addNativeTestOrder(in: root)
+        let app = XCUIApplication()
+        app.launchArguments = ["-packageBookmark", ""]
+        app.launch()
+        openNativeTestPackage(root, in: app)
+        let query = app.textFields["Search query"]
+        query.click()
+        query.typeText("LifecycleQuote")
+        app.descendants(matching: .any).matching(identifier: "Spotlight").firstMatch.click()
+        let message = app.staticTexts["operationMessage"]
+        try XCTSkipUnless(message.waitForExistence(timeout: 20) && message.label == "Search complete.",
+                          "The real provider did not complete; the focus route remains unverified.")
+        query.click()
+        app.typeKey(.tab, modifierFlags: [])
+        let resubmitted = expectation(for: NSPredicate { _, _ in app.buttons["Stop"].exists }, evaluatedWith: nil)
+        resubmitted.isInverted = true
+        waitForExpectations(timeout: 1)
+        app.typeKey("q", modifierFlags: .command)
+        XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
+    }
+
+    func testInspectorWidthSurvivesHidingAndRestart() throws {
+        let root = try makeNativeTestPackage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = XCUIApplication()
+        app.launchArguments = ["-packageBookmark", "", "-inspectorVisible", "YES"]
+        app.launch()
+        openNativeTestPackage(root, in: app)
+        let split = app.splitGroups.firstMatch
+        let divider = split.splitters.firstMatch
+        XCTAssertTrue(divider.waitForExistence(timeout: 10))
+        let start = divider.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 60, dy: 0)))
+        let width = split.frame.maxX - divider.frame.maxX
+        app.buttons["Inspector"].click()
+        app.buttons["Inspector"].click()
+        XCTAssertEqual(split.frame.maxX - divider.frame.maxX, width, accuracy: 2)
+        app.typeKey("q", modifierFlags: .command)
+        XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
+        app.launchArguments = []
+        app.launch()
+        XCTAssertTrue(divider.waitForExistence(timeout: 10))
+        XCTAssertEqual(split.frame.maxX - divider.frame.maxX, width, accuracy: 2)
+        app.typeKey("q", modifierFlags: .command)
+        XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
     }
 }

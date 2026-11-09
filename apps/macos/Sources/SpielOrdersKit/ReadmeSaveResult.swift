@@ -5,6 +5,7 @@ public struct ReadmeSaveResult: Sendable {
     public let refreshedText: String?
     private let warnings: [String]
     public var canEdit: Bool { refreshedText != nil }
+    public var hasWarnings: Bool { !warnings.isEmpty }
 
     init(refreshedText: String?, warnings: [String]) {
         self.refreshedText = refreshedText
@@ -26,5 +27,11 @@ public struct ReadmeSaveResult: Sendable {
 
 enum SessionAccessError: Error, LocalizedError {
     case reopenRequired
-    var errorDescription: String? { "Open or reopen the Package before continuing." }
+    case selectionChanged
+    var errorDescription: String? {
+        switch self {
+        case .reopenRequired: "Open or reopen the Package before continuing."
+        case .selectionChanged: "The selected Order changed. Reopen the Package before selecting it again."
+        }
+    }
 }
