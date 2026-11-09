@@ -2,9 +2,6 @@
 title: Define integrity, validation, and repair boundaries
 status: closed
 parent: Chart the SpielOrders product and architecture
-labels:
-  - wayfinder:grilling
-assignee: /root
 ---
 
 ## Decision
@@ -29,7 +26,7 @@ The diagnosis and repair core is built; the core crate's public surface is the r
 ### Managed metadata and validation
 
 - Outside a supported Metadata Upgrade, `.spielorders/index.json` is the only managed artifact SpielOrders may replace or rebuild automatically because it is wholly derived from canonical records.
-- SpielOrders never automatically reconstructs, replaces, or guesses canonical `version.json`, `config.toml`, `vendors.json`, or `order.json`. Opening automatically performs a supported, deterministic, resumable Metadata Upgrade to the running build's newest version; upgrade remains distinct from repair because every source artifact must already be valid under its declared schema.
+- SpielOrders never automatically reconstructs, replaces, or guesses canonical `version.json`, `config.toml`, `vendors.json`, or `order.json`. Once a metadata version after version 1 exists, opening automatically performs a supported, deterministic, resumable Metadata Upgrade to the running build's newest version; upgrade remains distinct from repair because every source artifact must already be valid under its declared schema.
 - Within a supported schema, validation is strict rather than tolerant: unknown fields, wrong types, and blank required facts are rejected, not ignored. `contracts/schemas/v1` and the core crate's diagnosis surface are the record of the individual checks.
 - Validation accepts contract-valid but unusual facts: future or provisional Date Ordered values, any direct Order Status transition, zero Order Items, negative or zero Quantity and Unit Price, and absent optional facts. It emits no status-dependent completeness or plausibility warnings.
 - An edit that would introduce invalid canonical state is rejected before replacement and preserves the previous canonical file.

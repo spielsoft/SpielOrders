@@ -3,27 +3,21 @@
   "contract_version": 1,
   "ok": false,
   "context": {
-    "package_root": "<PACKAGE_ROOT>",
-    "order_root": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace"
+    "root": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace"
   },
   "data": null,
   "diagnostics": [],
   "error": {
-    "code": "order_date_ordered_invalid",
-    "message": "`2026-02-30` is not a Date Ordered. A Date Ordered is a real calendar day written `YYYY-MM-DD`.",
-    "scope": "order",
-    "paths": [
-      {
-        "spelling": "resolved",
-        "path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace",
-        "package_relative_path": "Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace"
-      }
-    ],
-    "identities": [
-      {
-        "kind": "order_date_ordered",
-        "value": "2026-02-30"
-      }
-    ]
+    "code": "invalid_fact_value",
+    "detail": {
+      "severity": "error",
+      "message": "Invalid fact value",
+      "field": "date_ordered",
+      "reason": null,
+      "position": null,
+      "path": null,
+      "before": null,
+      "after": "2026-02-30"
+    }
   }
 }

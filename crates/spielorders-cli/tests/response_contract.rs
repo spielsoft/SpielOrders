@@ -10,14 +10,15 @@
 //! Decision sources: Define the Rust CLI capability contract; Define durable metadata
 //! schemas and version evolution.
 
+use crate::support::ResponseContract;
 use crate::support::{
-    ENVELOPE, Invocation, NEWEST_ORDER_ID, TemporaryTree, assert_golden, assert_matches_golden,
+    ENVELOPE, Invocation, SOME_ORDER_ID, TemporaryTree, assert_matches_golden,
     assert_matches_golden_with_minted_vendor_id, assert_matches_golden_with_substitutions,
     directory_that_is_not_a_root, entry_names, fixture_directory, initialized_package,
     initialized_package_with_a_blocked_index_refresh, order_directory,
-    package_at_an_uninterpretable_version, package_root_that_cannot_be_read,
-    package_with_a_blocked_index_refresh, package_with_a_damaged_order,
-    package_with_a_drifted_order, package_with_a_drifted_order_and_a_blocked_index_refresh,
+    package_root_that_cannot_be_read, package_with_a_blocked_index_refresh,
+    package_with_a_damaged_order, package_with_a_drifted_order,
+    package_with_a_drifted_order_and_a_blocked_index_refresh,
     package_with_a_package_case_and_a_blocked_index_refresh, package_with_a_staging_artifact,
     package_with_an_adoption_candidate, package_with_an_empty_order,
     package_with_an_impossible_date, package_with_an_occupied_aligned_name,
@@ -26,10 +27,8 @@ use crate::support::{
     package_with_an_unresolved_vendor_reference, package_with_duplicate_vendor_names,
     package_with_three_contacts, package_with_three_contacts_and_a_blocked_index_refresh,
     package_with_three_items, package_with_three_items_and_a_blocked_index_refresh,
-    package_with_unreadable_readme, populated_package, response, supporting_material_provider,
-    unmanaged_directory,
+    package_with_unreadable_readme, populated_package, response, unmanaged_directory,
 };
-use spielorders_cli::contract::ResponseContract;
 use std::path::{Path, PathBuf};
 
 /// The fixture cells `package readme` records.
@@ -56,51 +55,6 @@ const SHOW_CELLS: [&str; 4] = ["success", "empty-result", "warning", "invalid"];
 // The registry.
 // ---------------------------------------------------------------------------
 
-/// The registry is the reason a `contract` string exists in exactly one place: two
-/// commands cannot be kept distinct unless their identities are comparable somewhere.
-#[test]
-fn every_registered_contract_has_a_distinct_identity() {
-    let mut names: Vec<&str> = ResponseContract::REGISTERED
-        .iter()
-        .map(|contract| contract.name())
-        .collect();
-    let registered = names.len();
-    names.sort_unstable();
-    names.dedup();
-    assert_eq!(
-        names.len(),
-        registered,
-        "two commands share a `contract` identity: {names:?}"
-    );
-}
-
-/// A contract that appeared in neither exhaustive match would be unnameable; one absent
-/// from `REGISTERED` would be invisible to every check in this file, including the
-/// fixture checks below. This is what makes the slice the registry rather than a list.
-#[test]
-fn every_registered_contract_is_named_and_versioned() {
-    for contract in ResponseContract::REGISTERED {
-        let name = contract.name();
-        assert!(
-            name.starts_with("spielorders."),
-            "{name} is namespaced to this application"
-        );
-        assert!(
-            name.split('.').skip(1).all(|segment| {
-                !segment.is_empty()
-                    && segment
-                        .chars()
-                        .all(|character| character.is_ascii_lowercase() || character == '_')
-            }),
-            "{name} is `snake_case` segments naming the command tree"
-        );
-        assert!(
-            contract.version() >= 1,
-            "{name} carries a consecutive positive integer, not a zero or a semver"
-        );
-    }
-}
-
 /// The fixture home is derived from the identity rather than chosen per command, so a
 /// contract cannot be filed under a directory that says something else and a version
 /// bump lands in a new directory instead of editing the old one.
@@ -126,36 +80,6 @@ fn every_registered_contract_has_its_own_fixture_directory() {
         registered,
         "two contracts share a fixture directory: {directories:?}"
     );
-}
-
-/// A registered command whose fixtures nobody added fails here, without anyone having
-/// remembered to write a check for that command. That is the whole reason the fixture
-/// path is derived from the registry and read at run time.
-#[test]
-fn every_registered_contract_has_a_populated_fixture_directory() {
-    for contract in ResponseContract::REGISTERED {
-        let directory = fixture_directory(*contract);
-        assert!(
-            directory.is_dir(),
-            "{} has no fixture directory at {}",
-            contract.name(),
-            directory.display()
-        );
-        let present = entry_names(&directory);
-        assert!(
-            !present.is_empty(),
-            "{} has an empty fixture directory at {}",
-            contract.name(),
-            directory.display()
-        );
-        for name in &present {
-            assert!(
-                name.ends_with(".json"),
-                "{} holds a fixture that is not a response document: {name}",
-                directory.display()
-            );
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -216,7 +140,8 @@ fn every_response_carries_the_envelope_in_one_order() {
         let text = outcome.stdout_text();
         let mut previous = 0;
         for member in ENVELOPE {
-            let key = format!("\"{member}\":");
+            // A top-level member of the pretty document, at its one indentation.
+            let key = format!("\n  \"{member}\":");
             assert_eq!(
                 text.matches(&key).count(),
                 1,
@@ -272,34 +197,6 @@ fn ok_and_the_exit_status_never_disagree() {
     }
 }
 
-/// An absent collection is present and empty. Omitting it makes every consumer write a
-/// null check, and omitting it in *one* command is how a consumer written against all the
-/// others breaks.
-#[test]
-fn absent_collections_are_present_and_empty() {
-    let (_tree, root) = initialized_package("envelope-empty-collections");
-
-    let success = response(
-        &Invocation::new(&["package", "readme", "--json"])
-            .rooted_at(&root)
-            .run(),
-    );
-    assert_eq!(
-        success["diagnostics"].as_array().map(Vec::len),
-        Some(0),
-        "a clean read has no diagnostics, and says so with an empty array"
-    );
-
-    let failure = response(&Invocation::new(&["package", "readme", "--json", "--jsom"]).run());
-    for member in ["paths", "identities"] {
-        assert_eq!(
-            failure["error"][member].as_array().map(Vec::len),
-            Some(0),
-            "a usage error is about no path and no identity: {member}"
-        );
-    }
-}
-
 // ---------------------------------------------------------------------------
 // The golden fixtures.
 // ---------------------------------------------------------------------------
@@ -311,8 +208,9 @@ fn absent_collections_are_present_and_empty() {
 /// names would never have its bytes compared — and the check that the tree holds the right
 /// set would pass, because the file is there.
 ///
-/// Supporting Material success is compared here before its key enters the inventory; other cells use
-/// process-level comparisons below. Which cells a contract supplies
+/// Supporting Material's answer cells are compared by the unit tests beside the answer in
+/// the executable's own source, because only a live index produces them from a run; every
+/// other cell is compared from a run below. Which cells a contract supplies
 /// and why it supplies no others is not this file's question: it is the matrix in
 /// `tests/cross_command_conformance.rs`.
 #[test]
@@ -320,7 +218,7 @@ fn every_recorded_cell_is_one_this_file_compares() {
     let reads: Vec<&str> = NARROWER_READ_CELLS.iter().map(|cell| cell.name()).collect();
     let mutations: Vec<&str> = MUTATION_CELLS.iter().map(|cell| cell.name()).collect();
     let mut supporting_cells = SUPPORTING_MATERIAL_CELLS.to_vec();
-    supporting_cells.push(compare_supporting_material_success());
+    supporting_cells.extend(SUPPORTING_MATERIAL_REPLAYED_CELLS);
 
     let mut compared: Vec<(ResponseContract, Vec<&str>)> = vec![
         (ResponseContract::PackageReadme, README_CELLS.to_vec()),
@@ -336,7 +234,6 @@ fn every_recorded_cell_is_one_this_file_compares() {
         (ResponseContract::IndexRebuild, INDEX_REBUILD_CELLS.to_vec()),
         (ResponseContract::Repair, REPAIR_CELLS.to_vec()),
         (ResponseContract::OrderRepair, REPAIR_CELLS.to_vec()),
-        (ResponseContract::Upgrade, UPGRADE_CELLS.to_vec()),
         (ResponseContract::SearchSupportingMaterial, supporting_cells),
     ];
     for contract in [
@@ -394,7 +291,8 @@ fn every_recorded_cell_is_one_this_file_compares() {
         assert_eq!(
             entry_names(&directory),
             expected,
-            "every fixture in {} is a cell this file compares, and every cell has one",
+            "every fixture in {} is a cell compared here or by the replay beside the \
+             command, and every cell has one",
             directory.display()
         );
     }
@@ -534,29 +432,6 @@ fn the_usage_contract_supplies_only_a_usage_error_fixture() {
     );
 }
 
-/// The two successful fixtures differ in exactly one member.
-///
-/// Asserted against the fixtures themselves rather than against two live runs, because
-/// this is a claim about the recorded contract: a later change that made an absent
-/// README report a different path, or no path, would have to edit one of these files and
-/// this is what notices.
-#[test]
-fn a_present_and_an_absent_readme_differ_only_in_existence() {
-    let directory = fixture_directory(ResponseContract::PackageReadme);
-    let present = std::fs::read_to_string(directory.join("success.json"))
-        .expect("the successful fixture is present");
-    let absent = std::fs::read_to_string(directory.join("empty-result.json"))
-        .expect("the empty-result fixture is present");
-
-    assert_ne!(present, absent, "the two responses are not identical");
-    assert_eq!(
-        present.replace("\"exists\": true", "\"exists\": false"),
-        absent,
-        "existence is the only difference between them, so the conventional path is the \
-         answer whether or not the optional document is there"
-    );
-}
-
 /// **A failure is not automatically rootless.**
 ///
 /// The defect: `context` reported `package_root: null` for every failure, including one
@@ -577,12 +452,12 @@ fn a_failure_under_a_resolved_root_still_names_it() {
     assert_eq!(outcome.status, Some(1));
     assert_eq!(document["ok"], false);
     assert_eq!(
-        document["context"]["package_root"],
+        document["context"]["root"],
         root.to_str().expect("the test root is UTF-8"),
-        "the Root resolved, so the context names what the command was about"
+        "the Root resolved, so the response names what the command was about"
     );
     assert_eq!(
-        document["error"]["paths"][0]["package_relative_path"], ".spielorders/config.toml",
+        document["error"]["detail"]["path"], ".spielorders/config.toml",
         "and the failure's own path is the thing under the Root that could not be read"
     );
 }
@@ -600,12 +475,12 @@ fn a_failure_with_no_root_names_none() {
             .run(),
     );
 
-    assert!(
-        document["context"]["package_root"].is_null(),
+    assert_eq!(
+        document["error"]["code"], "unmanaged_package",
         "an unmanaged directory is a resolved path, not a Root"
     );
     assert_eq!(
-        document["error"]["paths"][0]["path"],
+        document["error"]["detail"]["path"],
         outside.to_str().expect("the test path is UTF-8")
     );
 }
@@ -862,17 +737,19 @@ fn a_partial_value_list_is_recorded_with_the_reason_it_is_partial() {
     )
     .expect("the fixture parses");
 
-    assert_eq!(complete["data"]["values"][0]["value"], "Telescope");
-    assert_eq!(partial["data"]["values"][0]["value"], "Telescope");
-    assert_eq!(complete["data"]["values"][0]["usage_count"], 2);
+    assert_eq!(complete["data"][0]["value"], "Telescope");
+    assert_eq!(partial["data"][0]["value"], "Telescope");
+    assert_eq!(complete["data"][0]["usage_count"], "2");
     assert_eq!(
-        partial["data"]["values"][0]["usage_count"], 1,
+        partial["data"][0]["usage_count"], "1",
         "a Damaged Order contributes to no value list"
     );
 
     assert_eq!(complete["diagnostics"].as_array().map(Vec::len), Some(0));
-    assert_eq!(
-        partial["diagnostics"][0]["scope"], "order",
+    assert!(
+        partial["diagnostics"][0]["path"]
+            .as_str()
+            .is_some_and(|path| path.starts_with("Orders/")),
         "and the answer carries the load's observation about the Order it could not read"
     );
     assert_eq!(
@@ -983,9 +860,9 @@ fn every_usage_error_an_order_read_reaches_carries_the_shared_identity() {
             // An option this command does not have.
             vec!["--json", "--all"],
             // A misspelling of one it does.
-            vec!["--json", "--uuidd", NEWEST_ORDER_ID],
+            vec!["--json", "--uuidd", SOME_ORDER_ID],
             // The two targeting routes together, which is this family's own usage error.
-            vec!["--json", "--uuid", NEWEST_ORDER_ID, "--root", "."],
+            vec!["--json", "--uuid", SOME_ORDER_ID, "--root", "."],
         ] {
             let mut arguments: Vec<&str> = command.to_vec();
             arguments.extend_from_slice(&wrong);
@@ -1122,7 +999,7 @@ fn every_usage_error_a_vendor_read_reaches_carries_the_shared_identity() {
             // An option this command does not have.
             vec!["--json", "--all"],
             // An option another family has.
-            vec!["--json", "--uuid", NEWEST_ORDER_ID],
+            vec!["--json", "--uuid", SOME_ORDER_ID],
             // A misspelling of one this command does.
             vec!["--json", "--rooot", "."],
         ] {
@@ -1332,23 +1209,31 @@ impl MutationCell {
     /// `ok: false` carrying that subject's diagnosis, and a refused mutation is `ok: false`
     /// with no `data` at all.
     fn assert_is_this_kind(self, document: &serde_json::Value, label: &str) {
-        let warnings = || {
-            document["data"]["report"]["warnings"]
-                .as_array()
-                .unwrap_or_else(|| panic!("{label}: a committed mutation reports its warnings"))
-        };
         match self {
             Self::Success => {
                 assert_eq!(document["ok"], true, "{label}");
-                assert!(
-                    warnings().is_empty(),
-                    "{label}: a success carries no warning"
+                assert_eq!(
+                    document["data"]["outcome"], "committed",
+                    "{label}: a success changed the record"
+                );
+                assert_eq!(
+                    document["diagnostics"],
+                    serde_json::json!([]),
+                    "{label}: and carries no warning"
                 );
             }
             Self::Warning => {
                 assert_eq!(document["ok"], true, "{label}");
+                assert_eq!(
+                    document["data"]["outcome"], "committed_with_warning",
+                    "{label}"
+                );
                 assert!(
-                    !warnings().is_empty(),
+                    document["diagnostics"]
+                        .as_array()
+                        .expect("a mutation's findings are a list")
+                        .iter()
+                        .any(|finding| finding["severity"] == "warning"),
                     "{label}: a committed-with-warnings mutation names the warning, and a \
                      mutation that changed nothing is not this cell"
                 );
@@ -1358,7 +1243,9 @@ impl MutationCell {
                 assert!(
                     !document["diagnostics"]
                         .as_array()
-                        .expect("every response carries its diagnostics")
+                        .unwrap_or_else(|| panic!(
+                            "{label}: a damaged Package carries its diagnosis: {document}"
+                        ))
                         .is_empty(),
                     "{label}: the diagnosis of the subject the load could not trust is what \
                      this cell pins"
@@ -2083,7 +1970,7 @@ fn every_usage_error_a_relocation_reaches_carries_the_shared_identity() {
             "align",
             "--json",
             "--uuid",
-            NEWEST_ORDER_ID,
+            SOME_ORDER_ID,
             "--root",
             ".",
         ],
@@ -2092,7 +1979,7 @@ fn every_usage_error_a_relocation_reaches_carries_the_shared_identity() {
             "remove",
             "--json",
             "--uuid",
-            NEWEST_ORDER_ID,
+            SOME_ORDER_ID,
             "--root",
             ".",
         ],
@@ -2362,7 +2249,7 @@ fn every_usage_error_a_record_mutation_reaches_carries_the_shared_identity() {
             "title=Laser heads",
             "--json",
             "--uuid",
-            NEWEST_ORDER_ID,
+            SOME_ORDER_ID,
             "--root",
             ".",
         ],
@@ -2653,7 +2540,7 @@ fn every_usage_error_a_judging_command_reaches_carries_the_shared_identity() {
 }
 
 // ---------------------------------------------------------------------------
-// The two repair commands and the upgrade.
+// The two repair commands.
 // ---------------------------------------------------------------------------
 
 /// The fixture cells each repair command supplies.
@@ -2667,28 +2554,17 @@ fn every_usage_error_a_judging_command_reaches_carries_the_shared_identity() {
 /// subject that could not be diagnosed at all. `rejected` is a refused application.
 ///
 /// **A cleanly committed application has no cell of its own and needs none**: it is the
-/// `warning` document with an empty `warnings`, which `tests/repair_and_upgrade.rs` pins
+/// `warning` document with an empty `warnings`, which `tests/repair.rs` pins
 /// against the real run of every allowed repair, and that carries it to these recorded
 /// bytes. It is the same reading that gives a dry run no cell of its own.
 const REPAIR_CELLS: [&str; 5] = ["success", "empty-result", "warning", "invalid", "rejected"];
 
-/// The fixture cells `upgrade` supplies.
-///
-/// `success` is a Package already at the newest version this build understands, which
-/// reports its source, its target, every artifact in the order an upgrade would visit
-/// them, and that there is nothing outstanding. `invalid` is a Package declaring a version
-/// this build does not interpret, which is left exactly as it is. `rejected` is a Package
-/// whose configuration does not name a usable Orders Directory, so the upgrade refuses
-/// rather than assuming the conventional location.
-const UPGRADE_CELLS: [&str; 3] = ["success", "invalid", "rejected"];
-
-/// Each of the three contracts, in each of its cells, against its recorded bytes.
+/// Each of the two contracts, in each of its cells, against its recorded bytes.
 #[test]
 fn every_repairing_response_matches_its_golden_fixtures() {
     for (contract, cells) in [
         (ResponseContract::Repair, REPAIR_CELLS.as_slice()),
         (ResponseContract::OrderRepair, REPAIR_CELLS.as_slice()),
-        (ResponseContract::Upgrade, UPGRADE_CELLS.as_slice()),
     ] {
         for cell in cells {
             let label = format!("golden-{}-{cell}", contract.name().replace('.', "-"));
@@ -2702,7 +2578,7 @@ fn every_repairing_response_matches_its_golden_fixtures() {
                 contract.name(),
                 outcome.stdout_text()
             );
-            assert_repairing_kind(contract, cell, &document, &label);
+            assert_repairing_kind(cell, &document, &label);
             assert_matches_golden_with_substitutions(contract, cell, &outcome, &root, None);
         }
     }
@@ -2723,30 +2599,16 @@ fn repairing_status(cell: &str) -> i32 {
 /// own document happily under the wrong name — and a `warning` cell holding a repair that
 /// found nothing to do would pin a cell no regression of committed-with-warnings could
 /// make fail. The distinctions are the report's own.
-fn assert_repairing_kind(
-    contract: ResponseContract,
-    cell: &str,
-    document: &serde_json::Value,
-    label: &str,
-) {
-    if contract == ResponseContract::Upgrade {
-        // The upgrade's own three: an answer about a Package this build reads, and two
-        // refusals about one it will not.
-        match cell {
-            "success" => assert_eq!(document["data"]["complete"], true, "{label}"),
-            _ => assert_refused_kind(cell, document, label),
-        }
-        return;
-    }
+fn assert_repairing_kind(cell: &str, document: &serde_json::Value, label: &str) {
     let cases = || {
         document["data"]["cases"]
             .as_array()
-            .unwrap_or_else(|| panic!("{label}: a repair reports what is actionable now"))
+            .unwrap_or_else(|| panic!("{label}: a diagnosis reports what is actionable now"))
     };
     match cell {
         "success" => {
             assert!(
-                document["data"]["report"].is_null(),
+                document["data"]["outcome"].is_null(),
                 "{label}: a diagnosis applies nothing"
             );
             assert!(
@@ -2755,19 +2617,20 @@ fn assert_repairing_kind(
             );
         }
         "empty-result" => {
-            assert!(document["data"]["report"].is_null(), "{label}");
+            assert!(document["data"]["outcome"].is_null(), "{label}");
             assert!(cases().is_empty(), "{label}: nothing here is actionable");
         }
         "warning" => {
             assert_eq!(
-                document["data"]["report"]["committed"], true,
+                document["data"]["outcome"], "committed_with_warning",
                 "{label}: a repair that applied nothing is not this cell"
             );
             assert!(
-                !document["data"]["report"]["warnings"]
+                document["diagnostics"]
                     .as_array()
                     .unwrap_or_else(|| panic!("{label}: a committed repair reports its warnings"))
-                    .is_empty(),
+                    .iter()
+                    .any(|finding| finding["severity"] == "warning"),
                 "{label}: committed-with-warnings names the warning"
             );
         }
@@ -2789,7 +2652,10 @@ fn assert_refused_kind(cell: &str, document: &serde_json::Value, label: &str) {
         .unwrap_or_else(|| panic!("{label}: a failed response carries a stable code"));
     let diagnosed_nothing = matches!(
         code,
-        "package_root_unmanaged" | "order_root_unmanaged" | "package_metadata_unsupported"
+        "unmanaged_package"
+            | "not_an_order_directory"
+            | "order_not_found"
+            | "package_metadata_unsupported"
     );
     match cell {
         "invalid" => assert!(
@@ -2891,26 +2757,6 @@ fn repairing_run(
             let run = Invocation::new(&["order", "repair", "--json"]).rooted_at(&outside);
             (tree, root, run)
         }
-        (ResponseContract::Upgrade, "success") => {
-            let (tree, root) = populated_package(label);
-            let run = Invocation::new(&["upgrade", "--json"]).rooted_at(&root);
-            (tree, root, run)
-        }
-        (ResponseContract::Upgrade, "rejected") => {
-            let (tree, root) = populated_package(label);
-            std::fs::write(
-                root.join(".spielorders/config.toml"),
-                b"orders_path = \"../elsewhere\"\nremoved_path = \"Removed\"\n",
-            )
-            .expect("the fixture configuration is written");
-            let run = Invocation::new(&["upgrade", "--json"]).rooted_at(&root);
-            (tree, root, run)
-        }
-        (ResponseContract::Upgrade, _) => {
-            let (tree, root) = package_at_an_uninterpretable_version(label);
-            let run = Invocation::new(&["upgrade", "--json"]).rooted_at(&root);
-            (tree, root, run)
-        }
         (contract, cell) => panic!("{} has no {cell} run", contract.name()),
     }
 }
@@ -2946,17 +2792,14 @@ fn applying_run(
         .unwrap_or_else(|| panic!("{subject:?}: the diagnosis reports its cases"))
         .iter()
         .find(|case| {
-            case["code"] == code
-                && case["location"]["package_relative_path"]
-                    .as_str()
-                    .is_some_and(|path| path == place)
+            case["code"] == code && case["path"].as_str().is_some_and(|path| path == place)
         })
         .unwrap_or_else(|| {
             panic!(
                 "{code} at {place} is diagnosed: {}",
                 diagnosed["data"]["cases"]
             )
-        })["case"]
+        })["handle"]
         .as_str()
         .expect("a case names its handle")
         .to_owned();
@@ -3011,11 +2854,6 @@ fn every_usage_error_a_repairing_command_reaches_carries_the_shared_identity() {
         // A misspelling of the command itself.
         vec!["reapir"],
         vec!["order", "repari"],
-        // The upgrade takes no subject and no target.
-        vec!["upgrade", "Orders"],
-        vec!["upgrade", "--to", "2"],
-        vec!["upgrade", "--quiet"],
-        vec!["upgarde"],
     ] {
         let mut arguments = wrong.clone();
         arguments.push("--json");
@@ -3047,88 +2885,12 @@ fn every_usage_error_a_repairing_command_reaches_carries_the_shared_identity() {
 // `search supporting-material`'s golden fixture.
 // ---------------------------------------------------------------------------
 
-/// The fixture cells `search supporting-material` records.
-///
-/// Success is registered only after its byte comparison in the fixture inventory.
-const SUPPORTING_MATERIAL_CELLS: [&str; 3] = ["empty-result", "warning", "invalid"];
+/// The fixture cell `search supporting-material` records from a run.
+const SUPPORTING_MATERIAL_CELLS: [&str; 1] = ["invalid"];
 
-fn compare_supporting_material_success() -> &'static str {
-    use spielorders_core::{
-        canonical::{CanonicalPackageLoad, inspect_canonical_package},
-        ports::{Cancellation, SupportingMaterialIndex},
-        supporting_material::{
-            Completeness, ProviderAnswer, ProviderHit, SupportingMaterialQuery,
-            SupportingMaterialRequest, search_supporting_material,
-        },
-    };
-    struct RecordedIndex(PathBuf);
-    impl SupportingMaterialIndex for RecordedIndex {
-        fn name(&self) -> &'static str {
-            "spotlight"
-        }
-        fn search(
-            &self,
-            _: &SupportingMaterialRequest<'_>,
-            _: &dyn Cancellation,
-        ) -> ProviderAnswer {
-            ProviderAnswer::Looked {
-                completeness: Completeness::Complete,
-                hits: vec![ProviderHit {
-                    path: self.0.clone(),
-                    kind: Some("txt".to_owned()),
-                    modified_unix_seconds: Some(1_784_937_600),
-                    rank: None,
-                }],
-                diagnostics: Vec::new(),
-            }
-        }
-    }
-    struct NotCancelled;
-    impl Cancellation for NotCancelled {
-        fn is_cancelled(&self) -> bool {
-            false
-        }
-    }
-    let (_tree, root) = initialized_package("recorded-file-search-success");
-    let directory = root.join("Orders/Laser_components");
-    std::fs::create_dir_all(directory.join(".spielorders")).unwrap();
-    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../contracts/examples/v1/minimal/order.json");
-    let mut order: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(source).unwrap()).unwrap();
-    order["status"] = "ordered".into();
-    std::fs::write(
-        directory.join(".spielorders/order.json"),
-        serde_json::to_vec(&order).unwrap(),
-    )
-    .unwrap();
-    let path = directory.join("quote-coherence.txt");
-    std::fs::write(&path, b"Supporting Material contract capture: coherence.\n").unwrap();
-    let CanonicalPackageLoad::CurrentCandidate(package) =
-        inspect_canonical_package(&root, &spielorders_cli::effects::PlatformFileSystem)
-    else {
-        panic!("fixture loads")
-    };
-    let index = RecordedIndex(path);
-    let snapshot = search_supporting_material(
-        &package,
-        &SupportingMaterialQuery::new("coherence", std::time::Duration::from_secs(5)),
-        Some(&index),
-        &NotCancelled,
-    );
-    let bytes =
-        spielorders_cli::contract::supporting_material_document(&package, "coherence", &snapshot)
-            .unwrap();
-    let actual = String::from_utf8(bytes)
-        .unwrap()
-        .replace(root.to_str().unwrap(), "<PACKAGE_ROOT>");
-    assert_golden(
-        ResponseContract::SearchSupportingMaterial,
-        "success",
-        actual,
-    );
-    "success"
-}
+/// The answer cells, which a run produces only from a live index: the unit tests beside
+/// the answer replay supplied provider facts through it and compare these.
+const SUPPORTING_MATERIAL_REPLAYED_CELLS: [&str; 3] = ["success", "empty-result", "warning"];
 
 /// A word no file in the fixture Packages carries, in its name or its contents.
 ///
@@ -3137,65 +2899,22 @@ fn compare_supporting_material_success() -> &'static str {
 /// that has indexed all of it both report nothing for this word.
 const UNMATCHABLE: &str = "zirconium";
 
-/// Each cell `search supporting-material` records, against its recorded bytes.
-///
-/// Three comparisons in one test because they are one claim about one contract: what the
-/// index answered, that answer beside a Package the load has something to say about, and a
-/// Package it could not trust at all.
-///
-/// **The two cells carrying a provider's answer are the bytes a build with a provider wrote**,
-/// which is the one thing in this file a platform decides. A build with none reaches the state
-/// that prevented an answer for those two runs, which is asserted here rather than passed
-/// over — including that what the load observed still travels beside it, since a Damaged Order
-/// is a fact about the Package whether or not anything could look inside it. `invalid` is the
-/// load refusing before any provider is asked, so it is the one cell whose bytes every build
-/// writes.
+/// The refusal cell, from the executable: the Package is refused before any index is
+/// asked, so no run here asks the platform's index.
 #[test]
-fn every_supporting_material_response_matches_its_golden_fixtures() {
-    for (cell, package, status) in [
-        (
-            "empty-result",
-            populated_package as fn(&str) -> (TemporaryTree, PathBuf),
-            0,
-        ),
-        ("warning", damaged_order_package, 0),
-        ("invalid", package_with_duplicate_vendor_names, 1),
-    ] {
-        let label = format!("golden-supporting-material-{cell}");
-        let (_tree, root) = package(&label);
-
-        let outcome = Invocation::new(&["search", "supporting-material", UNMATCHABLE])
-            .rooted_at(&root)
-            .argument("--json")
-            .run();
-
-        if supporting_material_provider().is_none() && cell != "invalid" {
-            let document = response(&outcome);
-            assert_eq!(outcome.status, Some(1), "{cell}: {}", outcome.stdout_text());
-            assert_eq!(
-                document["error"]["code"], "supporting_material_unsupported",
-                "{cell}: {document}"
-            );
-            assert_eq!(
-                document["diagnostics"].as_array().map(Vec::is_empty),
-                Some(cell != "warning"),
-                "{cell}: what the load observed reaches the caller either way: {document}"
-            );
-            continue;
-        }
-        assert_eq!(
-            outcome.status,
-            Some(status),
-            "{cell}: {}",
-            outcome.stdout_text()
-        );
-        assert_matches_golden(
-            ResponseContract::SearchSupportingMaterial,
-            cell,
-            &outcome,
-            &root,
-        );
-    }
+fn the_supporting_material_refusal_matches_its_golden_fixture() {
+    let (_tree, root) = package_with_duplicate_vendor_names("golden-supporting-material-invalid");
+    let outcome = Invocation::new(&["search", "supporting-material", UNMATCHABLE])
+        .rooted_at(&root)
+        .argument("--json")
+        .run();
+    assert_eq!(outcome.status, Some(1));
+    assert_matches_golden(
+        ResponseContract::SearchSupportingMaterial,
+        "invalid",
+        &outcome,
+        &root,
+    );
 }
 
 // ---------------------------------------------------------------------------

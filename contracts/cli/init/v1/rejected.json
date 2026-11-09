@@ -3,26 +3,21 @@
   "contract_version": 1,
   "ok": false,
   "context": {
-    "package_root": "<PACKAGE_ROOT>"
+    "root": "<PACKAGE_ROOT>"
   },
   "data": null,
   "diagnostics": [],
   "error": {
-    "code": "configuration_path_current_directory",
-    "message": "`orders_path` is not a usable configured path: current_directory. Each must be a nonempty `/`-separated path inside the Package, and `removed_path` must name an ordinary direct child of it.",
-    "scope": "package",
-    "paths": [
-      {
-        "spelling": "resolved",
-        "path": "<PACKAGE_ROOT>",
-        "package_relative_path": null
-      }
-    ],
-    "identities": [
-      {
-        "kind": "configuration_path",
-        "value": "orders_path"
-      }
-    ]
+    "code": "invalid_configured_path",
+    "detail": {
+      "severity": "error",
+      "message": "Invalid configured path",
+      "field": null,
+      "reason": null,
+      "position": null,
+      "path": "<PACKAGE_ROOT>",
+      "before": null,
+      "after": null
+    }
   }
 }

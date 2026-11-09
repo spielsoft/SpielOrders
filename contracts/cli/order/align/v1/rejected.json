@@ -3,22 +3,21 @@
   "contract_version": 1,
   "ok": false,
   "context": {
-    "package_root": "<PACKAGE_ROOT>",
-    "order_root": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace"
+    "root": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace"
   },
   "data": null,
   "diagnostics": [],
   "error": {
-    "code": "order_directory_occupied",
-    "message": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_heads_Ada_Lovelace already exists, so this Order Directory cannot be renamed to it. It is refused rather than given an invented suffix, and nothing was moved.",
-    "scope": "order",
-    "paths": [
-      {
-        "spelling": "resolved",
-        "path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_heads_Ada_Lovelace",
-        "package_relative_path": "Orders/2026_08_22_Tarnwick_Laser_heads_Ada_Lovelace"
-      }
-    ],
-    "identities": []
+    "code": "destination_collision",
+    "detail": {
+      "severity": "error",
+      "message": "Destination collision",
+      "field": null,
+      "reason": null,
+      "position": null,
+      "path": "Orders/2026_08_22_Tarnwick_Laser_heads_Ada_Lovelace",
+      "before": null,
+      "after": null
+    }
   }
 }

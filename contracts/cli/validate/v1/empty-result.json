@@ -3,16 +3,12 @@
   "contract_version": 1,
   "ok": true,
   "context": {
-    "package_root": "<PACKAGE_ROOT>"
+    "root": "<PACKAGE_ROOT>"
   },
   "data": {
-    "scope": "package",
-    "package_readme": {
-      "absolute_path": "<PACKAGE_ROOT>/README.md",
-      "package_relative_path": "README.md"
-    },
-    "orders": [],
-    "offered_repairs": []
+    "valid": true,
+    "findings": [],
+    "cases": []
   },
   "diagnostics": [],
   "error": null

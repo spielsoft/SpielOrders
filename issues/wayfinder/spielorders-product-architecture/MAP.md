@@ -7,7 +7,7 @@ labels:
 
 ## Destination
 
-Produce a decision-complete product and architecture specification for SpielOrders: a single-user, local-first, macOS-first and cross-platform-capable desktop order-management app with a Rust CLI/core, a SpielGantt-related visual language, durable filesystem Order Directories, and a package-local agent skill for safe CLI-driven Order and Vendor workflows.
+Define SpielOrders as a single-user, local-first order manager with a macOS-native SwiftUI desktop, a portable Rust CLI/core, durable filesystem Order Directories, and package-local agent guidance.
 
 ## Notes
 
@@ -17,7 +17,7 @@ Produce a decision-complete product and architecture specification for SpielOrde
 - SpielOrders-managed JSON and Markdown have native search; OS-native search covers Supporting Material and can reveal matches in Finder.
 - Make SpielOrders agent-forward: agents should be able to inspect a SpielOrder Package and safely create or update Orders, Order Items, Vendors, and Vendor Contacts through the CLI without editing managed metadata directly.
 - `/Users/example/Documents/Administration/Orders` is legacy/archive background, not a layout mandate.
-- `/Users/example/Code/Apps/SpielGantt` is product and architecture inspiration, not a requirement to share code.
+- SpielGantt is product inspiration, not a requirement to share code or a frontend stack.
 - The shared Pending Northwind orders folder is an external process and is out of scope except as background evidence.
 
 ## Decisions so far
@@ -30,15 +30,16 @@ Produce a decision-complete product and architecture specification for SpielOrde
 - [Define Vendor identity and historical semantics](tickets/004-vendor-identity-history.md) — Use immutable Vendor IDs, package-unique names, optional shared contact facts, live references without historical snapshots, reversible visibility instead of deletion, and explicit import-time duplicate reconciliation.
 - [Define lookup and search behavior](tickets/005-search-lookup.md) — Keep deterministic live entity filtering distinct from an Order-grouped, file-centric Spotlight view; preserve ordinary table sorting and navigation, deduplicate by entity or path, and defer structured filters until after MVP.
 - [Define integrity, validation, and repair boundaries](tickets/008-integrity-repair.md) — Isolate canonical damage, keep directory-name drift silent, rebuild derived indexes, keep deterministic resumable upgrades distinct from explicit repair, quarantine damaged Orders from search, and never validate or rewrite Supporting Material.
-- [Define durable metadata schemas and version evolution](tickets/010-metadata-schemas.md) — Use strict human-readable versioned JSON under one package marker, exact Order/Vendor/full-index projections, UUIDv4 identity, and automatic sequential per-Order upgrades that advance the package version last.
-- [Define the Rust CLI capability contract](tickets/006-cli-contract.md) — Use a human-first shared-core CLI with contextual roots, assignment-based mutations, recoverable Order removal, scoped validation and repair, native and OS-indexed search, and independently versioned opt-in JSON responses; add relative Package locators and remove Vendor Merge.
-- [Prototype the SpielOrders desktop experience](tickets/007-desktop-experience.md) — Use a single-window BibDesk-like grid/inspector/editor experience in Tauri 2 + React + TypeScript, Mantine-first tables and controls, Finder-owned Supporting Material, explicit repair, and no premature SpielGantt frontend sharing.
+- [Define durable metadata schemas and version evolution](tickets/010-metadata-schemas.md) — Use strict human-readable versioned JSON under one package marker, exact Order/Vendor/full-index projections, UUIDv4 identity, and automatic sequential per-Order upgrades that advance the package version last, built with the first metadata version after version 1.
+- [Define the Rust CLI capability contract](tickets/006-cli-contract.md) — Use a human-first shared-library CLI with contextual roots, assignment-based mutations, recoverable Order removal, scoped validation and repair, native and OS-indexed search, and opt-in CLI-owned JSON built from the common interface; use relative Package locators and no Vendor Merge.
+- [Prototype the SpielOrders desktop experience](tickets/007-desktop-experience.md) — Use a macOS-native SwiftUI grid/inspector/editor experience, AppKit where appropriate, Finder-owned Supporting Material, explicit repair, and a thin boundary over Rust.
 - [Define legacy Order adoption and metadata bootstrapping](tickets/009-legacy-adoption.md) — Keep adoption exceptional and agent-orchestrated: initialize the Package, explicitly adopt existing directories one at a time with current-version metadata, and leave evidence interpretation, consolidated review, and resumable batching to the agent skill.
 - [Define the SpielOrders agent skill contract](tickets/011-agent-skill-contract.md) — Generate an opt-in, package-local, versionless skill with minimal AGENTS guidance, progressively disclosed CLI examples, two simple agent commands, and firm managed-metadata and Supporting Material boundaries.
 
-## Not yet specified
+## Implementation planning
 
-- None currently.
+The [implementation roadmap](../../roadmaps/spielorders-implementation-roadmap.md)
+sequences desktop work through the settled library interface and deployment policy.
 
 ## Out of scope
 

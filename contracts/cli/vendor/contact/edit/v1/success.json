@@ -3,60 +3,48 @@
   "contract_version": 1,
   "ok": true,
   "context": {
-    "package_root": "<PACKAGE_ROOT>"
+    "root": "<PACKAGE_ROOT>"
   },
   "data": {
-    "report": {
-      "committed": true,
-      "changed": true,
-      "outcome": "edited",
-      "contact": {
-        "name": "Grace B. Hopper",
-        "role": "Engineering",
-        "phone": null,
-        "email": null
+    "outcome": "committed",
+    "committed": true,
+    "operations": [
+      {
+        "kind": "replace_vendor_record",
+        "path": "<PACKAGE_ROOT>/.spielorders/vendors.json"
       },
-      "source_position": 2,
-      "destination_position": 2,
-      "operations": [
-        {
-          "operation": "replace_vendor_record",
-          "location": {
-            "absolute_path": "<PACKAGE_ROOT>/.spielorders/vendors.json",
-            "package_relative_path": ".spielorders/vendors.json"
-          }
-        },
-        {
-          "operation": "refresh_package_index",
-          "location": {
-            "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
-            "package_relative_path": ".spielorders/index.json"
-          }
-        }
-      ],
-      "index": {
-        "location": {
-          "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
-          "package_relative_path": ".spielorders/index.json"
-        },
-        "state": "current",
-        "refresh": "rebuilt",
-        "malformed_reasons": [],
-        "stale_reasons": [],
-        "observed_version": null,
-        "expected_version": null
+      {
+        "kind": "refresh_package_index",
+        "path": "<PACKAGE_ROOT>/.spielorders/index.json"
+      }
+    ],
+    "changes": [
+      {
+        "kind": "fact",
+        "field": "name",
+        "position": 2,
+        "before": "Grace Hopper",
+        "after": "Grace B. Hopper",
+        "reuse": null
       },
-      "warnings": []
-    },
+      {
+        "kind": "fact",
+        "field": "phone",
+        "position": 2,
+        "before": "+1 555 0142",
+        "after": null,
+        "reuse": null
+      }
+    ],
     "vendor": {
-      "vendor_id": "e0990d31-06aa-42e9-97c8-088e3e894822",
       "name": "Tarnwick",
       "phone": "+1 555 0123",
       "email": "sales@example.com",
       "website": "https://example.com",
       "address": "100 Example Avenue\nAnytown, ST 00000",
       "purchasing_notes": "Quote required above $5000.",
-      "hidden": false,
+      "vendor_id": "<ID-1>",
+      "hidden": "false",
       "contacts": [
         {
           "position": 1,
@@ -79,20 +67,9 @@
           "phone": null,
           "email": "alan@example.com"
         }
-      ],
-      "referencing_orders": [
-        {
-          "directory": {
-            "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace",
-            "package_relative_path": "Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace"
-          },
-          "order_id": "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
-          "title": "Laser components",
-          "date_ordered": "2026-08-22",
-          "status": "in_preparation"
-        }
       ]
-    }
+    },
+    "final_path": null
   },
   "diagnostics": [],
   "error": null

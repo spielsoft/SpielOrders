@@ -3,14 +3,11 @@
   "contract_version": 1,
   "ok": true,
   "context": {
-    "package_root": "<PACKAGE_ROOT>"
+    "root": "<PACKAGE_ROOT>"
   },
   "data": {
-    "location": {
-      "absolute_path": "<PACKAGE_ROOT>/README.md",
-      "package_relative_path": "README.md"
-    },
-    "exists": true
+    "state": "present",
+    "path": "<PACKAGE_ROOT>/README.md"
   },
   "diagnostics": [],
   "error": null

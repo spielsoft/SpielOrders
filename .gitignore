@@ -1,6 +1,5 @@
 /target/
-/node_modules/
-/apps/desktop/node_modules/
-/apps/desktop/dist/
 /.agents/worktrees/
 .DS_Store
+/apps/macos/.build/
+/apps/macos/.swiftpm/

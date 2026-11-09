@@ -3,48 +3,22 @@
   "contract_version": 1,
   "ok": true,
   "context": {
-    "package_root": "<PACKAGE_ROOT>"
+    "root": "<PACKAGE_ROOT>"
   },
   "data": {
-    "report": {
-      "committed": true,
-      "changed": true,
-      "operations": [
-        {
-          "operation": "refresh_package_index",
-          "location": {
-            "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
-            "package_relative_path": ".spielorders/index.json"
-          }
-        }
-      ],
-      "indexed_orders": [
-        {
-          "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace",
-          "package_relative_path": "Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace"
-        },
-        {
-          "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace",
-          "package_relative_path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace"
-        }
-      ],
-      "warnings": []
-    },
-    "metadata": {
-      "metadata_version": 1,
-      "state": "current"
-    },
+    "outcome": "committed",
+    "committed": true,
+    "operations": [
+      {
+        "kind": "refresh_package_index",
+        "path": "<PACKAGE_ROOT>/.spielorders/index.json"
+      }
+    ],
+    "changes": [],
+    "final_path": null,
     "index": {
-      "location": {
-        "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
-        "package_relative_path": ".spielorders/index.json"
-      },
       "state": "current",
-      "refresh": "rebuilt",
-      "malformed_reasons": [],
-      "stale_reasons": [],
-      "observed_version": null,
-      "expected_version": null
+      "reasons": []
     }
   },
   "diagnostics": [],

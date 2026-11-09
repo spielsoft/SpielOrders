@@ -8,7 +8,7 @@ One version-1 field is deliberately absent from the fully populated Vendor examp
 `hidden`, whose absence *is* the canonical spelling of a visible Vendor. Many Rust
 suites load `examples/v1/full` as a live SpielOrder Package, and a Hidden Vendor there
 would quietly change what those suites exercise. The field's accepted and rejected
-shapes are covered instead by `scripts/schema-contract.test.mjs` and by
+shapes are covered instead by [Rust schema checks](../crates/spielorders-checks/src/schemas.rs) and by
 `fixtures/schema-invalid/vendor-non-boolean-hidden.json`.
 
 Decision sources: [Define the SpielOrders package topology](../issues/wayfinder/spielorders-product-architecture/tickets/002-package-topology.md), [Define the Order record and lifecycle contract](../issues/wayfinder/spielorders-product-architecture/tickets/003-order-record-lifecycle.md), [Define Vendor identity and historical semantics](../issues/wayfinder/spielorders-product-architecture/tickets/004-vendor-identity-history.md), [Define the Rust CLI capability contract](../issues/wayfinder/spielorders-product-architecture/tickets/006-cli-contract.md), and [Define durable metadata schemas and version evolution](../issues/wayfinder/spielorders-product-architecture/tickets/010-metadata-schemas.md).
@@ -21,9 +21,8 @@ agreement, or index ordering and freshness.
 
 `config.toml` is unversioned and is therefore not represented here.
 
-CLI response contracts must not reuse these schemas, and they are versioned one per
-command rather than together, so they live in their own subtree: `cli/<contract
-path>/v<contract_version>/`, holding one golden response document per response kind.
-`docs/development/traceability.md` records the convention and why the layout is
-separate.
+CLI response contracts are versioned one per command rather than together, so they
+live in their own subtree: `cli/<contract path>/v<contract_version>/`, holding one golden
+response document per response kind. `docs/development/traceability.md` records the
+convention.
 

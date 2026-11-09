@@ -1,164 +1,109 @@
 # SpielOrders implementation roadmap
 
-Status: M0 through M5 are complete and externally validated; the bounded [M3-upgrade test harness milestone](../implementation/m3-upgrade-test-harness/README.md) is in progress.
+## Current boundary
 
-Source: [Chart the SpielOrders product and architecture](../wayfinder/spielorders-product-architecture/MAP.md)
+The Rust library and CLI are the implemented foundation; the
+[library interface](../../crates/spielorders/include/spielorders.h) and
+[contract fixtures](../../contracts/README.md) record available behavior. The native
+desktop foundation links that library directly. [The product decisions](../wayfinder/spielorders-product-architecture/MAP.md)
+define its capabilities. [Native desktop distribution](../../docs/adr/0001-native-desktop-distribution.md)
+defines deployment constraints; [Effect and adapter boundaries](../../docs/architecture/boundaries.md)
+defines ownership and API coordination.
 
-## Purpose and boundary
+Institutional forms, the shared purchasing workflow, collaboration, OCR, production
+archive migration, structured post-MVP filters, a network service, and shared
+SpielGantt foundations are outside this roadmap.
 
-This roadmap turns the closed product-and-architecture decisions into an implementation sequence. It defines work packages, dependencies, and acceptance gates; it does not implement SpielOrders, estimate calendar time, or reopen settled product decisions.
+## Compatibility before release
 
-The MVP is a single-user, local-first, macOS-first desktop application backed by a shared Rust core and a human-first Rust CLI. It preserves one ordinary Order Directory per Order, treats Supporting Material as opaque user-owned content, and supports an opt-in package-local agent skill.
+CLI and agent tooling remain unreleased until the owner declares them released after
+Agent Ready acceptance. Before release, metadata and CLI response changes revise their
+existing contracts in place. The [metadata](../wayfinder/spielorders-product-architecture/tickets/010-metadata-schemas.md)
+and [CLI](../wayfinder/spielorders-product-architecture/tickets/006-cli-contract.md)
+decisions govern compatibility. A different frontend alone needs no metadata change.
 
-Institutional form generation, the shared Pending Northwind workflow, multi-user collaboration, OCR, execution of the legacy archive migration, post-MVP structured Order filters, and premature shared foundations with SpielGantt are outside it.
+## Delivery dependencies
 
-### Versioning before release
+| Milestone | Status | Prerequisites |
+| --- | --- | --- |
+| R1 — Rust backend reduction | Accepted | None |
+| R2 — Rust library follow-ups | Accepted | None |
+| R3 — Provider path remediation | Accepted | None |
+| [R4 — CLI test surface removal](../implementation/r4-cli-test-surface/README.md) | All tickets closed; awaiting owner acceptance | None |
+| M6 — Native foundation and integration | Accepted | None |
+| M7 — Browse and search | Not decomposed | None |
+| M8 — Create and edit | Not decomposed | M7 |
+| M9 — Removal and recovery | Not decomposed | M8 |
+| [M10 — Agent Ready](../implementation/m10-agent-ready/README.md) | Bundled CLI ticket deferred; remaining work not decomposed | M9 |
+| M11 — MVP acceptance | Not decomposed | M9 and M10 |
+| M12 — App Store release | Not decomposed | M11 |
 
-Until the owner declares the CLI and the agent support tooling released, which cannot happen before M4 and M8 both close, every interface, format, and protocol may be revised in place without regard to versioning, and every `contract_version` and `metadata_version` is 1. From that release on, the owner manages real Orders with agents and the CLI, and the compatibility rules take effect.
+The GUI sequence runs through M9 before Agent Ready work starts in M10. The existing
+CLI supplies ordinary Package operations; M10 is not another CLI implementation or
+general cleanup pass. Bundling, permissions, the missing opt-in Agent Ready features,
+and external-agent validation do not block GUI milestones or run alongside them.
+Existing CLI regression checks remain in the repository gate.
+[AGENTS.md](../../AGENTS.md) governs concurrent worktrees and landing. The interface choice is settled by
+[Effect and adapter boundaries](../../docs/architecture/boundaries.md).
 
-Nothing has run outside a test tree and no SpielOrders Package exists, so there is no consumer a change can break, and a second version of something nobody has read makes the first read as history when it is still a draft. A change that would otherwise advance a version instead edits version 1 in place and re-records whatever the change makes stale.
+## M7 — Browse and search
 
-The declaration is a dated owner line in this roadmap's M8 section, so the marker is answerable from the repository rather than from anyone's memory. Until that line exists, the first regime is in force.
+Outcome: Package open/initialize/reopen, Orders and Vendors tables, sorting and columns,
+inspectors, damaged placeholders, both search modes, Finder actions, README editing,
+and preferences from [the desktop decision](../wayfinder/spielorders-product-architecture/tickets/007-desktop-experience.md).
 
-## Delivery shape
+Gate: the complete read experience works on the isolated archive copy, with real
+Rust results, native interaction evidence, and no Package rules implemented in Swift.
 
-```text
-M0 Contract baseline
-  -> M1 Filesystem and metadata kernel
-     -> M1-upgrade Toolchain and dependency modernization
-        -> M2 Package loading, diagnostics, and index
-        -> M3 Domain mutations and atomic persistence
-           -> M4 CLI and machine contracts
-              -> M5 Search and native platform services
-           -> M6 Desktop read experience
-              -> M7 Desktop editing and recovery
-M4 + M7 -> M8 Agent Ready and adoption support
-M4 + M5 + M7 + M8 -> M9 hardening -> MVP release candidate
-```
+## M8 — Create and edit
 
-The graph, not the numbering, determines what may run.
+Outcome: explicit-save Order and Vendor creation/editing, Items, Contacts, visibility,
+undo, nested sheets, and draft protection from the desktop decision.
 
-## Decision-to-milestone traceability
+Gate: successful, refused, and stale saves preserve intended facts and complete drafts;
+creation publishes no early Order, collection changes commit atomically, and native
+keyboard actions target the active editor.
 
-| Closed decision | Primary implementation milestones |
-| --- | --- |
-| [Decide whether SpielOrders and SpielGantt share a filesystem-bucket foundation](../wayfinder/spielorders-product-architecture/tickets/001-shared-filesystem-foundation.md) | M0, M1, M9 |
-| [Define the SpielOrders package topology](../wayfinder/spielorders-product-architecture/tickets/002-package-topology.md) | M1, M2, M3 |
-| [Define the Order record and lifecycle contract](../wayfinder/spielorders-product-architecture/tickets/003-order-record-lifecycle.md) | M1, M3, M7 |
-| [Define Vendor identity and historical semantics](../wayfinder/spielorders-product-architecture/tickets/004-vendor-identity-history.md) | M1, M3, M7, M8 |
-| [Define lookup and search behavior](../wayfinder/spielorders-product-architecture/tickets/005-search-lookup.md) | M5, M6 |
-| [Define the Rust CLI capability contract](../wayfinder/spielorders-product-architecture/tickets/006-cli-contract.md) | M3, M4, M5, M8 |
-| [Prototype the SpielOrders desktop experience](../wayfinder/spielorders-product-architecture/tickets/007-desktop-experience.md) | M0, M6, M7, M9 |
-| [Define integrity, validation, and repair boundaries](../wayfinder/spielorders-product-architecture/tickets/008-integrity-repair.md) | M1, M2, M3, M5, M7, M9 |
-| [Define legacy Order adoption and metadata bootstrapping](../wayfinder/spielorders-product-architecture/tickets/009-legacy-adoption.md) | M3, M4, M8 |
-| [Define durable metadata schemas and version evolution](../wayfinder/spielorders-product-architecture/tickets/010-metadata-schemas.md) | M0, M1, M2, M3, M4, M9 |
-| [Define the SpielOrders agent skill contract](../wayfinder/spielorders-product-architecture/tickets/011-agent-skill-contract.md) | M4, M8 |
+## M9 — Removal and recovery
 
-## M0 — Contract baseline and project skeleton
+Outcome: directory alignment, recoverable removal, native Trash, diagnostic workspaces,
+offered repairs, and expert raw-JSON correction.
 
-Status: complete 2026-07-22. Index: [M0 — Contract baseline and project skeleton](../archive/m0-contract-baseline/README.md), [acceptance record](../archive/m0-contract-baseline/ACCEPTANCE.md).
+Gate: collisions, cancellation, refusal, and partial failures preserve evidence and user
+content; confirmed repairs return valid entities to ordinary lookup. No inferred repair
+or general Fix All is introduced.
 
-## M1 — Filesystem and metadata kernel
+## M10 — Agent Ready
 
-Status: externally validated 2026-07-26. Index: [M1 — Filesystem and metadata kernel](../archive/m1-filesystem-metadata-kernel/README.md), [acceptance record](../archive/m1-filesystem-metadata-kernel/ACCEPTANCE.md).
+Outcome: the existing CLI is delivered inside the app with proven external-agent
+authorization. The only planned command additions are `agent prepare`, `agent status`,
+and `init --agent-ready`, with the generated guidance and GUI action defined by
+[Define the SpielOrders agent skill contract](../wayfinder/spielorders-product-architecture/tickets/011-agent-skill-contract.md).
+This is the last feature milestone before integrated MVP acceptance.
 
-## M1-upgrade — Toolchain and dependency modernization
+Gate: with the GUI closed, an external agent uses the exact bundled CLI and generated
+guidance to inspect and mutate an authorized disposable Package under the intended
+sandbox permissions. Opt-in setup works without changing ordinary initialization or
+opening, examples match the existing command contracts, and a resumable adoption
+rehearsal follows the
+[conversion guide](../../docs/development/first-collection-conversion.md) without
+changing the real archive.
 
-Status: externally validated 2026-07-31. Index: [M1-upgrade — Toolchain and dependency modernization](../archive/m1-upgrade-toolchain-dependencies/README.md), [acceptance record](../archive/m1-upgrade-toolchain-dependencies/ACCEPTANCE.md).
+## M11 — MVP acceptance
 
-## M2 — Package loading, diagnostics, and Package Index
+Outcome: an integrated, independently validated native application and bundled CLI.
 
-Status: externally validated 2026-08-21. Index: [M2 — Package read model](../archive/m2-package-read-model/README.md), [acceptance record](../archive/m2-package-read-model/ACCEPTANCE.md).
+Gate: decided capabilities, supported OS releases, cross-adapter results, filesystem
+failures, first launch, preferences, lifecycle, and real archive-copy responsiveness
+pass fresh validation.
+Test metadata stays in the copy. The owner accepts the functional MVP and resolves
+the provisional CLI identity selector before declaring its contract stable.
 
-## M3 — Domain mutations and safe persistence
+## M12 — App Store release
 
-Status: externally validated 2026-09-01. Index: [M3 — Domain mutations and safe persistence](../archive/m3-domain-mutations-safe-persistence/README.md), [acceptance record](../archive/m3-domain-mutations-safe-persistence/ACCEPTANCE.md).
+Outcome: the accepted MVP is packaged, signed, submitted, and distributed through the
+chosen Store channel.
 
-## M4 — CLI and independently versioned machine contracts
-
-Status: externally validated 2026-09-06. Index: [M4 — CLI and machine contracts](../archive/m4-cli-machine-contracts/README.md), [acceptance record](../archive/m4-cli-machine-contracts/ACCEPTANCE.md).
-
-## M5 — Search and native platform services
-
-Status: externally validated 2026-11-03. Index: [M5 — Search and native platform services](../implementation/m5-search-and-native-services/README.md), [acceptance record](../implementation/m5-search-and-native-services/ACCEPTANCE.md).
-
-Deliverables:
-
-- Deterministic native Order and Vendor search with whitespace-tokenized AND terms, substring matching, diacritic-insensitive case-insensitive defaults, optional case sensitivity, complete accepted searchable facts, stable sorting, and one result per entity.
-- Exclusion of paths, directory basenames, Supporting Material, Package README, calculated totals, configuration, schema syntax, and derived-index details from native entity search.
-- A synchronous cancellable OS-indexed Supporting Material search port, taking a bounded timeout and returning one settled snapshot with provider state, partial/complete status, Order groups, standardized-path deduplication, file facts, native rank when available, deterministic fallback ordering, and provider-specific diagnostics.
-- A macOS Spotlight implementation following [Define lookup and search behavior](../wayfinder/spielorders-product-architecture/tickets/005-search-lookup.md), plus open and reveal-in-Finder operations and stale-result handling.
-- Explicit unavailable-provider behavior on unsupported platforms; native provider implementations become release gates for those platforms rather than prompting a recursive fallback indexer.
-- The `search orders`, `search vendors`, and `search supporting-material` CLI commands, carrying the response contract, exit statuses, and golden-fixture obligations M4 established. They are M5's, not M4's.
-
-Acceptance gate:
-
-- Fixtures and a fake provider prove native semantics, live Vendor-fact matching, scoping, exclusions, grouping, deduplication, cancellation, partial and error states, and stale-path removal. The real Spotlight provider, file open, and Finder reveal are proven by one opt-in script the owner runs by hand once before acceptance, which the acceptance record names. Damaged Orders participate in neither search engine.
-
-## M6 — Desktop shell and read experience
-
-Status: not started. Index: [M6 — Desktop shell and read experience](../implementation/m6-desktop-shell-and-read-experience/README.md), which holds the one ticket the M5 gate carried forward.
-
-Deliverables:
-
-- The platform effects the CLI crate holds — the filesystem, Trash, native files, and Spotlight adapters — moved to one crate both adapters depend on, before the desktop wires any of them. The desktop crate depends on the core and on Tauri and not on the CLI, so a desktop that reached for these where they stand would write its own.
-- Package open, reopen, and initialize flows and one active-Package session in a Tauri 2 desktop shell.
-- Toolbar destinations for Orders, Vendors, and Package README; New Order; Package menu; and a persisted inspector toggle and width.
-- Dense Mantine-based Orders and Vendors tables with decided default columns, stable sorting, selection, compact inspectors, column customization and preferences, contextual actions, and keyboard navigation. The Vendors table omits Hidden Vendors by default and carries the show/hide control that reveals them.
-- Native-search and Spotlight peer modes with preserved query text, `Aa` behavior, result counts, Order-grouped Supporting Material results, and open and reveal actions.
-- Damaged Order placeholders and diagnostic summaries in the unfiltered Orders grid.
-- Plain-text Markdown editors with lightweight syntax highlighting for Package and Order READMEs.
-
-Acceptance gate:
-
-- Component tests run against a fake capability implementation with no Tauri dependency. A packaged macOS smoke test can initialize or open a Package, browse thousands-scale indexed data, search in both modes, inspect Orders and Vendors, edit READMEs, and reveal an Order Directory or matching file in Finder.
-
-## M7 — Desktop editing, removal, and recovery
-
-Status: not started.
-
-Deliverables:
-
-- Explicit-save Order and Vendor editors with dirty-state handling, leave confirmation, preserved drafts, inline rejected-save feedback, and focus on the first invalid field.
-- New-Order drafting without filesystem creation until successful Save; searchable Vendor selection with in-context New Vendor creation; and all five ordinary statuses with the decided Date Ordered behavior.
-- Spreadsheet-like Item editing with keyboard movement, drag ordering, pending deletion, undo, and calculated totals.
-- Align Directory Name, recoverable Remove Order, visually separated Move to Trash, macOS Delete-key confirmation, and collision and rejection presentation.
-- A separate diagnostic workspace showing evidence and only allowed repairs, exact dry-run review, revalidation, and the expert raw-JSON correction surface. There is no Fix All or inferred repair.
-- Equivalent dense table, inspector, and editor behavior for Vendors and Contacts, including a reversible hide/unhide toggle behind the M6 show/hide control, permitted whether or not Orders reference the Vendor.
-
-Acceptance gate:
-
-- End-to-end tests exercise successful and rejected edits, unsaved navigation, Vendor creation from an Order draft, Item ordering, alignment collision, removal collision, trash cancellation and failure, explicit repairs, still-invalid raw correction, and recovery of a repaired Order into the index and ordinary lookup.
-
-## M8 — Agent Ready and legacy-adoption support
-
-Status: not started.
-
-Deliverables:
-
-- `agent prepare` and `agent status`, `init --agent-ready`, and the corresponding GUI Agent Ready action using the same core preparation capability.
-- Exact generated bundle: minimal root `AGENTS.md`; `.agents/skills/spielorders/SKILL.md`; and the five decided progressive-disclosure references. Preparation creates or overwrites those files without merge, version, ownership, compatibility, or manifest logic.
-- Guidance covering Package and adoption operations, Orders and Items, Vendors and Contacts, search and inspection, and diagnostics and repair, with short examples matching actual CLI help and golden JSON contracts.
-- Firm guidance that agents use the CLI for managed metadata, preserve Supporting Material, treat legacy names as evidence rather than grammar, avoid placeholder Vendors and Vendor Merge, and resume adoption from current Package state.
-- A dry-run-only adoption rehearsal against synthetic legacy fixtures, including aliases, links, ambiguous names, invalid dates, contradictions, partial metadata, duplicate evidence, existing READMEs, and index-refresh failure. The real legacy archive is not modified.
-
-Acceptance gate:
-
-- Generated files match checked-in snapshots; every documented command is executable against fixtures; repeated preparation predictably overwrites the generated bundle; status checks only the two decided paths; and the synthetic rehearsal demonstrates one-Order-at-a-time, resumable, Supporting-Material-preserving adoption without executing the real migration.
-
-## M9 — Hardening and MVP release candidate
-
-Status: not started.
-
-Deliverables:
-
-- Cross-layer conformance tests proving CLI and Tauri adapters produce equivalent typed core outcomes for ordinary reads and mutations.
-- Filesystem fault-injection coverage for permission failures, interrupted staging, rollback failure, stale indexes, unsupported schemas, partial upgrades, collisions, links, and disappearing search results.
-- Performance and responsiveness evaluation using a synthetic Package at or above the contemplated archive scale with representative Vendors, Items, READMEs, Damaged Orders, and Supporting Material search results.
-- macOS packaging, permissions, file-open and Finder integration, Spotlight availability diagnostics, application preference persistence, and clean first-run behavior.
-- A final decision-traceability audit covering every closed map ticket and every stated out-of-scope boundary.
-- Evaluation of the provisional CLI `--uuid` selector. Retain it only if MVP GUI or scripting evidence justifies it; otherwise remove it before declaring the CLI contract stable.
-
-Acceptance gate:
-
-- All milestone gates pass in a clean environment; no known failure can silently corrupt canonical metadata or Supporting Material; the desktop and CLI expose the decided MVP capabilities; the synthetic archive-scale Package remains responsive; and release notes state deferred structured filters and non-macOS native-provider work clearly.
+Gate: release configuration, entitlements, nested executables, Store materials, and
+submission validation are complete; Apple accepts the release. Functional MVP acceptance
+does not claim Store approval, and Store work is not deferred permission-system design.

@@ -109,7 +109,7 @@ The optional Reusable Free-Entry Value naming the institution through which an O
 _Avoid_: Order location, status
 
 **Order Currency**:
-The optional three-letter ISO currency-code decoration shared by every monetary amount in one Order. Changing or omitting it never converts or modifies numeric values; all displayed monetary values use two decimal places.
+The optional three-letter ISO currency-code decoration shared by every monetary amount in one Order. Changing or omitting it never converts or modifies numeric values; each front end chooses the precision it displays them with.
 _Avoid_: Exchange rate, converted price
 
 **Project**:

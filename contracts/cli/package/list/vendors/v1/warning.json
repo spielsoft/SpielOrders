@@ -3,41 +3,41 @@
   "contract_version": 1,
   "ok": true,
   "context": {
-    "package_root": "<PACKAGE_ROOT>"
+    "root": "<PACKAGE_ROOT>"
   },
-  "data": {
-    "vendors": [
-      {
-        "vendor_id": "e0990d31-06aa-42e9-97c8-088e3e894822",
-        "name": "Tarnwick",
-        "hidden": false
-      },
-      {
-        "vendor_id": "1c9a5b7e-3d44-4f21-8a6c-9b0e2d7f4a13",
-        "name": "Nethermoor",
-        "hidden": true
-      }
-    ],
-    "hidden_vendors_included": true
-  },
+  "data": [
+    {
+      "name": "Tarnwick",
+      "phone": "+1 555 0123",
+      "email": "sales@example.com",
+      "website": "https://example.com",
+      "address": "100 Example Avenue\nAnytown, ST 00000",
+      "purchasing_notes": "Quote required above $5000.",
+      "vendor_id": "<ID-1>",
+      "hidden": "false"
+    },
+    {
+      "name": "Nethermoor",
+      "phone": null,
+      "email": null,
+      "website": null,
+      "address": null,
+      "purchasing_notes": null,
+      "vendor_id": "<ID-2>",
+      "hidden": "true"
+    }
+  ],
   "diagnostics": [
     {
       "code": "managed_artifact_invalid_syntax",
       "severity": "error",
-      "scope": "order",
-      "primary_location": {
-        "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/order.json",
-        "package_relative_path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/order.json"
-      },
-      "related_locations": [],
-      "evidence": {
-        "artifact": "order",
-        "observed_kind": null,
-        "operation": null,
-        "field": null,
-        "observed_version": null,
-        "expected_version": null
-      }
+      "message": "Managed artifact invalid syntax",
+      "field": null,
+      "reason": null,
+      "position": null,
+      "path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/order.json",
+      "before": null,
+      "after": null
     }
   ],
   "error": null

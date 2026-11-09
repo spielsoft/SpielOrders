@@ -2,9 +2,6 @@
 title: Define Vendor identity and historical semantics
 status: closed
 parent: Chart the SpielOrders product and architecture
-labels:
-  - wayfinder:grilling
-assignee: /root
 ---
 
 ## Decision

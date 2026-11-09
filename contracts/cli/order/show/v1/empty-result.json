@@ -3,45 +3,29 @@
   "contract_version": 1,
   "ok": true,
   "context": {
-    "package_root": "<PACKAGE_ROOT>",
-    "order_root": "<PACKAGE_ROOT>/Orders/2026_08_22_Priced_order"
+    "root": "<PACKAGE_ROOT>/Orders/2026_08_22_Priced_order"
   },
   "data": {
-    "paths": {
-      "directory": {
-        "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_22_Priced_order",
-        "package_relative_path": "Orders/2026_08_22_Priced_order"
-      },
-      "metadata_directory": {
-        "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_22_Priced_order/.spielorders",
-        "package_relative_path": "Orders/2026_08_22_Priced_order/.spielorders"
-      },
-      "order": {
-        "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_22_Priced_order/.spielorders/order.json",
-        "package_relative_path": "Orders/2026_08_22_Priced_order/.spielorders/order.json"
-      },
-      "readme": {
-        "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_22_Priced_order/README.md",
-        "package_relative_path": "Orders/2026_08_22_Priced_order/README.md"
-      }
-    },
-    "schema_version": 1,
-    "package_root": "../..",
-    "order_id": "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
     "title": "Priced order",
     "date_ordered": "2026-08-22",
     "status": "in_preparation",
-    "vendor_id": null,
     "vendor": null,
     "orderer": null,
     "ordering_institution": null,
     "currency": null,
     "project": null,
     "order_group": null,
+    "order_id": "<ID-1>",
+    "directory_name": "2026_08_22_Priced_order",
+    "total": "0",
+    "damage": null,
+    "vendor_id": null,
+    "directory": "<PACKAGE_ROOT>/Orders/2026_08_22_Priced_order",
     "items": [],
-    "order_total": 0.0,
-    "readme_exists": false,
-    "readme_text": ""
+    "readme": {
+      "state": "missing",
+      "path": "<PACKAGE_ROOT>/Orders/2026_08_22_Priced_order/README.md"
+    }
   },
   "diagnostics": [],
   "error": null

@@ -3,88 +3,64 @@
   "contract_version": 1,
   "ok": true,
   "context": {
-    "package_root": "<PACKAGE_ROOT>"
+    "root": "<PACKAGE_ROOT>"
   },
   "data": {
-    "scope": "package",
-    "valid": true,
-    "cases": [
+    "outcome": "committed_with_warning",
+    "committed": true,
+    "operations": [
       {
-        "case": "staging_artifact_present:.spielorders/.index.json.spielorders-stage:55c9f3bf699d650f3ef1aab88fc9f72a4d062db4e7b8902f2f775d0cab2085aa",
-        "code": "staging_artifact_present",
-        "location": {
-          "absolute_path": "<PACKAGE_ROOT>/.spielorders/.index.json.spielorders-stage",
-          "package_relative_path": ".spielorders/.index.json.spielorders-stage"
-        },
-        "actions": [
-          {
-            "action": "promote_staging_candidate",
-            "required_values": [],
-            "command": "spielorders repair --root <PACKAGE_ROOT> case=staging_artifact_present:.spielorders/.index.json.spielorders-stage:55c9f3bf699d650f3ef1aab88fc9f72a4d062db4e7b8902f2f775d0cab2085aa action=promote_staging_candidate"
-          }
-        ]
+        "kind": "promote_staging_candidate",
+        "path": "<PACKAGE_ROOT>/.spielorders/vendors.json"
+      },
+      {
+        "kind": "refresh_package_index",
+        "path": "<PACKAGE_ROOT>/.spielorders/index.json"
       }
     ],
-    "unactionable": [],
-    "report": {
-      "committed": true,
-      "changed": true,
-      "case": "staging_artifact_present:.spielorders/.vendors.json.spielorders-stage:f371c9884600e983437cf461e55cdb8ca6503b3bfe42c915af40bfcde0cf52c3",
-      "action": "promote_staging_candidate",
-      "operations": [
+    "changes": [],
+    "final_path": null,
+    "remaining": {
+      "valid": true,
+      "findings": [
         {
-          "operation": "promote_staging_candidate",
-          "location": {
-            "absolute_path": "<PACKAGE_ROOT>/.spielorders/vendors.json",
-            "package_relative_path": ".spielorders/vendors.json"
-          }
-        },
-        {
-          "operation": "refresh_package_index",
-          "location": {
-            "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
-            "package_relative_path": ".spielorders/index.json"
-          }
+          "code": "staging_artifact_present",
+          "severity": "warning",
+          "message": "Staging artifact present",
+          "field": null,
+          "reason": null,
+          "position": null,
+          "path": ".spielorders/.index.json.spielorders-stage",
+          "before": null,
+          "after": null
         }
       ],
-      "warnings": [
-        "index_refresh_failed"
+      "cases": [
+        {
+          "handle": "staging_artifact_present:.spielorders/.index.json.spielorders-stage:<DIGEST>",
+          "code": "staging_artifact_present",
+          "path": ".spielorders/.index.json.spielorders-stage",
+          "actions": [
+            {
+              "action": "promote_staging_candidate",
+              "required_values": []
+            }
+          ]
+        }
       ]
-    },
-    "index": {
-      "location": {
-        "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
-        "package_relative_path": ".spielorders/index.json"
-      },
-      "state": "stale",
-      "refresh": "replacement_failed",
-      "malformed_reasons": [],
-      "stale_reasons": [
-        "vendors_changed"
-      ],
-      "observed_version": null,
-      "expected_version": null
     }
   },
   "diagnostics": [
     {
-      "code": "staging_artifact_present",
+      "code": "index_refresh_failed",
       "severity": "warning",
-      "scope": "package",
-      "primary_location": {
-        "absolute_path": "<PACKAGE_ROOT>/.spielorders/.index.json.spielorders-stage",
-        "package_relative_path": ".spielorders/.index.json.spielorders-stage"
-      },
-      "related_locations": [
-        {
-          "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
-          "package_relative_path": ".spielorders/index.json"
-        }
-      ],
-      "evidence": {
-        "destination_valid": null,
-        "candidate_digest": null
-      }
+      "message": "Index refresh failed",
+      "field": null,
+      "reason": null,
+      "position": null,
+      "path": ".spielorders/index.json",
+      "before": null,
+      "after": null
     }
   ],
   "error": null

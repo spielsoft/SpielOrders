@@ -3,27 +3,21 @@
   "contract_version": 1,
   "ok": false,
   "context": {
-    "package_root": "<PACKAGE_ROOT>",
-    "order_root": "<PACKAGE_ROOT>/Orders/2026_08_22_Priced_order"
+    "root": "<PACKAGE_ROOT>/Orders/2026_08_22_Priced_order"
   },
   "data": null,
   "diagnostics": [],
   "error": {
-    "code": "order_item_position_invalid",
-    "message": "1 is not a position this command can address: this Order has no Items.",
-    "scope": "order",
-    "paths": [
-      {
-        "spelling": "resolved",
-        "path": "<PACKAGE_ROOT>/Orders/2026_08_22_Priced_order",
-        "package_relative_path": "Orders/2026_08_22_Priced_order"
-      }
-    ],
-    "identities": [
-      {
-        "kind": "source_position",
-        "value": "1"
-      }
-    ]
+    "code": "invalid_item_position",
+    "detail": {
+      "severity": "error",
+      "message": "No row 0; the draft has 0",
+      "field": null,
+      "reason": null,
+      "position": 1,
+      "path": null,
+      "before": null,
+      "after": null
+    }
   }
 }

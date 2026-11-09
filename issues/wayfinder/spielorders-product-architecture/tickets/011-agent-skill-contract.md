@@ -2,9 +2,6 @@
 title: Define the SpielOrders agent skill contract
 status: closed
 parent: Chart the SpielOrders product and architecture
-labels:
-  - wayfinder:grilling
-assignee: /root
 ---
 
 ## Decision
@@ -67,9 +64,9 @@ There is no `agent runtime` command: runtime discovery is not an agent-specific 
 
 `search-and-inspection.md` documents Package show/list/value queries, Order and Vendor inspection, native Order and Vendor search, and OS-indexed Supporting Material search. It explains relevant inputs and result semantics without duplicating the global human-versus-JSON convention.
 
-`diagnostics-and-repair.md` documents Package and scoped validation, Package and Order repair, metadata upgrade, and Package Index status and rebuild commands. It states their required inputs, outputs, dry-run availability, mutation effects, and which ordinary operations reject damaged or unsupported Package state. It leaves selection of the appropriate response to the agent and the diagnostics returned by the CLI.
+`diagnostics-and-repair.md` documents Package and scoped validation, Package and Order repair, metadata upgrade once a later metadata version exists, and Package Index status and rebuild commands. It states their required inputs, outputs, dry-run availability, mutation effects, and which ordinary operations reject damaged or unsupported Package state. It leaves selection of the appropriate response to the agent and the diagnostics returned by the CLI.
 
-Every mutating-command example may show `--dry-run` where useful. The skill explains only its established CLI meaning: validate and report the proposed mutation without writing; omission commits the named operation. It adds no agent-specific approval boundary or ceremony. This refines the future-skill guidance in [Define legacy Order adoption and metadata bootstrapping](009-legacy-adoption.md): the skill teaches the available adoption operations, required data, dry-run behavior, and effects, while the agent and its surrounding authorization rules determine how to reason, review, and obtain approval.
+Every mutating-command example may show `--dry-run` where useful. The skill explains its established CLI meaning: validate and report the proposed mutation without writing; omission commits the named operation. It adds no agent-specific approval ceremony. [Define legacy Order adoption and metadata bootstrapping](009-legacy-adoption.md) owns adoption safety; the agent and its surrounding authorization rules determine how to reason, review, and obtain approval.
 
 ### Safety boundaries
 

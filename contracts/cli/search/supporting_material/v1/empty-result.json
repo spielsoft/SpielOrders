@@ -3,15 +3,13 @@
   "contract_version": 1,
   "ok": true,
   "context": {
-    "package_root": "<PACKAGE_ROOT>"
+    "root": "<PACKAGE_ROOT>"
   },
   "data": {
-    "query": "zirconium",
     "provider": "spotlight",
-    "complete": true,
-    "partial_reason": null,
-    "orders": [],
-    "diagnostics": []
+    "state": "complete",
+    "files": [],
+    "provider_diagnostics": []
   },
   "diagnostics": [],
   "error": null

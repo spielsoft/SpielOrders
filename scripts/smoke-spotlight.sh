@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# The real platform index, and the platform's own open and reveal, seen once by hand.
+# The CLI's own native services, seen once by hand: its Spotlight query against the real
+# index, and its Trash move against the real Trash.
 #
 # Not reachable from scripts/gate.sh and never run unattended. Spotlight indexes a
-# temporary directory late or never, and `open` launches applications, so the decided
-# rules are pinned against fakes in the test suite and this is where the real index is
-# watched. It is the run M5's acceptance record names.
+# temporary directory late or never, and the Trash is the owner's, so the gate pins the
+# decided rules against supplied hits and a sandbox that refuses the Trash, and this is
+# where the real services are watched.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -36,13 +37,11 @@ A correct run prints, in order:
      planted with anything, because Spotlight does not index a dotted directory at all and
      a run here could say nothing about that exclusion; the test suite proves it instead.
 
-  2. OPENED and REVEALED, and your desktop brings TextEdit and a Finder window forward.
-     That is the part no unattended test can show, and the only reason this script exists.
-
-     It hands the file over through SpielOrders' own opener rather than calling the
-     platform directly, so what runs is the code that ships. The handover is one ignored
-     test in the CLI crate: the gate never runs it and this script runs it by name. It
-     names the file it leaves in your temporary directory.
+  2. TRASHED — two ignored tests run by name. One asks the shipped mdutil for the state
+     of the volume a temporary directory is on. The other runs `order remove --delete`
+     on a disposable Package in your temporary directory, checks the whole tree arrived
+     in your Trash, and takes its own directory back out of the Trash. Nothing else in
+     your Trash is touched.
 
 If it prints NOT INDEXED, Spotlight has not reached the Package. That is the most likely
 first outcome, it is not a failure of SpielOrders, and nothing after it has run: give it a
@@ -58,7 +57,9 @@ CLI="target/debug/spielorders"
 
 mkdir -p "$PACKAGE"
 "$CLI" init --root "$PACKAGE" >/dev/null
-"$CLI" add-order "Laser components" --root "$PACKAGE" >/dev/null
+# A non-ASCII title, because Spotlight reports the composed name the library stores in
+# decomposed form, and only the real index shows the search matching it anyway.
+"$CLI" add-order "Café lasers" --root "$PACKAGE" >/dev/null
 ORDER="$PACKAGE/Orders/$(ls "$PACKAGE/Orders" | head -1)"
 
 # The file the index should find; the Order's own README, which is managed and must not
@@ -96,7 +97,7 @@ echo
 "$CLI" search supporting-material "$WORD" --root "$PACKAGE" --verbose
 
 reported="$("$CLI" search supporting-material "$WORD" --root "$PACKAGE" --json \
-  | python3 -c 'import sys,json; d=json.load(sys.stdin); print(sum(len(g["files"]) for g in (d["data"] or {}).get("orders",[])))')"
+  | python3 -c 'import sys,json; d=json.load(sys.stdin); print(len((d["data"] or {}).get("files",[])))')"
 if [ "$reported" -eq 0 ]; then
   echo
   echo "EMPTY — the index answered but SpielOrders reported no file. That is a failure, not"
@@ -107,13 +108,12 @@ echo
 echo "SpielOrders reported $reported file(s)."
 
 echo
-read -r -p "Press return to hand a file to the opener and reveal it in Finder. " _ || true
+read -r -p "Press return to ask mdutil for a state and move a disposable Order to the Trash. " _ || true
+cargo test --quiet -p spielorders-cli --bin spielorders -- --ignored \
+  the_shipped_tools_get_a_state_for_the_volume_a_directory_is_on
+cargo test --quiet -p spielorders-cli --test cli -- --ignored \
+  deleting_moves_the_intact_removed_directory_to_the_platform_trash
+echo "TRASHED — the disposable Order reached the Trash whole and was taken back out."
 
-# Through the shipped opener rather than the platform's own `open`, so what runs is the
-# code that ships. It is one ignored test, because everything else about the opener is
-# asserted against a recording double, which cannot show the platform accepting a handover.
-cargo test --quiet -p spielorders-cli -- --ignored --nocapture \
-  the_shipped_opener_really_opens_and_reveals
-echo "OPENED and REVEALED — TextEdit and Finder should have come forward."
 echo
 echo "The Package is left at $PACKAGE. Remove it with: rm -rf \"$PACKAGE\""

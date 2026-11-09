@@ -3,16 +3,14 @@
   "contract_version": 1,
   "ok": true,
   "context": {
-    "package_root": "<PACKAGE_ROOT>"
+    "root": "<PACKAGE_ROOT>"
   },
-  "data": {
-    "values": [
-      {
-        "value": "Ada Lovelace",
-        "usage_count": 2
-      }
-    ]
-  },
+  "data": [
+    {
+      "value": "Ada Lovelace",
+      "usage_count": "2"
+    }
+  ],
   "diagnostics": [],
   "error": null
 }

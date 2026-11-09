@@ -3,22 +3,21 @@
   "contract_version": 1,
   "ok": false,
   "context": {
-    "package_root": "<PACKAGE_ROOT>",
-    "order_root": null
+    "root": "<PACKAGE_ROOT>"
   },
   "data": null,
   "diagnostics": [],
   "error": {
-    "code": "order_candidate_already_managed",
-    "message": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace/.spielorders/order.json is already an Order record, so this directory is already one of this Package's Orders. Nothing was overwritten; `spielorders order edit` changes an Order's facts.",
-    "scope": "order",
-    "paths": [
-      {
-        "spelling": "resolved",
-        "path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace/.spielorders/order.json",
-        "package_relative_path": "Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace/.spielorders/order.json"
-      }
-    ],
-    "identities": []
+    "code": "already_an_order",
+    "detail": {
+      "severity": "error",
+      "message": "Already an order",
+      "field": null,
+      "reason": null,
+      "position": null,
+      "path": "Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace/.spielorders/order.json",
+      "before": null,
+      "after": null
+    }
   }
 }

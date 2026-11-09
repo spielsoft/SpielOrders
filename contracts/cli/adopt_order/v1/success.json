@@ -3,124 +3,122 @@
   "contract_version": 1,
   "ok": true,
   "context": {
-    "package_root": "<PACKAGE_ROOT>",
-    "order_root": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber"
+    "root": "<PACKAGE_ROOT>"
   },
   "data": {
-    "report": {
-      "committed": true,
-      "changed": true,
-      "outcome": "adopted",
-      "reusable_values": {
-        "ordering_institution": {
-          "outcome": "reused",
-          "value": "Northwind"
-        },
-        "orderer": {
-          "outcome": "reused",
-          "value": "Ada Lovelace"
-        },
-        "project": {
-          "outcome": "reused",
-          "value": "Telescope"
-        },
-        "order_group": {
-          "outcome": "absent",
-          "value": null
-        }
+    "outcome": "committed",
+    "committed": true,
+    "operations": [
+      {
+        "kind": "create_metadata_directory",
+        "path": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber/.spielorders"
       },
-      "operations": [
-        {
-          "operation": "create_metadata_directory",
-          "location": {
-            "absolute_path": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber/.spielorders",
-            "package_relative_path": "Orders/2009_04_31_Lcom_Fiber/.spielorders"
-          }
-        },
-        {
-          "operation": "stage_order_record",
-          "location": {
-            "absolute_path": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber/.spielorders/.order.json.spielorders-stage",
-            "package_relative_path": "Orders/2009_04_31_Lcom_Fiber/.spielorders/.order.json.spielorders-stage"
-          }
-        },
-        {
-          "operation": "commit_order_record",
-          "location": {
-            "absolute_path": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber/.spielorders/order.json",
-            "package_relative_path": "Orders/2009_04_31_Lcom_Fiber/.spielorders/order.json"
-          }
-        },
-        {
-          "operation": "remove_staging",
-          "location": {
-            "absolute_path": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber/.spielorders/.order.json.spielorders-stage",
-            "package_relative_path": "Orders/2009_04_31_Lcom_Fiber/.spielorders/.order.json.spielorders-stage"
-          }
-        },
-        {
-          "operation": "refresh_package_index",
-          "location": {
-            "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
-            "package_relative_path": ".spielorders/index.json"
-          }
-        }
-      ],
-      "index": {
-        "location": {
-          "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
-          "package_relative_path": ".spielorders/index.json"
-        },
-        "state": "current",
-        "refresh": "rebuilt",
-        "malformed_reasons": [],
-        "stale_reasons": [],
-        "observed_version": null,
-        "expected_version": null
+      {
+        "kind": "stage_order_record",
+        "path": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber/.spielorders/.order.json.spielorders-stage"
       },
-      "warnings": []
-    },
+      {
+        "kind": "commit_order_record",
+        "path": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber/.spielorders/order.json"
+      },
+      {
+        "kind": "remove_staging",
+        "path": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber/.spielorders/.order.json.spielorders-stage"
+      },
+      {
+        "kind": "refresh_package_index",
+        "path": "<PACKAGE_ROOT>/.spielorders/index.json"
+      }
+    ],
+    "changes": [
+      {
+        "kind": "new_identity",
+        "field": null,
+        "position": null,
+        "before": null,
+        "after": null,
+        "reuse": null
+      },
+      {
+        "kind": "fact",
+        "field": "title",
+        "position": null,
+        "before": null,
+        "after": "Fiber patch cable",
+        "reuse": null
+      },
+      {
+        "kind": "fact",
+        "field": "date_ordered",
+        "position": null,
+        "before": null,
+        "after": "2009-04-30",
+        "reuse": null
+      },
+      {
+        "kind": "fact",
+        "field": "status",
+        "position": null,
+        "before": null,
+        "after": "complete",
+        "reuse": null
+      },
+      {
+        "kind": "fact",
+        "field": "vendor",
+        "position": null,
+        "before": null,
+        "after": "Tarnwick",
+        "reuse": null
+      },
+      {
+        "kind": "fact",
+        "field": "orderer",
+        "position": null,
+        "before": null,
+        "after": "Ada Lovelace",
+        "reuse": "reused"
+      },
+      {
+        "kind": "fact",
+        "field": "ordering_institution",
+        "position": null,
+        "before": null,
+        "after": "Northwind",
+        "reuse": "reused"
+      },
+      {
+        "kind": "fact",
+        "field": "project",
+        "position": null,
+        "before": null,
+        "after": "Telescope",
+        "reuse": "reused"
+      }
+    ],
     "order": {
-      "paths": {
-        "directory": {
-          "absolute_path": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber",
-          "package_relative_path": "Orders/2009_04_31_Lcom_Fiber"
-        },
-        "metadata_directory": {
-          "absolute_path": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber/.spielorders",
-          "package_relative_path": "Orders/2009_04_31_Lcom_Fiber/.spielorders"
-        },
-        "order": {
-          "absolute_path": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber/.spielorders/order.json",
-          "package_relative_path": "Orders/2009_04_31_Lcom_Fiber/.spielorders/order.json"
-        },
-        "readme": {
-          "absolute_path": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber/README.md",
-          "package_relative_path": "Orders/2009_04_31_Lcom_Fiber/README.md"
-        }
-      },
-      "schema_version": 1,
-      "package_root": "../..",
-      "order_id": "<ORDER_ID>",
       "title": "Fiber patch cable",
       "date_ordered": "2009-04-30",
       "status": "complete",
-      "vendor_id": "e0990d31-06aa-42e9-97c8-088e3e894822",
-      "vendor": {
-        "vendor_id": "e0990d31-06aa-42e9-97c8-088e3e894822",
-        "name": "Tarnwick",
-        "hidden": false
-      },
+      "vendor": "Tarnwick",
       "orderer": "Ada Lovelace",
       "ordering_institution": "Northwind",
       "currency": null,
       "project": "Telescope",
       "order_group": null,
+      "order_id": "<ID-1>",
+      "directory_name": "2009_04_31_Lcom_Fiber",
+      "total": "0",
+      "damage": null,
+      "vendor_id": "<ID-2>",
+      "directory": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber",
       "items": [],
-      "order_total": 0.0,
-      "readme_exists": true,
-      "readme_text": "Ordered by telephone. Invoice in the quotes folder.\n"
-    }
+      "readme": {
+        "state": "present",
+        "path": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber/README.md"
+      }
+    },
+    "final_path": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber"
   },
   "diagnostics": [],
   "error": null

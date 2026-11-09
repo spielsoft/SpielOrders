@@ -3,55 +3,91 @@
   "contract_version": 1,
   "ok": true,
   "context": {
-    "package_root": "<PACKAGE_ROOT>"
+    "root": "<PACKAGE_ROOT>"
   },
   "data": {
-    "report": {
-      "committed": true,
-      "changed": true,
-      "outcome": "created",
-      "operations": [
-        {
-          "operation": "replace_vendor_record",
-          "location": {
-            "absolute_path": "<PACKAGE_ROOT>/.spielorders/vendors.json",
-            "package_relative_path": ".spielorders/vendors.json"
-          }
-        },
-        {
-          "operation": "refresh_package_index",
-          "location": {
-            "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
-            "package_relative_path": ".spielorders/index.json"
-          }
-        }
-      ],
-      "index": {
-        "location": {
-          "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
-          "package_relative_path": ".spielorders/index.json"
-        },
-        "state": "current",
-        "refresh": "rebuilt",
-        "malformed_reasons": [],
-        "stale_reasons": [],
-        "observed_version": null,
-        "expected_version": null
+    "outcome": "committed",
+    "committed": true,
+    "operations": [
+      {
+        "kind": "replace_vendor_record",
+        "path": "<PACKAGE_ROOT>/.spielorders/vendors.json"
       },
-      "warnings": []
-    },
+      {
+        "kind": "refresh_package_index",
+        "path": "<PACKAGE_ROOT>/.spielorders/index.json"
+      }
+    ],
+    "changes": [
+      {
+        "kind": "new_identity",
+        "field": null,
+        "position": null,
+        "before": null,
+        "after": null,
+        "reuse": null
+      },
+      {
+        "kind": "fact",
+        "field": "name",
+        "position": null,
+        "before": null,
+        "after": "Tarnwick",
+        "reuse": null
+      },
+      {
+        "kind": "fact",
+        "field": "phone",
+        "position": null,
+        "before": null,
+        "after": "+1 555 0123",
+        "reuse": null
+      },
+      {
+        "kind": "fact",
+        "field": "email",
+        "position": null,
+        "before": null,
+        "after": "sales@example.com",
+        "reuse": null
+      },
+      {
+        "kind": "fact",
+        "field": "website",
+        "position": null,
+        "before": null,
+        "after": "https://example.com",
+        "reuse": null
+      },
+      {
+        "kind": "fact",
+        "field": "address",
+        "position": null,
+        "before": null,
+        "after": "100 Example Avenue\nAnytown, ST 00000",
+        "reuse": null
+      },
+      {
+        "kind": "fact",
+        "field": "purchasing_notes",
+        "position": null,
+        "before": null,
+        "after": "Quote required above $5000.",
+        "reuse": null
+      }
+    ],
     "vendor": {
-      "vendor_id": "<VENDOR_ID>",
       "name": "Tarnwick",
       "phone": "+1 555 0123",
       "email": "sales@example.com",
       "website": "https://example.com",
       "address": "100 Example Avenue\nAnytown, ST 00000",
       "purchasing_notes": "Quote required above $5000.",
-      "hidden": false,
-      "contacts": [],
-      "referencing_orders": []
-    }
+      "vendor_id": "<ID-1>",
+      "hidden": "false",
+      "contacts": []
+    },
+    "final_path": null
   },
   "diagnostics": [],
   "error": null

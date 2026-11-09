@@ -3,13 +3,9 @@
   "contract_version": 1,
   "ok": true,
   "context": {
-    "package_root": "<PACKAGE_ROOT>"
+    "root": "<PACKAGE_ROOT>"
   },
-  "data": {
-    "query": "zirconium",
-    "vendors": [],
-    "hidden_vendors_included": false
-  },
+  "data": [],
   "diagnostics": [],
   "error": null
 }

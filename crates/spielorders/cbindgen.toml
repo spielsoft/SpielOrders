@@ -1,0 +1,110 @@
+language = "C"
+include_guard = "SPIELORDERS_H"
+sys_includes = ["stdint.h"]
+no_includes = true
+documentation_style = "c99"
+style = "both"
+usize_is_size_t = true
+autogen_warning = "/* Generated from crates/spielorders by `cargo run -p spielorders-checks -- header write`. Do not edit. */"
+header = """
+/*
+ * SpielOrders: the one interface every caller of a SpielOrders Package uses.
+ *
+ * Names. spielorders_<noun>_<verb>, where the noun is the handle type of the first
+ * argument, the handle type the function creates, or one of the library nouns
+ * library, constant, and cancel. Constants are SPIELORDERS_<FAMILY>_<NAME>.
+ *
+ * Handles. Every library-owned value is a handle of its own type, which a caller only
+ * receives from the library, never constructs, copies, or dereferences, and frees with
+ * its own spielorders_<noun>_free (freeing NULL does nothing). Using a freed handle is
+ * undefined. Handles are independent: freeing one never invalidates another. Every
+ * handle except a Draft or a Hits is immutable and may be shared across threads; a Draft
+ * or a Hits must not be used from two threads at once.
+ *
+ * Arguments. A pointer is required (_Nonnull) unless its description says "or NULL";
+ * passing NULL for a required one is undefined. Text is NUL-terminated UTF-8. A path is
+ * the filesystem's own bytes: pass back a path the library gave you unchanged, and never
+ * compare or re-encode one (Swift: URL(fileURLWithFileSystemRepresentation:)).
+ *
+ * Values. Numbers, dates, and money cross as text that the library parses, calculates,
+ * spells, and sorts. A stored or calculated number reads as the shortest decimal that
+ * parses back to exactly that value, totals included: nothing is rounded for display, so
+ * a caller rounds for its own reader. A draft's field reads as typed. Counts and indices
+ * are int64_t, zero-based, with -1 for none. Booleans are int32_t 0 or 1. An absent
+ * optional fact reads as "", and setting "" clears it.
+ *
+ * Constants. Each enumeration is a family of int32_t constants in its own range, values
+ * never renumbered or reused. spielorders_constant_name and
+ * spielorders_constant_from_name are the name tables. Flags are bit masks, not
+ * constants.
+ *
+ * Results. A function that can fail returns a SPIELORDERS_RESULT_* constant, and its
+ * last argument is SpielordersEntries **outcome (or NULL): set to a new Entries handle
+ * when the call produced any failure, warning, or finding, and to NULL otherwise. A
+ * Package's own findings never change a result. No failure state is global or
+ * thread-local. A function that only reads a handle never fails; given an index out of
+ * range or a field it does not have, it answers "" for text, -1 for an integer or a
+ * constant, 0 for a boolean, and NULL for a handle.
+ *
+ * Out-parameters. A function that gives a handle sets *out to it on
+ * SPIELORDERS_RESULT_OK and to NULL otherwise. Whatever *out held before is overwritten
+ * and never read or freed.
+ *
+ * Ownership. Every handle a function gives you is yours to free. Every string is
+ * borrowed from the handle it came from and lives until that handle is freed, except a
+ * Draft's, which live until the next call that changes that Draft.
+ *
+ * Panics. An internal failure returns SPIELORDERS_RESULT_INTERNAL and poisons only the
+ * Draft involved, after which every fallible call on that Draft returns
+ * SPIELORDERS_RESULT_BAD_ARGUMENT. A commit that fails internally reports in its outcome
+ * whether it had already written.
+ *
+ * Cancellation. spielorders_cancel_new gives a token that is never 0 and never reused;
+ * any thread may request or release it. Calls that take a token return
+ * SPIELORDERS_RESULT_CANCELLED at their next effect after it is requested, having
+ * written nothing; 0 means not cancellable. The token table is the library's only
+ * process-wide state. A commit takes no token: it ends committed, refused before its
+ * first write, or failed with its rollback reported.
+ *
+ * Effects. The library performs its own filesystem, clock, and identity effects; a
+ * caller implements none.
+ */
+"""
+
+after_includes = """
+
+#if !defined(__clang__)
+#define _Nonnull
+#define _Nullable
+#endif
+
+// NUL-terminated UTF-8 text, borrowed. Required.
+typedef const char *_Nonnull SpielordersText;
+
+// NUL-terminated UTF-8 text, borrowed, or NULL.
+typedef const char *_Nullable SpielordersOptionalText;
+
+// A NUL-terminated path in the filesystem's own bytes, borrowed. Required. Pass back a
+// path the library gave you unchanged; never compare or re-encode one.
+typedef const char *_Nonnull SpielordersPathBytes;
+
+// A NUL-terminated path in the filesystem's own bytes, borrowed, or NULL.
+typedef const char *_Nullable SpielordersOptionalPathBytes;
+"""
+
+[export]
+include = ["SpielordersResult", "SpielordersConstant"]
+exclude = ["Text", "OptionalText", "PathBytes", "OptionalPathBytes"]
+
+[export.rename]
+"Text" = "SpielordersText"
+"OptionalText" = "SpielordersOptionalText"
+"PathBytes" = "SpielordersPathBytes"
+"OptionalPathBytes" = "SpielordersOptionalPathBytes"
+
+[ptr]
+non_null_attribute = "_Nonnull"
+nullable_attribute = "_Nullable"
+
+[enum]
+prefix_with_name = false

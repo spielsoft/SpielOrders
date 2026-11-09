@@ -3,55 +3,57 @@
   "contract_version": 1,
   "ok": true,
   "context": {
-    "package_root": "<PACKAGE_ROOT>"
+    "root": "<PACKAGE_ROOT>"
   },
-  "data": {
-    "orders": [
-      {
-        "directory": {
-          "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace",
-          "package_relative_path": "Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace"
-        },
-        "order_id": "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
-        "title": "Laser components",
-        "date_ordered": "2026-08-22",
-        "status": "in_preparation",
-        "vendor_id": "e0990d31-06aa-42e9-97c8-088e3e894822",
-        "vendor": {
-          "vendor_id": "e0990d31-06aa-42e9-97c8-088e3e894822",
-          "name": "Tarnwick",
-          "hidden": false
-        }
-      }
-    ],
-    "damaged_orders": [
-      {
-        "directory": {
-          "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace",
-          "package_relative_path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace"
-        },
-        "order_id": null
-      }
-    ]
-  },
+  "data": [
+    {
+      "title": "Laser components",
+      "date_ordered": "2026-08-22",
+      "status": "in_preparation",
+      "vendor": "Tarnwick",
+      "orderer": "Ada Lovelace",
+      "ordering_institution": "Northwind",
+      "currency": "USD",
+      "project": "Telescope",
+      "order_group": "Summer build",
+      "order_id": "<ID-1>",
+      "directory_name": "2026_08_22_Tarnwick_Laser_components_Ada_Lovelace",
+      "total": "181",
+      "damage": null,
+      "vendor_id": "<ID-2>",
+      "damaged": false,
+      "directory": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace"
+    },
+    {
+      "title": null,
+      "date_ordered": null,
+      "status": null,
+      "vendor": null,
+      "orderer": null,
+      "ordering_institution": null,
+      "currency": null,
+      "project": null,
+      "order_group": null,
+      "order_id": null,
+      "directory_name": "2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace",
+      "total": null,
+      "damage": "managed_artifact_invalid_syntax",
+      "vendor_id": null,
+      "damaged": true,
+      "directory": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace"
+    }
+  ],
   "diagnostics": [
     {
       "code": "managed_artifact_invalid_syntax",
       "severity": "error",
-      "scope": "order",
-      "primary_location": {
-        "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/order.json",
-        "package_relative_path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/order.json"
-      },
-      "related_locations": [],
-      "evidence": {
-        "artifact": "order",
-        "observed_kind": null,
-        "operation": null,
-        "field": null,
-        "observed_version": null,
-        "expected_version": null
-      }
+      "message": "Managed artifact invalid syntax",
+      "field": null,
+      "reason": null,
+      "position": null,
+      "path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/order.json",
+      "before": null,
+      "after": null
     }
   ],
   "error": null

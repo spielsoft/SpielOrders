@@ -3,18 +3,20 @@
   "contract_version": 1,
   "ok": true,
   "context": {
-    "package_root": "<PACKAGE_ROOT>"
+    "root": "<PACKAGE_ROOT>"
   },
-  "data": {
-    "vendors": [
-      {
-        "vendor_id": "e0990d31-06aa-42e9-97c8-088e3e894822",
-        "name": "Tarnwick",
-        "hidden": false
-      }
-    ],
-    "hidden_vendors_included": false
-  },
+  "data": [
+    {
+      "name": "Tarnwick",
+      "phone": "+1 555 0123",
+      "email": "sales@example.com",
+      "website": "https://example.com",
+      "address": "100 Example Avenue\nAnytown, ST 00000",
+      "purchasing_notes": "Quote required above $5000.",
+      "vendor_id": "<ID-1>",
+      "hidden": "false"
+    }
+  ],
   "diagnostics": [],
   "error": null
 }

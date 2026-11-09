@@ -10,11 +10,11 @@ fi
 
 cargo fmt --check
 
-CARGO_TARGET_DIR=target/lint cargo clippy --workspace --all-targets --locked -- -D warnings &
+CARGO_TARGET_DIR=target/lint cargo clippy --workspace --all-targets --all-features --locked -- -D warnings &
 clippy=$!
 trap 'kill "$clippy" 2>/dev/null || true' EXIT INT TERM
 
-cargo test --workspace --locked
+cargo test --workspace --all-features --locked
 
 if ! wait "$clippy"; then
   echo "clippy failed" >&2
@@ -22,7 +22,10 @@ if ! wait "$clippy"; then
 fi
 trap - EXIT INT TERM
 
-npm run test:schemas
-npm run check:traceability
+cargo run --package spielorders-checks --locked
+
+if [[ "$(uname -s)" == Darwin ]]; then
+  bash scripts/native-checks.sh
+fi
 
 echo "gate passed"

@@ -3,26 +3,21 @@
   "contract_version": 1,
   "ok": false,
   "context": {
-    "package_root": "<PACKAGE_ROOT>"
+    "root": "<PACKAGE_ROOT>"
   },
   "data": null,
   "diagnostics": [],
   "error": {
-    "code": "vendor_contact_position_invalid",
-    "message": "0 is not a position this command can address: they run from 1 to 3.",
-    "scope": "package",
-    "paths": [
-      {
-        "spelling": "resolved",
-        "path": "<PACKAGE_ROOT>/.spielorders/vendors.json",
-        "package_relative_path": ".spielorders/vendors.json"
-      }
-    ],
-    "identities": [
-      {
-        "kind": "destination_position",
-        "value": "0"
-      }
-    ]
+    "code": "invalid_contact_position",
+    "detail": {
+      "severity": "error",
+      "message": "No row -1; the draft has 3",
+      "field": null,
+      "reason": null,
+      "position": null,
+      "path": null,
+      "before": null,
+      "after": null
+    }
   }
 }

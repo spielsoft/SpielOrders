@@ -3,29 +3,23 @@
   "contract_version": 1,
   "ok": true,
   "context": {
-    "package_root": "<PACKAGE_ROOT>"
+    "root": "<PACKAGE_ROOT>"
   },
   "data": {
-    "location": {
-      "absolute_path": "<PACKAGE_ROOT>/README.md",
-      "package_relative_path": "README.md"
-    },
-    "exists": true
+    "state": "unreadable",
+    "path": "<PACKAGE_ROOT>/README.md"
   },
   "diagnostics": [
     {
       "code": "readme_unavailable",
       "severity": "warning",
-      "scope": "document",
-      "primary_location": {
-        "absolute_path": "<PACKAGE_ROOT>/README.md",
-        "package_relative_path": "README.md"
-      },
-      "related_locations": [],
-      "evidence": {
-        "document_kind": "package_readme",
-        "reason": "wrong_kind"
-      }
+      "message": "Readme unavailable",
+      "field": null,
+      "reason": null,
+      "position": null,
+      "path": "README.md",
+      "before": null,
+      "after": null
     }
   ],
   "error": null

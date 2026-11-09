@@ -3,15 +3,12 @@
   "contract_version": 1,
   "ok": false,
   "context": {
-    "package_root": null
+    "root": null
   },
   "data": null,
   "diagnostics": [],
   "error": {
     "code": "usage_invalid",
-    "message": "unrecognized option `--jsom`",
-    "scope": "usage",
-    "paths": [],
-    "identities": []
+    "detail": "unrecognized option `--jsom`"
   }
 }

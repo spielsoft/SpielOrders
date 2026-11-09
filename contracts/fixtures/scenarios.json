@@ -17,7 +17,6 @@
       "semantic_validity": "not_applicable",
       "integrity_scope": "unmanaged",
       "warning_state": "none",
-      "upgrade_state": "not_applicable",
       "preservation": ["README.md"]
     },
     {
@@ -36,7 +35,6 @@
       "semantic_validity": "valid",
       "integrity_scope": "healthy",
       "warning_state": "none",
-      "upgrade_state": "current_no_op",
       "preservation": ["Orders/2026_07_19_Laser_components/quote.bin"]
     },
     {
@@ -51,7 +49,6 @@
       "semantic_validity": "unknown",
       "integrity_scope": "package",
       "warning_state": "none",
-      "upgrade_state": "blocked",
       "preservation": []
     },
     {
@@ -63,7 +60,6 @@
       "semantic_validity": "unknown",
       "integrity_scope": "order",
       "warning_state": "none",
-      "upgrade_state": "blocked_by_order",
       "preservation": ["other healthy Orders"]
     },
     {
@@ -79,7 +75,6 @@
       "semantic_validity": "valid",
       "integrity_scope": "healthy",
       "warning_state": "ignored",
-      "upgrade_state": "current_no_op",
       "preservation": ["all hidden entries"]
     },
     {
@@ -94,7 +89,6 @@
       "semantic_validity": "valid",
       "integrity_scope": "package_warning",
       "warning_state": "direct_child_entry",
-      "upgrade_state": "current_no_op",
       "preservation": ["Orders/loose.txt", "Orders/VisibleAlias"]
     },
     {
@@ -106,7 +100,6 @@
       "semantic_validity": "valid",
       "integrity_scope": "order_diagnostic",
       "warning_state": "reserved_content",
-      "upgrade_state": "current_no_op",
       "preservation": ["unexpected content pending explicit handling"]
     },
     {
@@ -118,7 +111,6 @@
       "semantic_validity": "valid",
       "integrity_scope": "healthy",
       "warning_state": "none_absence_loads_empty",
-      "upgrade_state": "current_no_op",
       "preservation": []
     },
     {
@@ -130,7 +122,6 @@
       "semantic_validity": "valid",
       "integrity_scope": "document_warning",
       "warning_state": "readme_unreadable",
-      "upgrade_state": "current_no_op",
       "preservation": ["Orders/Order/README.md"]
     },
     {
@@ -142,7 +133,6 @@
       "semantic_validity": "stale_derived_data",
       "integrity_scope": "derived_index",
       "warning_state": "index_stale",
-      "upgrade_state": "current_no_op",
       "preservation": ["canonical metadata"]
     },
     {
@@ -154,7 +144,6 @@
       "semantic_validity": "valid_canonical_state",
       "integrity_scope": "derived_index",
       "warning_state": "index_invalid_rebuildable",
-      "upgrade_state": "current_no_op",
       "preservation": ["canonical metadata"]
     },
     {
@@ -169,7 +158,6 @@
       "semantic_validity": "invalid_duplicate_order_id",
       "integrity_scope": "both_orders",
       "warning_state": "none",
-      "upgrade_state": "blocked",
       "preservation": ["both Order Directories and Supporting Material"]
     },
     {
@@ -181,7 +169,6 @@
       "semantic_validity": "invalid_duplicate_vendor_id",
       "integrity_scope": "package",
       "warning_state": "none",
-      "upgrade_state": "blocked",
       "preservation": []
     },
     {
@@ -193,7 +180,6 @@
       "semantic_validity": "invalid_duplicate_vendor_name",
       "integrity_scope": "package",
       "warning_state": "none",
-      "upgrade_state": "blocked",
       "preservation": []
     },
     {
@@ -205,7 +191,6 @@
       "semantic_validity": "invalid_unresolved_vendor_reference",
       "integrity_scope": "order",
       "warning_state": "none",
-      "upgrade_state": "blocked_by_order",
       "preservation": ["Order Directory and Supporting Material"]
     },
     {
@@ -217,7 +202,6 @@
       "semantic_validity": "valid",
       "integrity_scope": "healthy",
       "warning_state": "none_drift_is_ordinary",
-      "upgrade_state": "current_no_op",
       "preservation": ["directory basename until explicit alignment"]
     },
     {
@@ -229,7 +213,6 @@
       "semantic_validity": "valid",
       "integrity_scope": "healthy",
       "warning_state": "none",
-      "upgrade_state": "current_no_op",
       "preservation": []
     },
     {
@@ -241,7 +224,6 @@
       "semantic_validity": "valid",
       "integrity_scope": "staging_diagnostic",
       "warning_state": "staging_artifact",
-      "upgrade_state": "current_no_op",
       "preservation": ["canonical destination and staging evidence"]
     },
     {
@@ -253,20 +235,7 @@
       "semantic_validity": "not_interpreted",
       "integrity_scope": "package",
       "warning_state": "unsupported_newer",
-      "upgrade_state": "unsupported_future",
       "preservation": ["entire Package unchanged"]
-    },
-    {
-      "name": "interrupted upgrade version combination",
-      "sources": ["Define durable metadata schemas and version evolution"],
-      "condition": "The marker remains at a supported source while canonical files are a permitted mix of source and the one recognized target.",
-      "tree": [{"path":"symbolic-version-state.json","kind":"symbolic","contents":"No version-0 or speculative version-2 schema is invented."}],
-      "schema_validity": "valid_under_each_declared_supported_schema",
-      "semantic_validity": "valid_upgrade_intermediate",
-      "integrity_scope": "upgrade_blocked_ordinary_use",
-      "warning_state": "none",
-      "upgrade_state": "resumable_interrupted",
-      "preservation": ["already upgraded artifacts and source-version remainder"]
     },
     {
       "name": "legacy adoption candidate with ambiguous evidence",
@@ -280,23 +249,7 @@
       "semantic_validity": "requires_explicit_adoption_facts",
       "integrity_scope": "eligible_adoption_candidate",
       "warning_state": "ambiguous_name_is_evidence_only",
-      "upgrade_state": "not_applicable",
       "preservation": ["existing README bytes", "opaque Supporting Material bytes"]
-    },
-    {
-      "name": "current version no-op upgrade",
-      "sources": ["Define durable metadata schemas and version evolution"],
-      "condition": "All markers and artifacts are metadata version 1, the newest recognized version.",
-      "tree": [
-        {"path":".spielorders/version.json","kind":"copy","source":"examples/v1/minimal/version.json"},
-        {"path":".spielorders/vendors.json","kind":"copy","source":"examples/v1/minimal/vendors.json"}
-      ],
-      "schema_validity": "valid",
-      "semantic_validity": "valid",
-      "integrity_scope": "healthy",
-      "warning_state": "none",
-      "upgrade_state": "current_no_op",
-      "preservation": ["all bytes unchanged"]
     }
   ]
 }

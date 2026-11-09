@@ -3,37 +3,42 @@
   "contract_version": 1,
   "ok": false,
   "context": {
-    "package_root": "<PACKAGE_ROOT>"
+    "root": "<PACKAGE_ROOT>"
   },
   "data": null,
-  "diagnostics": [
-    {
-      "code": "order_semantic_invalid",
-      "severity": "error",
-      "scope": "order",
-      "primary_location": {
-        "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/order.json",
-        "package_relative_path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/order.json"
-      },
-      "related_locations": [],
-      "evidence": {
-        "order_id": "3f2a1c05-7b19-4e63-9d84-5a0c6e8b2f71",
-        "field": "date_ordered",
-        "reason": "invalid_gregorian_date"
-      }
-    }
-  ],
+  "diagnostics": [],
   "error": {
     "code": "package_invalid",
-    "message": "the Package at <PACKAGE_ROOT> is invalid: at least one finding carries error severity. The diagnostics are the answer; `spielorders order repair`, rooted at the Order Directory a finding names, offers the actions.",
-    "scope": "package",
-    "paths": [
-      {
-        "spelling": "resolved",
-        "path": "<PACKAGE_ROOT>",
-        "package_relative_path": "."
-      }
-    ],
-    "identities": []
+    "detail": {
+      "valid": false,
+      "findings": [
+        {
+          "code": "order_semantic_invalid",
+          "severity": "error",
+          "message": "Order semantic invalid",
+          "field": "date_ordered",
+          "reason": null,
+          "position": null,
+          "path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/order.json",
+          "before": null,
+          "after": "<ID-1>"
+        }
+      ],
+      "cases": [
+        {
+          "handle": "order_semantic_invalid:Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/order.json:<DIGEST>",
+          "code": "order_semantic_invalid",
+          "path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/order.json",
+          "actions": [
+            {
+              "action": "replace_managed_record",
+              "required_values": [
+                "record"
+              ]
+            }
+          ]
+        }
+      ]
+    }
   }
 }

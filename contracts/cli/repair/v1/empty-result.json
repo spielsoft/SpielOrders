@@ -3,15 +3,12 @@
   "contract_version": 1,
   "ok": true,
   "context": {
-    "package_root": "<PACKAGE_ROOT>"
+    "root": "<PACKAGE_ROOT>"
   },
   "data": {
-    "scope": "package",
     "valid": true,
-    "cases": [],
-    "unactionable": [],
-    "report": null,
-    "index": null
+    "findings": [],
+    "cases": []
   },
   "diagnostics": [],
   "error": null

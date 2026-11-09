@@ -2,9 +2,6 @@
 title: Define durable metadata schemas and version evolution
 status: closed
 parent: Chart the SpielOrders product and architecture
-labels:
-  - wayfinder:grilling
-assignee: /root
 ---
 
 ## Decision
@@ -46,6 +43,8 @@ Malformed syntax, a missing or wrongly typed version, an unknown field, a failed
 
 ### Automatic, resumable upgrades
 
+The upgrade mechanism is built together with the first metadata version after version 1, and not before: until then every version other than 1 is unsupported and diagnostic-only, and no load, command, or capability offers an upgrade. When it is built, it follows the rules below.
+
 Opening a supported older package automatically targets the newest metadata version understood by the running build. Migrations are implemented as consecutive transformations and compose across multiple versions; arbitrary targets and downgrades are not supported. Upgrade is distinct from integrity repair: each source artifact must parse and validate under its declared supported schema, and migration may transform only facts defined by that schema without guessing missing domain meaning.
 
 The core upgrades valid `order.json` files one at a time in deterministic Order Directory order, validating and atomically replacing each file. A file already at the one recognized target validates and is skipped, allowing restart after interruption. After every Order reaches the target, the core validates and atomically upgrades `vendors.json`, atomically advances `version.json` last, and rebuilds `index.json`. Each replacement uses standard beside-destination staging; a failed individual replacement preserves that file's previous valid contents. Package-wide rollback is neither required nor attempted because completed per-file upgrades are intentionally resumable.
@@ -54,6 +53,6 @@ While the marker is old, canonical files may validly be at the declared source v
 
 ### Core and downstream CLI boundary
 
-Following the SpielGantt precedent without copying its contracts, Rust core behavior owns every ordinary SpielOrder Package read and mutation: discovery, configuration, managed JSON, Package and Order READMEs, directory creation and alignment, validation, upgrades, index maintenance, repair, and search. The GUI otherwise manages only app-owned UI preferences and session state outside the Package. Tauri and CLI surfaces are thin adapters over the same typed core operations; neither frontend code nor CLI adapter code duplicates package rules. The sole deliberate exception established by the desktop decision is an expert diagnostic raw-JSON editor: it writes user-supplied text directly without interpreting or validating it at the GUI layer, then invokes Rust validation; invalid text remains damaged and no equivalent library or CLI mutation exists.
+Following the SpielGantt precedent without copying its contracts, Rust core behavior owns every ordinary SpielOrder Package read and mutation: discovery, configuration, managed JSON, Package and Order READMEs, directory creation and alignment, validation, upgrades, index maintenance, repair, and search. The GUI otherwise manages only app-owned UI preferences and session state outside the Package. Desktop and CLI surfaces are thin adapters over the same typed core operations; neither frontend code nor CLI adapter code duplicates package rules. The sole deliberate exception established by the desktop decision is an expert diagnostic raw-JSON editor: it writes user-supplied text directly without interpreting or validating it at the GUI layer, then invokes Rust validation; invalid text remains damaged and no equivalent library or CLI mutation exists.
 
 [Define the Rust CLI capability contract](006-cli-contract.md) owns the CLI's subcommands, mutation reports, validation and repair exposure, exit behavior, human output, and versioned machine-readable envelopes. On-disk metadata schemas are never reused as CLI response schemas.

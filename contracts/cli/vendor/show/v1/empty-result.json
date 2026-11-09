@@ -3,19 +3,18 @@
   "contract_version": 1,
   "ok": true,
   "context": {
-    "package_root": "<PACKAGE_ROOT>"
+    "root": "<PACKAGE_ROOT>"
   },
   "data": {
-    "vendor_id": "e0990d31-06aa-42e9-97c8-088e3e894822",
     "name": "Nethermoor",
     "phone": null,
     "email": null,
     "website": null,
     "address": null,
     "purchasing_notes": null,
-    "hidden": false,
-    "contacts": [],
-    "referencing_orders": []
+    "vendor_id": "<ID-1>",
+    "hidden": "false",
+    "contacts": []
   },
   "diagnostics": [],
   "error": null

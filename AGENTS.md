@@ -11,15 +11,15 @@
 ## Reading rule
 
 A worker loads this file, the milestone index's ticket table, its one ticket, and the
-decision documents that ticket links. Nothing else is read by default. Closed tickets,
-archived milestones, acceptance and validation records, and other milestones are history;
-open one only when your ticket links it by name.
+decision documents that ticket links. Nothing else is read by default. Unlinked closed
+tickets and other milestones are outside the default reading scope. Keep the kickoff
+small; the linked current decisions supply the context.
 
 ## Two lanes
 
 **Small change.** The diff changes at most 50 lines of non-test source, no file under
-`contracts/`, no `contract_version`, no exit status, no public `spielorders-core`
-signature, and no `metadata_version`. It gets one commit containing the change and its
+`contracts/`, no `contract_version`, no exit status, no function or constant in
+`spielorders.h`, and no `metadata_version`. It gets one commit containing the change and its
 test, one `scripts/gate.sh` run, and a commit message whose first body line is
 `Small change: <one clause saying why it qualifies>`. No ticket, no claim, no review. A
 defect fix, a rendering fix, a missing test, a doc correction, and a dependency patch
@@ -33,14 +33,22 @@ checkable.
 
 ## Ticket execution
 
-One ticket is in progress at a time across all milestones, because there is one worktree.
+One ticket is in progress at a time in each worktree. Work in a worktree other than the
+main checkout lands on `main` by fast-forward, and records land promptly so every worker
+reads current tickets. Before starting, check that no ticket in progress elsewhere edits
+the same files.
 
 Claim: with a clean tree, record `git rev-parse HEAD` as `review_start`, set
 `status: in progress`, `assignee`, and `claimed_at`, and commit the claim alone.
 
 Build with the `implement` and `tdd` skills, through the executable's own surface. The
 core owns Package rules; the CLI parses, targets, invokes, presents, exits. Human output
-is never a parsing contract. Commit each coherent step: uncommitted work is the only work
+is never a parsing contract. Tests express behavior through a public interface, not
+implementation; the `test-cleanup` skill is the standard a test is written and kept to.
+Production code never exists to serve tests: no target, module, visibility, parameter,
+default, branch, field, conformance, or hook that only tests reach. Tests use real seams
+and assert outcomes, never how an action was performed.
+Commit each coherent step: uncommitted work is the only work
 that is ever lost. Run `scripts/gate.sh` once when the implementation is stable and once
 after review remediation.
 
@@ -63,6 +71,10 @@ If the parallel mechanism is unavailable, stop and report. Never substitute one 
 
 ## Records
 
+- Documentation keeps current constraints, future work, and useful lessons that cannot
+  be learned from the code alone. Git records how the state was reached. Delete obsolete
+  tickets, milestone records, validation transcripts, prompts, and prototypes after
+  retaining any enduring constraints or lessons; do not keep an archive just for history.
 - One home per fact. A rule lives in the code or in exactly one document. Everywhere else
   links to it by name and never restates it.
 - A document states the current decision in the present tense. No dates, amendments,
@@ -77,6 +89,8 @@ If the parallel mechanism is unavailable, stop and report. Never substitute one 
 - A closed ticket is immutable. Its `## Result` is at most 150 words: what shipped, where
   the tests are, and links to any follow-up tickets. No review tables, no inventories, no
   verification transcripts.
+- When a milestone is externally validated, its index, tickets, and acceptance and
+  validation records are deleted, and the roadmap keeps the milestone as one line.
 - An open ticket has the sections Outcome, Decision sources, Blocking, Scope, Acceptance
   criteria, Exclusions, and at most 600 words outside its acceptance criteria. No
   predicted code shapes, no file paths, no fixture matrices. Implementation discovers the

@@ -3,49 +3,37 @@
   "contract_version": 1,
   "ok": true,
   "context": {
-    "package_root": "<PACKAGE_ROOT>",
-    "order_root": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace"
+    "root": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace"
   },
   "data": {
-    "scope": "order",
-    "offered_repairs": [
+    "valid": true,
+    "findings": [
       {
         "code": "staging_artifact_present",
-        "scope": "order",
-        "location": {
-          "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/.order.json.spielorders-stage",
-          "package_relative_path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/.order.json.spielorders-stage"
-        },
+        "severity": "warning",
+        "message": "Staging artifact present",
+        "field": null,
+        "reason": null,
+        "position": null,
+        "path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/.order.json.spielorders-stage",
+        "before": null,
+        "after": null
+      }
+    ],
+    "cases": [
+      {
+        "handle": "staging_artifact_present:Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/.order.json.spielorders-stage:<DIGEST>",
+        "code": "staging_artifact_present",
+        "path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/.order.json.spielorders-stage",
         "actions": [
           {
             "action": "promote_staging_candidate",
-            "required_values": [],
-            "command": null
+            "required_values": []
           }
         ]
       }
     ]
   },
-  "diagnostics": [
-    {
-      "code": "staging_artifact_present",
-      "severity": "warning",
-      "scope": "order",
-      "primary_location": {
-        "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/.order.json.spielorders-stage",
-        "package_relative_path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/.order.json.spielorders-stage"
-      },
-      "related_locations": [
-        {
-          "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/order.json",
-          "package_relative_path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/order.json"
-        }
-      ],
-      "evidence": {
-        "destination_valid": true,
-        "candidate_digest": "72fa298d37a835966faa15293664634033864cadd0c2ab61d32dbbf3ccb291cb"
-      }
-    }
-  ],
+  "diagnostics": [],
   "error": null
 }

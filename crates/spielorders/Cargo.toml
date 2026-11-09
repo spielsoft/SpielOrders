@@ -1,0 +1,31 @@
+[package]
+name = "spielorders"
+description = "The SpielOrders library and the one C-ABI interface every caller uses"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+name = "spielorders"
+path = "src/lib.rs"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+focaccia = "2.6.0"
+# String-producing Unicode folds for substring search; focaccia compares whole names.
+icu_casemap = "2.4.0"
+jiff = "0.2.39"
+libc = "0.2.191"
+# A CommonMark parser, which is how a search reads a README's text rather than the
+# Markdown it is written in. The default features are the crate's HTML renderer and its
+# binary's argument parsing, and neither is wanted. See `src/search.rs`.
+pulldown-cmark = { version = "0.13.6", default-features = false }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+toml = "1.2.0"
+# Canonical decomposition, which is how a search folds a diacritic away without
+# transliterating the text it is folding. See `src/search.rs`.
+unicode-normalization = "0.1.26"
+uuid = { version = "1.29.0", features = ["v4"] }

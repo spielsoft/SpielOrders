@@ -3,26 +3,21 @@
   "contract_version": 1,
   "ok": false,
   "context": {
-    "package_root": "<PACKAGE_ROOT>"
+    "root": "<PACKAGE_ROOT>"
   },
   "data": null,
   "diagnostics": [],
   "error": {
     "code": "vendor_name_in_use",
-    "message": "the Package at <PACKAGE_ROOT> already has a Vendor with that Name, compared trimmed and without regard to letter case. There is no Vendor Merge: use the existing Vendor, choose a deliberately distinct Name, or hide the one that is no longer used.",
-    "scope": "package",
-    "paths": [
-      {
-        "spelling": "resolved",
-        "path": "<PACKAGE_ROOT>/.spielorders/vendors.json",
-        "package_relative_path": ".spielorders/vendors.json"
-      }
-    ],
-    "identities": [
-      {
-        "kind": "vendor",
-        "value": "e0990d31-06aa-42e9-97c8-088e3e894822"
-      }
-    ]
+    "detail": {
+      "severity": "error",
+      "message": "Vendor name in use",
+      "field": null,
+      "reason": null,
+      "position": null,
+      "path": ".spielorders/vendors.json",
+      "before": null,
+      "after": null
+    }
   }
 }

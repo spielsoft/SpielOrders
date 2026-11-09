@@ -182,7 +182,7 @@ fn a_usage_error_is_reported_to_the_audience_the_command_line_named() {
     let document = response(&machine);
     assert_eq!(machine.status, Some(2));
     assert_eq!(document["error"]["code"], "usage_invalid");
-    let message = document["error"]["message"]
+    let message = document["error"]["detail"]
         .as_str()
         .expect("a usage error carries its message");
     assert!(
@@ -260,7 +260,9 @@ fn quiet_says_nothing_on_success_and_still_reports_a_failure() {
     assert_eq!(failure.status, Some(1));
     assert_eq!(failure.stdout, b"");
     assert!(
-        failure.stderr_text().contains("is not a SpielOrders Root"),
+        failure
+            .stderr_text()
+            .starts_with("error: unmanaged package"),
         "a failure is reported even under --quiet: {}",
         failure.stderr_text()
     );
@@ -286,11 +288,7 @@ fn verbose_adds_detail_to_the_result_on_standard_output() {
     );
     let detail: Vec<&str> = lines.collect();
     assert!(
-        detail.iter().any(|line| line.starts_with("Package Root: ")),
-        "{detail:?}"
-    );
-    assert!(
-        detail.iter().any(|line| line == &"Exists: yes"),
+        detail.iter().any(|line| line == &"state: present"),
         "{detail:?}"
     );
 }
@@ -341,16 +339,22 @@ fn existence_is_the_only_difference_an_absent_readme_makes() {
             .run(),
     );
 
-    assert_eq!(present["data"]["exists"], true);
-    assert_eq!(absent["data"]["exists"], false);
+    assert_eq!(present["data"]["state"], "present");
+    assert_eq!(absent["data"]["state"], "missing");
     assert_eq!(
-        present["data"]["location"]["package_relative_path"],
-        absent["data"]["location"]["package_relative_path"],
-        "the conventional path does not depend on the document being there"
+        present["data"]["path"],
+        present_root
+            .join("README.md")
+            .to_str()
+            .expect("the test path is UTF-8"),
     );
     assert_eq!(
-        present["data"]["location"]["package_relative_path"],
-        "README.md"
+        absent["data"]["path"],
+        absent_root
+            .join("README.md")
+            .to_str()
+            .expect("the test path is UTF-8"),
+        "the conventional path does not depend on the document being there"
     );
 }
 
@@ -367,14 +371,13 @@ fn a_usage_error_under_json_is_a_document_rather_than_generated_help() {
     assert_eq!(document["ok"], false);
     assert!(document["data"].is_null());
     assert_eq!(document["error"]["code"], "usage_invalid");
-    assert_eq!(document["error"]["scope"], "usage");
-    assert_eq!(document["error"]["message"], "unrecognized option `--jsom`");
+    assert_eq!(document["error"]["detail"], "unrecognized option `--jsom`");
     assert!(
-        document["context"]["package_root"].is_null(),
+        document["context"]["root"].is_null(),
         "nothing about the subject was attempted"
     );
 
-    let message = document["error"]["message"]
+    let message = document["error"]["detail"]
         .as_str()
         .expect("the message is a string");
     assert!(!message.contains("Usage:"), "{message}");

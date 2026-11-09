@@ -5,8 +5,13 @@
 
 #![allow(dead_code)]
 
+mod contracts;
+
+pub use contracts::ResponseContract;
+use spielorders::*;
 use std::{
-    ffi::{OsStr, OsString},
+    ffi::{CString, OsStr, OsString},
+    os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
@@ -30,25 +35,201 @@ pub const ENVELOPE: [&str; 7] = [
     "error",
 ];
 
-/// The Supporting Material index provider this build ships, in its own name, or `None` where
-/// its platform has none.
-///
-/// **Asked of the build rather than stated here**, because a suite that decided this for
-/// itself would assert what it had assumed — and a build that shipped no provider where its
-/// platform has one is the defect the milestone's provider ticket was opened for.
-/// `supporting_material_search::this_build_ships_the_provider_its_platform_has` is what makes
-/// reading it safe: it holds this answer against the platform the run is on, so every claim
-/// that branches on it branches on a checked fact.
-///
-/// Here rather than in one of them, because `search supporting-material` is the one command
-/// whose answer a platform decides: the golden comparison, the whole-surface sweeps, and that
-/// command's own suite all have to know which answer this build gives.
+/// The Supporting Material provider this build ships, in its own name, or `None` where its
+/// platform has none: the whole-surface sweeps and `search supporting-material`'s own suite
+/// both have to know which answer this build gives. Which native index each platform
+/// queries is Define the Rust CLI capability contract's to say.
 pub fn supporting_material_provider() -> Option<&'static str> {
-    spielorders_cli::effects::supporting_material_index()
-        .map(spielorders_core::ports::SupportingMaterialIndex::name)
+    cfg!(target_vendor = "apple").then_some("spotlight")
 }
 
-/// Distinguishes trees claimed within one process. The whole suite is one test binary,
+// ---------------------------------------------------------------------------
+// Fixture Packages, built through the library's interface as any caller builds one.
+// ---------------------------------------------------------------------------
+
+fn c_text(text: &str) -> CString {
+    CString::new(text).expect("fixture text holds no NUL")
+}
+
+fn c_path(path: &Path) -> CString {
+    CString::new(path.as_os_str().as_bytes()).expect("a fixture path holds no NUL")
+}
+
+/// The handle a fixture's call gives; the fixture expects it to succeed.
+fn handle<T>(
+    call: impl FnOnce(
+        &mut Option<Box<T>>,
+        Option<&mut Option<Box<SpielordersEntries>>>,
+    ) -> SpielordersResult,
+) -> Box<T> {
+    let mut value = None;
+    let mut outcome = None;
+    let result = call(&mut value, Some(&mut outcome));
+    let codes: Vec<&str> = (0..spielorders_entries_count(outcome.as_deref()))
+        .map(|index| {
+            spielorders_constant_name(spielorders_entries_code(outcome.as_deref(), index))
+                .to_str()
+                .unwrap_or_default()
+        })
+        .collect();
+    assert_eq!(
+        result, SPIELORDERS_RESULT_OK,
+        "the fixture call succeeds: {codes:?}"
+    );
+    value.expect("a call that succeeds gives its handle")
+}
+
+/// The Package at `root`, opened.
+pub fn opened(root: &Path) -> Box<SpielordersPackage> {
+    let root = c_path(root);
+    handle(|package, outcome| spielorders_package_open(PathBytes::new(&root), 0, package, outcome))
+}
+
+/// One fact or row field a fixture sets, named as the library names it.
+type Facts<'a> = &'a [(&'a str, &'a str)];
+
+fn field(family: SpielordersConstant, name: &str) -> SpielordersConstant {
+    let name = c_text(name);
+    let field = spielorders_constant_from_name(family, Text::new(&name));
+    assert_ne!(field, SpielordersConstant(-1), "the fixture names a field");
+    field
+}
+
+/// Sets `facts` on `draft`, appends one row per `rows`, and commits its save.
+fn saved(
+    mut draft: Box<SpielordersDraft>,
+    (family, row_family): (SpielordersConstant, SpielordersConstant),
+    facts: Facts<'_>,
+    rows: &[Facts<'_>],
+) -> Box<SpielordersReport> {
+    for (name, value) in facts {
+        let field = field(family, name);
+        let value = c_text(value);
+        assert_eq!(
+            spielorders_draft_set(&mut draft, field, Text::new(&value), None),
+            SPIELORDERS_RESULT_OK
+        );
+        let _ = spielorders_draft_confirm(&mut draft, field, -1, None);
+    }
+    for row in rows {
+        let at = spielorders_draft_row_count(&draft);
+        assert_eq!(
+            spielorders_draft_row_insert(&mut draft, at, None),
+            SPIELORDERS_RESULT_OK
+        );
+        for (name, value) in *row {
+            let value = c_text(value);
+            assert_eq!(
+                spielorders_draft_row_set(
+                    &mut draft,
+                    at,
+                    field(row_family, name),
+                    Text::new(&value),
+                    None
+                ),
+                SPIELORDERS_RESULT_OK
+            );
+        }
+    }
+    let plan = handle(|plan, outcome| spielorders_draft_plan(&draft, 0, plan, outcome));
+    handle(|report, outcome| spielorders_plan_commit(&plan, report, outcome))
+}
+
+const ORDER: (SpielordersConstant, SpielordersConstant) = (
+    SPIELORDERS_FAMILY_ORDER_FIELD,
+    SPIELORDERS_FAMILY_ITEM_FIELD,
+);
+const VENDOR: (SpielordersConstant, SpielordersConstant) = (
+    SPIELORDERS_FAMILY_VENDOR_FIELD,
+    SPIELORDERS_FAMILY_CONTACT_FIELD,
+);
+
+/// A new Order with `facts` and `items`, and its Order Directory.
+pub fn new_order(root: &Path, facts: Facts<'_>, items: &[Facts<'_>]) -> PathBuf {
+    let package = opened(root);
+    let draft =
+        handle(|draft, outcome| spielorders_package_new_order_draft(&package, draft, outcome));
+    let report = saved(draft, ORDER, facts, items);
+    PathBuf::from(spielorders_report_final_path(&report).as_path())
+}
+
+/// The Order at `directory`, read.
+pub fn read_order(directory: &Path) -> Box<SpielordersOrder> {
+    let package = {
+        let directory = c_path(directory);
+        handle(|package, outcome| {
+            spielorders_package_open_from_order(PathBytes::new(&directory), 0, package, outcome)
+        })
+    };
+    let directory = c_path(directory);
+    handle(|order, outcome| {
+        spielorders_package_read_order(&package, PathBytes::new(&directory), 0, order, outcome)
+    })
+}
+
+/// Saves the Order at `directory` with `facts` changed and `items` appended.
+pub fn edit_order(directory: &Path, facts: Facts<'_>, items: &[Facts<'_>]) {
+    let order = read_order(directory);
+    let draft = handle(|draft, _| spielorders_order_draft(&order, draft));
+    saved(draft, ORDER, facts, items);
+}
+
+/// The Order ID of the Order at `directory`.
+pub fn order_id(directory: &Path) -> String {
+    let order = read_order(directory);
+    spielorders_order_field(&order, SPIELORDERS_ORDER_FIELD_ORDER_ID)
+        .to_str()
+        .expect("an Order ID is text")
+        .to_owned()
+}
+
+fn read_vendor(root: &Path, name: &str) -> Box<SpielordersVendor> {
+    let package = opened(root);
+    let name = c_text(name);
+    handle(|vendor, outcome| {
+        spielorders_package_read_vendor(
+            &package,
+            SPIELORDERS_VENDOR_SELECTOR_NAME,
+            Text::new(&name),
+            0,
+            vendor,
+            outcome,
+        )
+    })
+}
+
+/// The Vendor ID of the Vendor `name` selects.
+pub fn vendor_id(root: &Path, name: &str) -> String {
+    let vendor = read_vendor(root, name);
+    spielorders_vendor_field(&vendor, SPIELORDERS_VENDOR_FIELD_VENDOR_ID)
+        .to_str()
+        .expect("a Vendor ID is text")
+        .to_owned()
+}
+
+/// A new Vendor with `facts`.
+pub fn new_vendor(root: &Path, facts: Facts<'_>) {
+    let package = opened(root);
+    let draft =
+        handle(|draft, outcome| spielorders_package_new_vendor_draft(&package, draft, outcome));
+    saved(draft, VENDOR, facts, &[]);
+}
+
+/// Appends `contacts` to the Vendor `name` selects.
+pub fn add_contacts(root: &Path, name: &str, contacts: &[Facts<'_>]) {
+    let vendor = read_vendor(root, name);
+    let draft = handle(|draft, _| spielorders_vendor_draft(&vendor, draft));
+    saved(draft, VENDOR, &[], contacts);
+}
+
+/// Hides the Vendor `name` selects.
+pub fn hide_vendor(root: &Path, name: &str) {
+    let vendor = read_vendor(root, name);
+    let plan = handle(|plan, outcome| spielorders_vendor_plan_hidden(&vendor, 1, 0, plan, outcome));
+    handle(|report, outcome| spielorders_plan_commit(&plan, report, outcome));
+}
+
+/// Distinguishes trees claimed within one process./// Distinguishes trees claimed within one process. The whole suite is one test binary,
 /// so two tests that pass the same label share a process id, and a clock read is not
 /// guaranteed to separate two threads that reach it together.
 static TREE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -104,8 +285,34 @@ impl Drop for TemporaryTree {
 pub fn link_to(label: &str, target: &Path) -> (TemporaryTree, PathBuf) {
     let tree = TemporaryTree::new(label);
     let link = tree.path().join("link");
-    std::os::unix::fs::symlink(target, &link).expect("the link is created");
+    create_symbolic_link(target, &link).expect("the link is created");
     (tree, link)
+}
+
+pub fn create_symbolic_link(
+    target: impl AsRef<Path>,
+    link: impl AsRef<Path>,
+) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(windows)]
+    {
+        if target.as_ref().is_dir() {
+            std::os::windows::fs::symlink_dir(target, link)
+        } else {
+            std::os::windows::fs::symlink_file(target, link)
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (target, link);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "this target has no symbolic-link fixture",
+        ))
+    }
 }
 
 /// An ordinary file, standing in a tree of its own.
@@ -148,153 +355,36 @@ pub fn unmanaged_directory(label: &str) -> (TemporaryTree, PathBuf) {
 
 /// A committed SpielOrder Package at its default layout, and its canonical root.
 ///
-/// Built by the core capability that owns Package initialization rather than by
-/// writing managed bytes here, so a test Package is a real one and this file decides
-/// no Package rule. Its filesystem effect is the executable's own production adapter,
-/// which is the only one this crate has.
+/// Built by the library's own initialization rather than by writing managed bytes here,
+/// so a test Package is a real one and this file decides no Package rule.
 pub fn initialized_package(label: &str) -> (TemporaryTree, PathBuf) {
     let tree = TemporaryTree::new(label);
-    let plan = spielorders_core::initialization::plan_package_initialization(
-        tree.path(),
-        &spielorders_core::initialization::InitializationOptions::default(),
-        &spielorders_cli::effects::PlatformFileSystem,
-    )
-    .expect("the test Package can be planned");
-    assert!(matches!(
-        spielorders_core::initialization::commit_package_initialization(
+    let path = c_path(tree.path());
+    let plan = handle(|plan, outcome| {
+        spielorders_plan_initialize(
+            PathBytes::new(&path),
+            OptionalPathBytes::null(),
+            OptionalPathBytes::null(),
+            0,
             plan,
-            &spielorders_cli::effects::PlatformFileSystem
-        ),
-        spielorders_core::mutation::MutationReport::Committed { .. }
-    ));
-    // The canonical spelling, because that is what the core reports back and what
+            outcome,
+        )
+    });
+    handle(|report, outcome| spielorders_plan_commit(&plan, report, outcome));
+    // The canonical spelling, because that is what the library reports back and what
     // macOS turns `/var/folders/...` into.
     let root = std::fs::canonicalize(tree.path()).expect("the test Package root resolves");
     (tree, root)
 }
 
-/// A Package whose Orders Directory is a configured path several levels below the Root,
-/// holding one Order, and that Order's Directory.
-///
-/// **The layout `--root` and the locator have to agree about.** Under the default layout
-/// an Order Directory is two levels below the Root, so a targeting rule that counted a
-/// fixed two parents would be right by accident; here it is four, and the Order's own
-/// `package_root` locator is the only thing that knows it. This is the shape of the M3
-/// defect that shipped — a repair that counted two parents and refreshed a stranger's
-/// directory — so it is exercised rather than assumed to behave like the default.
-pub fn package_with_a_nested_orders_directory(label: &str) -> (TemporaryTree, PathBuf, PathBuf) {
-    use spielorders_cli::effects::PlatformFileSystem;
-    use spielorders_core::{
-        initialization::{
-            InitializationOptions, commit_package_initialization, plan_package_initialization,
-        },
-        mutation::MutationReport,
-    };
-
-    let tree = TemporaryTree::new(label);
-    let plan = plan_package_initialization(
-        tree.path(),
-        &InitializationOptions::new("archive/2026/Orders", "Removed"),
-        &PlatformFileSystem,
-    )
-    .expect("the nested test Package can be planned");
-    assert!(matches!(
-        commit_package_initialization(plan, &PlatformFileSystem),
-        MutationReport::Committed { .. }
-    ));
-    let root = std::fs::canonicalize(tree.path()).expect("the test Package root resolves");
-    let directory = one_order_created_in(&root, "Nested order");
-    (tree, root, directory)
-}
-
 /// One Order created in an existing Package, and its Order Directory.
-///
-/// Created by the core capability that owns Order creation, so the Order is a real one
-/// and this file decides no Package rule — including where the Order Directory goes,
-/// which follows the Package's own configured Orders Directory wherever that is.
 pub fn one_order_created_in(root: &Path, title: &str) -> PathBuf {
-    order_created_in(root, title, NEWEST_ORDER_ID)
-}
-
-/// The same, under an identity the caller names, for a Package that already holds Orders.
-pub fn order_created_in(root: &Path, title: &str, order_id: &str) -> PathBuf {
-    use spielorders_cli::effects::PlatformFileSystem;
-    use spielorders_core::{
-        creation::{OrderCreationInput, commit_order_creation, plan_order_creation},
-        mutation::MutationReport,
-    };
-
-    let plan = plan_order_creation(
+    new_order(
         root,
-        &OrderCreationInput::new(title).date_ordered("2026-08-22"),
-        &FixedCalendar,
-        &PlatformFileSystem,
+        &[("title", title), ("date_ordered", "2026-08-22")],
+        &[],
     )
-    .expect("the fixture Order can be planned");
-    let report = commit_order_creation(
-        plan,
-        &mut QueuedUuids::new(&[order_id]),
-        &PlatformFileSystem,
-    );
-    let MutationReport::Committed { result, .. } = report else {
-        panic!("the fixture Order commits: {report:?}");
-    };
-    result
-        .order()
-        .paths()
-        .directory()
-        .absolute_path()
-        .to_path_buf()
 }
-
-/// A calendar fixed to one date.
-///
-/// A Package built by these fixtures has to be byte-stable, because golden fixtures
-/// compare its response against recorded bytes. Today's date is not.
-pub struct FixedCalendar;
-
-impl spielorders_core::ports::LocalCalendar for FixedCalendar {
-    fn today(&self) -> spielorders_core::ports::LocalDate {
-        spielorders_core::ports::LocalDate {
-            year: 2026,
-            month: 8,
-            day: 22,
-        }
-    }
-}
-
-/// Identities handed out in a fixed order, for the same reason.
-pub struct QueuedUuids(Vec<String>);
-
-impl QueuedUuids {
-    pub fn new(values: &[&str]) -> Self {
-        Self(
-            values
-                .iter()
-                .rev()
-                .map(|value| (*value).to_owned())
-                .collect(),
-        )
-    }
-}
-
-impl spielorders_core::ports::UuidGenerator for QueuedUuids {
-    fn generate_v4(&mut self) -> String {
-        self.0.pop().expect("the fixture queued enough identities")
-    }
-}
-
-/// The Vendor [`populated_package`] offers, and the one it hides.
-///
-/// Named constants rather than literals in each test because an Order referencing the
-/// Hidden Vendor is the point of the second one: hiding governs what is offered for new
-/// use and never what is resolved.
-pub const OFFERED_VENDOR_ID: &str = "e0990d31-06aa-42e9-97c8-088e3e894822";
-pub const HIDDEN_VENDOR_ID: &str = "1c9a5b7e-3d44-4f21-8a6c-9b0e2d7f4a13";
-pub const NEWEST_ORDER_ID: &str = "8b6e3f0a-8ec5-4d47-95e1-412652a56d16";
-pub const OLDEST_ORDER_ID: &str = "3f2a1c05-7b19-4e63-9d84-5a0c6e8b2f71";
-/// A third identity, for a fixture that needs one more Order than the Package has.
-pub const THIRD_ORDER_ID: &str = "c4d81b62-0e57-4a90-b3f5-6d2170ae9c38";
 
 /// A Package with everything `package show` has to report.
 ///
@@ -308,137 +398,73 @@ pub const THIRD_ORDER_ID: &str = "c4d81b62-0e57-4a90-b3f5-6d2170ae9c38";
 /// file decides no Package rule. Hiding happens last because every plan re-reads the
 /// Package it is about.
 pub fn populated_package(label: &str) -> (TemporaryTree, PathBuf) {
-    use spielorders_cli::effects::PlatformFileSystem;
-    use spielorders_core::{
-        creation::{OrderCreationInput, commit_order_creation, plan_order_creation},
-        mutation::MutationReport,
-        order_edits::{ItemAssignments, commit_order_item_mutation, plan_order_item_add},
-        vendors::{
-            ContactAssignments, VendorAssignments, commit_vendor_contact_mutation,
-            commit_vendor_mutation, plan_vendor_contact_add, plan_vendor_creation,
-            plan_vendor_hide,
-        },
-    };
-
     let (tree, root) = initialized_package(label);
-
-    let mut vendor_uuids = QueuedUuids::new(&[OFFERED_VENDOR_ID, HIDDEN_VENDOR_ID]);
-    for assignments in [
-        VendorAssignments::new()
-            .assign("name", "Tarnwick")
-            .assign("phone", "+1 555 0123")
-            .assign("email", "sales@example.com")
-            .assign("website", "https://example.com")
-            .assign("address", "100 Example Avenue\nAnytown, ST 00000")
-            .assign("purchasing_notes", "Quote required above $5000."),
-        VendorAssignments::new().assign("name", "Nethermoor"),
-    ] {
-        let plan = plan_vendor_creation(&root, &assignments, &PlatformFileSystem)
-            .expect("the fixture Vendor can be planned");
-        assert!(matches!(
-            commit_vendor_mutation(plan, &mut vendor_uuids, &PlatformFileSystem),
-            MutationReport::Committed { .. }
-        ));
-    }
-
-    let contact = plan_vendor_contact_add(
+    new_vendor(
         &root,
-        OFFERED_VENDOR_ID,
-        &ContactAssignments::new()
-            .assign("name", "Katherine Johnson")
-            .assign("role", "Accounts")
-            .assign("email", "accounts@example.com"),
-        None,
-        &PlatformFileSystem,
-    )
-    .expect("the fixture Contact can be planned");
-    assert!(matches!(
-        commit_vendor_contact_mutation(contact, &PlatformFileSystem),
-        MutationReport::Committed { .. }
-    ));
-
-    let orders = [
-        (
-            NEWEST_ORDER_ID,
-            OrderCreationInput::new("Laser components")
-                .date_ordered("2026-08-22")
-                .vendor_name("Tarnwick")
-                .orderer("Ada Lovelace")
-                .ordering_institution("Northwind")
-                .currency("USD")
-                .project("Telescope")
-                .order_group("Summer build"),
-            vec![
-                ItemAssignments::new()
-                    .assign("description", "Fiber collimator")
-                    .assign("quantity", "4")
-                    .assign("unit_price", "3.0")
-                    .assign("catalog_number", "F220APC"),
-                ItemAssignments::new()
-                    .assign("description", "Mirror mount")
-                    .assign("quantity", "2")
-                    .assign("unit_price", "84.5"),
+        &[
+            ("name", "Tarnwick"),
+            ("phone", "+1 555 0123"),
+            ("email", "sales@example.com"),
+            ("website", "https://example.com"),
+            ("address", "100 Example Avenue\nAnytown, ST 00000"),
+            ("purchasing_notes", "Quote required above $5000."),
+        ],
+    );
+    new_vendor(&root, &[("name", "Nethermoor")]);
+    add_contacts(
+        &root,
+        "Tarnwick",
+        &[&[
+            ("name", "Katherine Johnson"),
+            ("role", "Accounts"),
+            ("email", "accounts@example.com"),
+        ]],
+    );
+    new_order(
+        &root,
+        &[
+            ("title", "Laser components"),
+            ("date_ordered", "2026-08-22"),
+            ("vendor", "Tarnwick"),
+            ("orderer", "Ada Lovelace"),
+            ("ordering_institution", "Northwind"),
+            ("currency", "USD"),
+            ("project", "Telescope"),
+            ("order_group", "Summer build"),
+        ],
+        &[
+            &[
+                ("description", "Fiber collimator"),
+                ("quantity", "4"),
+                ("unit_price", "3.0"),
+                ("catalog_number", "F220APC"),
             ],
-        ),
-        (
-            OLDEST_ORDER_ID,
-            OrderCreationInput::new("Mirror mounts")
-                .date_ordered("2026-08-21")
-                .vendor_name("Nethermoor")
-                .orderer("Ada Lovelace")
-                .project("Telescope"),
-            vec![
-                ItemAssignments::new()
-                    .assign("description", "Post holder")
-                    .assign("quantity", "6")
-                    .assign("unit_price", "12.25"),
+            &[
+                ("description", "Mirror mount"),
+                ("quantity", "2"),
+                ("unit_price", "84.5"),
             ],
-        ),
-    ];
-
-    for (order_id, input, items) in orders {
-        let plan = plan_order_creation(&root, &input, &FixedCalendar, &PlatformFileSystem)
-            .expect("the fixture Order can be planned");
-        let report = commit_order_creation(
-            plan,
-            &mut QueuedUuids::new(&[order_id]),
-            &PlatformFileSystem,
-        );
-        let MutationReport::Committed { result, .. } = report else {
-            panic!("the fixture Order commits: {report:?}");
-        };
-        let directory = result
-            .order()
-            .paths()
-            .directory()
-            .absolute_path()
-            .to_path_buf();
-        for item in items {
-            let plan = plan_order_item_add(&directory, &item, None, &PlatformFileSystem)
-                .expect("the fixture Item can be planned");
-            assert!(matches!(
-                commit_order_item_mutation(plan, &PlatformFileSystem),
-                MutationReport::Committed { .. }
-            ));
-        }
-    }
-
-    // Last, because every plan above re-reads the Package and a Hidden Vendor is not
-    // offered for a new Order.
-    let hide = plan_vendor_hide(&root, HIDDEN_VENDOR_ID, &PlatformFileSystem)
-        .expect("the fixture Vendor can be hidden");
-    assert!(matches!(
-        commit_vendor_mutation(
-            hide,
-            &mut QueuedUuids::new(&["00000000-0000-4000-8000-00000000ffff"]),
-            &PlatformFileSystem
-        ),
-        MutationReport::Committed { .. }
-    ));
-
+        ],
+    );
+    new_order(
+        &root,
+        &[
+            ("title", "Mirror mounts"),
+            ("date_ordered", "2026-08-21"),
+            ("vendor", "Nethermoor"),
+            ("orderer", "Ada Lovelace"),
+            ("project", "Telescope"),
+        ],
+        &[&[
+            ("description", "Post holder"),
+            ("quantity", "6"),
+            ("unit_price", "12.25"),
+        ]],
+    );
+    // Last, because a Hidden Vendor is not offered for a new Order.
+    hide_vendor(&root, "Nethermoor");
     std::fs::write(root.join("README.md"), b"Telescope purchasing.\n")
         .expect("the fixture Package README is written");
-
     (tree, root)
 }
 
@@ -455,35 +481,19 @@ pub fn populated_package(label: &str) -> (TemporaryTree, PathBuf) {
 /// golden fixtures, and a test that needed one more Contact would move bytes no ticket had
 /// a reason to move.
 pub fn package_with_three_contacts(label: &str) -> (TemporaryTree, PathBuf) {
-    use spielorders_cli::effects::PlatformFileSystem;
-    use spielorders_core::{
-        mutation::MutationReport,
-        vendors::{ContactAssignments, commit_vendor_contact_mutation, plan_vendor_contact_add},
-    };
-
     let (tree, root) = populated_package(label);
-    for assignments in [
-        ContactAssignments::new()
-            .assign("name", "Grace Hopper")
-            .assign("role", "Engineering")
-            .assign("phone", "+1 555 0142"),
-        ContactAssignments::new()
-            .assign("name", "Alan Turing")
-            .assign("email", "alan@example.com"),
-    ] {
-        let plan = plan_vendor_contact_add(
-            &root,
-            OFFERED_VENDOR_ID,
-            &assignments,
-            None,
-            &PlatformFileSystem,
-        )
-        .expect("the fixture Contact can be planned");
-        assert!(matches!(
-            commit_vendor_contact_mutation(plan, &PlatformFileSystem),
-            MutationReport::Committed { .. }
-        ));
-    }
+    add_contacts(
+        &root,
+        "Tarnwick",
+        &[
+            &[
+                ("name", "Grace Hopper"),
+                ("role", "Engineering"),
+                ("phone", "+1 555 0142"),
+            ],
+            &[("name", "Alan Turing"), ("email", "alan@example.com")],
+        ],
+    );
     (tree, root)
 }
 
@@ -516,28 +526,17 @@ pub fn package_with_three_contacts_and_a_blocked_index_refresh(
 /// golden fixtures, and a test that needed one more Item would move bytes no ticket had a
 /// reason to move.
 pub fn package_with_three_items(label: &str) -> (TemporaryTree, PathBuf, PathBuf) {
-    use spielorders_cli::effects::PlatformFileSystem;
-    use spielorders_core::{
-        mutation::MutationReport,
-        order_edits::{ItemAssignments, commit_order_item_mutation, plan_order_item_add},
-    };
-
     let (tree, root) = populated_package(label);
     let directory = order_directory(&root, "Laser_components");
-    let plan = plan_order_item_add(
+    edit_order(
         &directory,
-        &ItemAssignments::new()
-            .assign("description", "Optical breadboard")
-            .assign("quantity", "1")
-            .assign("unit_price", "220.0"),
-        None,
-        &PlatformFileSystem,
-    )
-    .expect("the fixture Item can be planned");
-    assert!(matches!(
-        commit_order_item_mutation(plan, &PlatformFileSystem),
-        MutationReport::Committed { .. }
-    ));
+        &[],
+        &[&[
+            ("description", "Optical breadboard"),
+            ("quantity", "1"),
+            ("unit_price", "220.0"),
+        ]],
+    );
     (tree, root, directory)
 }
 
@@ -663,24 +662,8 @@ pub fn package_with_an_occupied_removed_name(
 
 /// One of a Package's Orders retitled, leaving its Directory at its old name.
 fn drift_one_order(root: &Path) -> PathBuf {
-    use spielorders_cli::effects::PlatformFileSystem;
-    use spielorders_core::{
-        mutation::MutationReport,
-        order_edits::{OrderAssignments, commit_order_edit, plan_order_edit},
-    };
-
     let directory = order_directory(root, "Laser_components");
-    let plan = plan_order_edit(
-        &directory,
-        &OrderAssignments::new().assign("title", "Laser heads"),
-        &FixedCalendar,
-        &PlatformFileSystem,
-    )
-    .expect("the fixture Order fact edit can be planned");
-    assert!(matches!(
-        commit_order_edit(plan, &PlatformFileSystem),
-        MutationReport::Committed { .. }
-    ));
+    edit_order(&directory, &[("title", "Laser heads")], &[]);
     assert!(
         directory.is_dir(),
         "a fact edit leaves the Order Directory exactly where it was"
@@ -693,16 +676,15 @@ fn drift_one_order(root: &Path) -> PathBuf {
 /// Asked of the core rather than spelled here, so a test that expects the aligned name
 /// and a fixture that occupies it are both about the name alignment actually reaches for.
 pub fn projected_alignment(directory: &Path) -> PathBuf {
-    use spielorders_cli::effects::PlatformFileSystem;
-    use spielorders_core::alignment::plan_order_alignment;
-
-    let plan = plan_order_alignment(directory, &PlatformFileSystem)
-        .expect("the drifted Order's alignment can be planned");
-    assert!(
-        plan.changes_directory_name(),
-        "the fixture Order has drifted from the name its facts project"
-    );
-    plan.destination().absolute_path().to_path_buf()
+    let order = read_order(directory);
+    let plan = handle(|plan, outcome| spielorders_order_plan_align(&order, 0, plan, outcome));
+    let renamed = (0..spielorders_plan_operation_count(&plan))
+        .find(|index| {
+            spielorders_plan_operation_kind(&plan, *index)
+                == SPIELORDERS_OPERATION_RENAME_ORDER_DIRECTORY
+        })
+        .expect("the fixture Order has drifted from the name its facts project");
+    PathBuf::from(spielorders_plan_operation_path(&plan, renamed).as_path())
 }
 
 /// A Package holding one Vendor that has only a Name.
@@ -712,27 +694,8 @@ pub fn projected_alignment(directory: &Path) -> PathBuf {
 /// nothing there, not that there is no answer — and a Vendor with only a Name is the
 /// ordinary result of `add-vendor "Nethermoor"`, not a contrived one.
 pub fn package_with_an_unreferenced_vendor(label: &str) -> (TemporaryTree, PathBuf) {
-    use spielorders_cli::effects::PlatformFileSystem;
-    use spielorders_core::{
-        mutation::MutationReport,
-        vendors::{VendorAssignments, commit_vendor_mutation, plan_vendor_creation},
-    };
-
     let (tree, root) = initialized_package(label);
-    let plan = plan_vendor_creation(
-        &root,
-        &VendorAssignments::new().assign("name", "Nethermoor"),
-        &PlatformFileSystem,
-    )
-    .expect("the fixture Vendor can be planned");
-    assert!(matches!(
-        commit_vendor_mutation(
-            plan,
-            &mut QueuedUuids::new(&[OFFERED_VENDOR_ID]),
-            &PlatformFileSystem
-        ),
-        MutationReport::Committed { .. }
-    ));
+    new_vendor(&root, &[("name", "Nethermoor")]);
     (tree, root)
 }
 
@@ -750,50 +713,25 @@ pub fn package_with_one_order_priced(
     label: &str,
     items: &[(&str, &str)],
 ) -> (TemporaryTree, PathBuf) {
-    use spielorders_cli::effects::PlatformFileSystem;
-    use spielorders_core::{
-        creation::{OrderCreationInput, commit_order_creation, plan_order_creation},
-        mutation::MutationReport,
-        order_edits::{ItemAssignments, commit_order_item_mutation, plan_order_item_add},
-    };
-
     let (tree, root) = initialized_package(label);
-
-    let plan = plan_order_creation(
+    let descriptions: Vec<String> = (1..=items.len()).map(|n| format!("Item {n}")).collect();
+    let rows: Vec<Vec<(&str, &str)>> = items
+        .iter()
+        .zip(&descriptions)
+        .map(|((quantity, unit_price), description)| {
+            vec![
+                ("description", description.as_str()),
+                ("quantity", *quantity),
+                ("unit_price", *unit_price),
+            ]
+        })
+        .collect();
+    let rows: Vec<Facts<'_>> = rows.iter().map(Vec::as_slice).collect();
+    new_order(
         &root,
-        &OrderCreationInput::new("Priced order").date_ordered("2026-08-22"),
-        &FixedCalendar,
-        &PlatformFileSystem,
-    )
-    .expect("the fixture Order can be planned");
-    let report = commit_order_creation(
-        plan,
-        &mut QueuedUuids::new(&[NEWEST_ORDER_ID]),
-        &PlatformFileSystem,
+        &[("title", "Priced order"), ("date_ordered", "2026-08-22")],
+        &rows,
     );
-    let MutationReport::Committed { result, .. } = report else {
-        panic!("the fixture Order commits: {report:?}");
-    };
-    let directory = result
-        .order()
-        .paths()
-        .directory()
-        .absolute_path()
-        .to_path_buf();
-
-    for (position, (quantity, unit_price)) in items.iter().enumerate() {
-        let assignments = ItemAssignments::new()
-            .assign("description", format!("Item {}", position + 1))
-            .assign("quantity", *quantity)
-            .assign("unit_price", *unit_price);
-        let plan = plan_order_item_add(&directory, &assignments, None, &PlatformFileSystem)
-            .expect("the fixture Item can be planned");
-        assert!(matches!(
-            commit_order_item_mutation(plan, &PlatformFileSystem),
-            MutationReport::Committed { .. }
-        ));
-    }
-
     (tree, root)
 }
 
@@ -933,132 +871,6 @@ pub fn package_with_one_locator_rewritten(
     (tree, root, broken, sibling)
 }
 
-/// Two SpielOrder Packages, one nested inside the other, and an Order of the inner one
-/// whose locator names the *outer* Package.
-///
-/// This is the mismatched locator as distinct from the merely stale one: the place the
-/// locator names is a real SpielOrders Root, and it holds no such Order. Returns the outer
-/// Root, the inner Root, and the Order Directory.
-pub fn order_whose_locator_names_another_package(
-    label: &str,
-) -> (TemporaryTree, PathBuf, PathBuf, PathBuf) {
-    use spielorders_cli::effects::PlatformFileSystem;
-    use spielorders_core::{
-        creation::{OrderCreationInput, commit_order_creation, plan_order_creation},
-        initialization::{
-            InitializationOptions, commit_package_initialization, plan_package_initialization,
-        },
-        mutation::MutationReport,
-    };
-
-    let (tree, outer) = initialized_package(label);
-    let inner_path = outer.join("inner");
-    std::fs::create_dir(&inner_path).expect("the inner Package directory is created");
-    let plan = plan_package_initialization(
-        &inner_path,
-        &InitializationOptions::default(),
-        &PlatformFileSystem,
-    )
-    .expect("the inner test Package can be planned");
-    assert!(matches!(
-        commit_package_initialization(plan, &PlatformFileSystem),
-        MutationReport::Committed { .. }
-    ));
-    let inner = std::fs::canonicalize(&inner_path).expect("the inner Package root resolves");
-
-    let plan = plan_order_creation(
-        &inner,
-        &OrderCreationInput::new("Inner order").date_ordered("2026-08-22"),
-        &FixedCalendar,
-        &PlatformFileSystem,
-    )
-    .expect("the inner fixture Order can be planned");
-    let report = commit_order_creation(
-        plan,
-        &mut QueuedUuids::new(&[NEWEST_ORDER_ID]),
-        &PlatformFileSystem,
-    );
-    let MutationReport::Committed { result, .. } = report else {
-        panic!("the inner fixture Order commits: {report:?}");
-    };
-    let directory = result
-        .order()
-        .paths()
-        .directory()
-        .absolute_path()
-        .to_path_buf();
-
-    // One segment too many, so the locator resolves past the inner Root and onto the
-    // outer one — a Root that is real and holds no such Order.
-    let record = directory.join(".spielorders/order.json");
-    let text = std::fs::read_to_string(&record).expect("the fixture Order record can be read");
-    let rewritten = text.replace(
-        "  \"package_root\": \"../..\",\n",
-        "  \"package_root\": \"../../..\",\n",
-    );
-    assert_ne!(text, rewritten, "the locator member was found");
-    std::fs::write(&record, rewritten).expect("the rewritten Order record is written");
-
-    (tree, outer, inner, directory)
-}
-
-/// [`populated_package`] with one Order's Project spelled differently on disk.
-///
-/// The two Orders' records then carry `Telescope` and `  teleSCOPE  `, which
-/// differ only in letter case and in surrounding whitespace. **No core capability can
-/// produce this**: `canonicalize_reusable_value` matches a proposed value against the
-/// spellings already in use and writes the existing one, so every value a SpielOrders
-/// mutation writes is already canonical. The condition is therefore written into the
-/// record the core produced — one field's text and nothing else — because it is the shape
-/// an adopted or externally edited Package has, and it is the shape the read-side
-/// grouping rule exists for.
-pub fn package_with_a_differently_spelled_value(label: &str) -> (TemporaryTree, PathBuf) {
-    let (tree, root) = populated_package(label);
-    let orders = root.join("Orders");
-    let order = entry_names(&orders)
-        .into_iter()
-        .find(|name| name.contains("Mirror_mounts"))
-        .map(|name| orders.join(name).join(".spielorders/order.json"))
-        .expect("the fixture Package has the Order this respells");
-    let record = std::fs::read_to_string(&order).expect("the fixture Order record can be read");
-    let respelled = record.replace(
-        "\"project\": \"Telescope\"",
-        "\"project\": \"  teleSCOPE  \"",
-    );
-    assert_ne!(
-        record, respelled,
-        "the Project field was found and replaced"
-    );
-    std::fs::write(&order, respelled).expect("the respelled Order record is written");
-    (tree, root)
-}
-
-/// [`populated_package`] with *every* Order Directory's record unreadable.
-///
-/// Two Damaged Orders rather than one, which is what makes a claim about the order they
-/// are presented in mean anything: one placeholder is in every order at once. The healthy
-/// list is then empty, so this fixture answers only the Damaged half — the healthy half
-/// is [`populated_package`], whose two Orders are in the opposite order to their
-/// directory names.
-pub fn package_with_every_order_damaged(label: &str) -> (TemporaryTree, PathBuf) {
-    let (tree, root) = populated_package(label);
-    let orders = root.join("Orders");
-    let names = entry_names(&orders);
-    assert_eq!(
-        names.len(),
-        2,
-        "the fixture Package has two Order Directories"
-    );
-    for name in names {
-        std::fs::write(
-            orders.join(name).join(".spielorders/order.json"),
-            b"{ not json",
-        )
-        .expect("the fixture Order record is damaged");
-    }
-    (tree, root)
-}
-
 /// A Package whose marker declares a metadata version this build does not interpret.
 ///
 /// The records themselves are untouched, so the Package is not damaged in any other
@@ -1078,15 +890,19 @@ pub fn package_at_an_uninterpretable_version(label: &str) -> (TemporaryTree, Pat
 ///
 /// Package-wide canonical damage rather than Order-local: the load can read the Package
 /// and cannot trust it, so it answers with diagnostics and no contents.
+/// The two Vendor IDs [`package_with_duplicate_vendor_names`] writes.
+pub const FIRST_VENDOR_ID: &str = "e0990d31-06aa-42e9-97c8-088e3e894822";
+pub const SECOND_VENDOR_ID: &str = "1c9a5b7e-3d44-4f21-8a6c-9b0e2d7f4a13";
+
 pub fn package_with_duplicate_vendor_names(label: &str) -> (TemporaryTree, PathBuf) {
     let (tree, root) = initialized_package(label);
     std::fs::write(
         root.join(".spielorders/vendors.json"),
         format!(
             "{{\n  \"schema_version\": 1,\n  \"vendors\": [\n    \
-             {{\n      \"vendor_id\": \"{OFFERED_VENDOR_ID}\",\n      \
+             {{\n      \"vendor_id\": \"{FIRST_VENDOR_ID}\",\n      \
              \"name\": \"Tarnwick\",\n      \"contacts\": []\n    }},\n    \
-             {{\n      \"vendor_id\": \"{HIDDEN_VENDOR_ID}\",\n      \
+             {{\n      \"vendor_id\": \"{SECOND_VENDOR_ID}\",\n      \
              \"name\": \"tarnwick\",\n      \"contacts\": []\n    }}\n  ]\n}}\n"
         ),
     )
@@ -1174,26 +990,6 @@ pub fn package_with_a_staging_artifact(label: &str) -> (TemporaryTree, PathBuf) 
     )
     .expect("the leftover staging artifact is written");
     (tree, root)
-}
-
-/// [`populated_package`] with one Order whose calculated Item Total is not finite.
-///
-/// **No core capability can produce this**, because every Order mutation validates the
-/// assembled record and refuses one whose totals do not add up. The condition is written
-/// into the record the core produced — one Item's two numbers and nothing else — because
-/// it is the only route to a non-finite total: a stored non-finite number never loads at
-/// all, so two finite numbers whose product overflows is what is left.
-///
-/// Returns the Package Root and the Order Directory whose total overflows.
-pub fn package_with_an_overflowing_total(label: &str) -> (TemporaryTree, PathBuf, PathBuf) {
-    let (tree, root) = populated_package(label);
-    let overflowing = order_directory(&root, "Laser_components");
-    let record = overflowing.join(".spielorders/order.json");
-    let text = std::fs::read_to_string(&record).expect("the fixture Order record can be read");
-    let rewritten = text.replace("\"quantity\": 2.0,", "\"quantity\": 1e308,");
-    assert_ne!(text, rewritten, "the Quantity member was found");
-    std::fs::write(&record, rewritten).expect("the rewritten Order record is written");
-    (tree, root, overflowing)
 }
 
 /// Every byte under a Package Root, in one deterministic order.
@@ -1291,6 +1087,59 @@ pub fn response(outcome: &Outcome) -> serde_json::Value {
     document
 }
 
+pub fn material_answered(
+    outcome: &Outcome,
+    document: &serde_json::Value,
+    provider: Option<&str>,
+) -> bool {
+    assert_eq!(
+        document["contract"],
+        "spielorders.search.supporting_material"
+    );
+    assert_eq!(document["contract_version"], 1);
+    assert!(outcome.stderr.is_empty());
+    match (provider, document["ok"].as_bool()) {
+        (Some(provider), Some(true)) => {
+            assert_eq!(outcome.status, Some(0), "{document}");
+            assert!(document["error"].is_null());
+            assert_eq!(document["data"]["provider"], provider);
+            assert!(document["data"]["files"].is_array());
+            assert!(
+                matches!(
+                    document["data"]["state"].as_str(),
+                    Some("complete" | "timed_out" | "cancelled")
+                ),
+                "{document}"
+            );
+            true
+        }
+        (Some(_), Some(false)) => {
+            assert_eq!(outcome.status, Some(1), "{document}");
+            assert!(document["data"].is_null());
+            assert!(
+                matches!(
+                    document["error"]["code"].as_str(),
+                    Some(
+                        "indexing_disabled"
+                            | "volume_not_indexed"
+                            | "access_denied"
+                            | "query_refused"
+                    )
+                ),
+                "unexpected failure: {document}"
+            );
+            false
+        }
+        (None, Some(false)) => {
+            assert_eq!(outcome.status, Some(1), "{document}");
+            assert!(document["data"].is_null());
+            assert_eq!(document["error"]["code"], "unsupported");
+            false
+        }
+        _ => panic!("provider presence and response disagree: {document}"),
+    }
+}
+
 /// A plain directory standing inside a Package, which is not itself a SpielOrders Root.
 ///
 /// The Package *above* it is what makes it useful: `--root` names the Root exactly and
@@ -1344,12 +1193,12 @@ pub const PACKAGE_ROOT: &str = "<PACKAGE_ROOT>";
 /// The golden fixture directory for one response contract.
 ///
 /// `contracts/` is the one canonical contract root, and CLI response fixtures live at
-/// `contracts/cli/<contract path>/v<contract_version>/` — the path the registry itself
-/// derives from the contract identity. Resolved at run time rather than with
-/// `include_str!` because the registry is what names it: that is what lets
-/// `response_contract.rs` walk every registered contract and fail for a command whose
-/// fixtures nobody remembered to add. See `docs/development/traceability.md`.
-pub fn fixture_directory(contract: spielorders_cli::contract::ResponseContract) -> PathBuf {
+/// `contracts/cli/<contract path>/v<contract_version>/` — the path derived from the
+/// contract identity. Resolved at run time rather than with `include_str!` because the
+/// registry is what names it: that is what lets `response_contract.rs` walk every
+/// registered contract and fail for a command whose fixtures nobody remembered to add.
+/// See `docs/development/traceability.md`.
+pub fn fixture_directory(contract: ResponseContract) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../contracts/cli")
         .join(contract.fixture_directory())
@@ -1367,10 +1216,55 @@ pub const VENDOR_ID: &str = "<VENDOR_ID>";
 /// This run's response document, with its Package Root replaced by [`PACKAGE_ROOT`].
 pub fn normalized(outcome: &Outcome, root: &Path) -> String {
     let text = std::str::from_utf8(&outcome.stdout).expect("the response document is UTF-8");
-    text.replace(
+    identities_numbered(&text.replace(
         root.to_str().expect("the test Package root is UTF-8"),
         PACKAGE_ROOT,
-    )
+    ))
+}
+
+/// `text` with each identity replaced by its number in order of first appearance.
+///
+/// Fixture Packages are built through the interface, which mints their identities, so a
+/// recorded document says which identities are the same one rather than what they are.
+fn identities_numbered(text: &str) -> String {
+    let is_identity = |candidate: &[u8]| {
+        candidate.len() == 36
+            && candidate.iter().enumerate().all(|(at, byte)| match at {
+                8 | 13 | 18 | 23 => *byte == b'-',
+                _ => byte.is_ascii_digit() || (b'a'..=b'f').contains(byte),
+            })
+    };
+    let bytes = text.as_bytes();
+    let mut seen: Vec<&str> = Vec::new();
+    let mut numbered = String::with_capacity(text.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        // A digest of evidence that holds an identity changes with it.
+        if at + 64 <= bytes.len()
+            && bytes[at..at + 64]
+                .iter()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+        {
+            numbered.push_str("<DIGEST>");
+            at += 64;
+        } else if at + 36 <= bytes.len() && is_identity(&bytes[at..at + 36]) {
+            let identity = &text[at..at + 36];
+            let number = match seen.iter().position(|each| *each == identity) {
+                Some(index) => index + 1,
+                None => {
+                    seen.push(identity);
+                    seen.len()
+                }
+            };
+            numbered.push_str(&format!("<ID-{number}>"));
+            at += 36;
+        } else {
+            let character = text[at..].chars().next().expect("a character starts here");
+            numbered.push(character);
+            at += character.len_utf8();
+        }
+    }
+    numbered
 }
 
 /// Asserts `value` is a lowercase hyphenated version-4 UUID, and returns it.
@@ -1413,7 +1307,7 @@ pub fn minted_uuid_v4(value: &str) -> &str {
 /// or a formatting change that advances nothing. The failure prints the actual document
 /// so that an intended change can be applied by reading it rather than by guessing.
 pub fn assert_matches_golden(
-    contract: spielorders_cli::contract::ResponseContract,
+    contract: ResponseContract,
     cell: &str,
     outcome: &Outcome,
     root: &Path,
@@ -1427,24 +1321,17 @@ pub fn assert_matches_golden(
 /// because [`minted_uuid_v4`] asserts its shape first: the fixture records that a UUIDv4
 /// stood there, and every other byte is still compared exactly.
 pub fn assert_matches_golden_with_minted_vendor_id(
-    contract: spielorders_cli::contract::ResponseContract,
+    contract: ResponseContract,
     cell: &str,
     outcome: &Outcome,
     root: &Path,
     minted: &str,
 ) {
-    assert_golden(
-        contract,
-        cell,
-        normalized(outcome, root).replace(minted_uuid_v4(minted), VENDOR_ID),
-    );
+    minted_uuid_v4(minted);
+    assert_golden(contract, cell, normalized(outcome, root));
 }
 
-pub fn assert_golden(
-    contract: spielorders_cli::contract::ResponseContract,
-    cell: &str,
-    actual: String,
-) {
+pub fn assert_golden(contract: ResponseContract, cell: &str, actual: String) {
     let path = fixture_directory(contract).join(format!("{cell}.json"));
     let expected = std::fs::read_to_string(&path).unwrap_or_else(|error| {
         panic!(
@@ -1465,9 +1352,9 @@ pub fn assert_golden(
 
 /// One run of the real `spielorders` executable.
 ///
-/// Every claim this suite makes about exit status, stream discipline, and the response
-/// contract is asserted from a real process, because those are process-level facts and
-/// an internal return value cannot stand in for one.
+/// Exit status and stream discipline are asserted from real executable invocations.
+/// Response-cell comparisons use those streams except Supporting Material answer cells,
+/// whose prepared snapshots are replayed through the production response encoder.
 pub struct Invocation {
     arguments: Vec<OsString>,
     working_directory: Option<PathBuf>,
@@ -1570,38 +1457,12 @@ pub fn unmanaged_candidate(root: &Path, name: &str) -> PathBuf {
 /// destination is about the place the Package actually configures. It is created lazily,
 /// so this names a path that may not be there.
 pub fn removed_orders_directory(root: &Path) -> PathBuf {
-    use spielorders_cli::effects::PlatformFileSystem;
-    use spielorders_core::canonical::{CanonicalPackageLoad, inspect_canonical_package};
-
-    let CanonicalPackageLoad::CurrentCandidate(package) =
-        inspect_canonical_package(root, &PlatformFileSystem)
-    else {
-        panic!("the fixture Package is a current candidate");
-    };
-    package
-        .context()
-        .removed_orders_directory()
-        .expect("a current Package names a Removed Orders Directory")
-        .absolute_path()
-        .to_path_buf()
+    root.join("Removed")
 }
 
 /// A Package's configured Orders Directory, as the core reports it.
 pub fn orders_directory(root: &Path) -> PathBuf {
-    use spielorders_cli::effects::PlatformFileSystem;
-    use spielorders_core::canonical::{CanonicalPackageLoad, inspect_canonical_package};
-
-    let CanonicalPackageLoad::CurrentCandidate(package) =
-        inspect_canonical_package(root, &PlatformFileSystem)
-    else {
-        panic!("the fixture Package is a current candidate");
-    };
-    package
-        .context()
-        .orders_directory()
-        .expect("a current Package has an Orders Directory")
-        .absolute_path()
-        .to_path_buf()
+    root.join("Orders")
 }
 
 /// The assignments an `adopt-order` command line has to supply, as a caller writes them.
@@ -1645,16 +1506,14 @@ pub fn normalized_with_substitutions(
     root: &Path,
     minted: Option<&str>,
 ) -> String {
-    use spielorders_core::ports::LocalCalendar;
-
     let mut text = normalized(outcome, root);
     if let Some(minted) = minted {
-        text = text.replace(minted_uuid_v4(minted), ORDER_ID);
+        minted_uuid_v4(minted);
     }
-    let today = spielorders_cli::effects::PlatformCalendar.today();
+    let today = jiff::Zoned::now().date();
     for spelling in [
-        format!("{:04}-{:02}-{:02}", today.year, today.month, today.day),
-        format!("{:04}_{:02}_{:02}", today.year, today.month, today.day),
+        today.strftime("%Y-%m-%d").to_string(),
+        today.strftime("%Y_%m_%d").to_string(),
     ] {
         text = text.replace(&spelling, TODAY);
     }
@@ -1669,7 +1528,7 @@ pub fn normalized_with_substitutions(
 /// `ordered` with no date reads today's local date and no fixture can carry that either.
 /// See [`normalized_with_substitutions`] for the whole closed set.
 pub fn assert_matches_golden_with_substitutions(
-    contract: spielorders_cli::contract::ResponseContract,
+    contract: ResponseContract,
     cell: &str,
     outcome: &Outcome,
     root: &Path,
@@ -1697,7 +1556,7 @@ pub fn package_with_an_unresolved_vendor_reference(
     let damaged = order_directory(&root, "Mirror_mounts");
     let record = damaged.join(".spielorders/order.json");
     let text = std::fs::read_to_string(&record).expect("the fixture Order record can be read");
-    let rewritten = text.replace(HIDDEN_VENDOR_ID, MISSING_VENDOR_ID);
+    let rewritten = text.replace(&vendor_id(&root, "Nethermoor"), MISSING_VENDOR_ID);
     assert_ne!(text, rewritten, "the Vendor Reference was found");
     std::fs::write(&record, rewritten).expect("the rewritten Order record is written");
     (tree, root, damaged)
@@ -1720,35 +1579,11 @@ pub fn package_with_a_duplicate_order_id(label: &str) -> (TemporaryTree, PathBuf
     let conflicting = order_directory(&root, "Mirror_mounts");
     let record = conflicting.join(".spielorders/order.json");
     let text = std::fs::read_to_string(&record).expect("the fixture Order record can be read");
-    let rewritten = text.replace(OLDEST_ORDER_ID, NEWEST_ORDER_ID);
+    let newest = order_id(&order_directory(&root, "Laser_components"));
+    let rewritten = text.replace(&order_id(&conflicting), &newest);
     assert_ne!(text, rewritten, "the Order ID was found");
     std::fs::write(&record, rewritten).expect("the rewritten Order record is written");
     (tree, root, conflicting)
-}
-
-/// [`populated_package`] with three Order Directories carrying one Order ID.
-///
-/// **Two participants cannot tell a count from a count plus one**: where two directories
-/// conflict, a sentence saying two and a sentence saying three are equally consistent with
-/// what a reader sees, so the claim needs a second conflict of a different size.
-///
-/// Returns the Package Root and the third Order Directory.
-pub fn package_with_three_duplicate_order_ids(label: &str) -> (TemporaryTree, PathBuf, PathBuf) {
-    let (tree, root) = populated_package(label);
-    // Created before anything conflicts, because creation checks its minted identity
-    // against the Package and a Package with Damaged Orders is not one a mutation reads.
-    let third = order_created_in(&root, "Optical table", THIRD_ORDER_ID);
-    for (directory, existing) in [
-        (order_directory(&root, "Mirror_mounts"), OLDEST_ORDER_ID),
-        (third.clone(), THIRD_ORDER_ID),
-    ] {
-        let record = directory.join(".spielorders/order.json");
-        let text = std::fs::read_to_string(&record).expect("the fixture Order record can be read");
-        let rewritten = text.replace(existing, NEWEST_ORDER_ID);
-        assert_ne!(text, rewritten, "the Order ID was found");
-        std::fs::write(&record, rewritten).expect("the rewritten Order record is written");
-    }
-    (tree, root, third)
 }
 
 /// [`populated_package`] with a leftover staging artifact beside one Order's record.
@@ -1790,4 +1625,22 @@ pub fn package_with_a_package_case_and_a_blocked_index_refresh(
     let (tree, root) = package_with_a_staging_artifact(label);
     block_index_refresh(&root);
     (tree, root)
+}
+
+/// A well-formed Order ID, where a command line needs one and no Order is meant by it.
+pub const SOME_ORDER_ID: &str = "8b6e3f0a-8ec5-4d47-95e1-412652a56d16";
+
+/// The Order ID of [`populated_package`]'s newest Order, "Laser components".
+pub fn newest_order_id(root: &Path) -> String {
+    order_id(&order_directory(root, "Laser_components"))
+}
+
+/// The Vendor ID of the Vendor [`populated_package`] offers.
+pub fn offered_vendor_id(root: &Path) -> String {
+    vendor_id(root, "Tarnwick")
+}
+
+/// The Vendor ID of the Vendor [`populated_package`] hides.
+pub fn hidden_vendor_id(root: &Path) -> String {
+    vendor_id(root, "Nethermoor")
 }

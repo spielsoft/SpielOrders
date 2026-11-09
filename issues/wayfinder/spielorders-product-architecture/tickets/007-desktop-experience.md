@@ -2,20 +2,19 @@
 title: Prototype the SpielOrders desktop experience
 status: closed
 parent: Chart the SpielOrders product and architecture
-labels:
-  - wayfinder:prototype
-assignee: /root
 ---
 
 ## Decision
 
-The accepted experience is captured in the [interactive SpielOrders desktop prototype](../prototypes/spielorders-desktop-prototype.html). It is a disposable design artifact, not production application code.
+SpielOrders uses a native macOS grid, inspector, and explicit editor. This document defines product behavior, not a web-widget layout or a framework-specific implementation.
 
 ### Window and navigation
 
-SpielOrders is a macOS-first, single-window desktop application with one active SpielOrder Package. The toolbar has a functional Package menu showing the current directory name and actions to open, reopen, or initialize a Package; it is not a passive Package label. Orders, Vendors, and the Package `README.md` are toolbar destinations. **New Order** and a visible trailing inspector-toggle button complete the ordinary toolbar. There is no permanent sidebar and no real browser product surface.
+SpielOrders is a macOS-native, single-window desktop application with one active SpielOrder Package. The toolbar has a functional Package menu showing the current directory name and actions to open, reopen, or initialize a Package; it is not a passive Package label. Orders, Vendors, and the Package `README.md` are toolbar destinations. **New Order** and a visible trailing inspector-toggle button complete the ordinary toolbar. There is no permanent sidebar and no real browser product surface.
 
-The inspector is open by default, can be toggled from the top-right toolbar control, and remembers its visibility and width. The default window is deliberately wider than the SpielGantt precedent. The visual language is restrained and macOS-like: labels, icons, headings, and actions exist only when they perform a decided function.
+The inspector is open by default, can be toggled from the top-right toolbar control, and remembers its visibility and width. The default window is wide enough for the dense Orders grid and open inspector without clipping essential controls. The visual language is restrained and macOS-like: labels, icons, headings, and actions exist only when they perform a decided function.
+
+Closing the window and quitting the application share dirty-draft protection. A cancelled leave preserves a usable editor; an approved leave ends the application only after owned work settles. Clean window Close does not leave a headless process running.
 
 ### Orders table and lookup
 
@@ -53,8 +52,8 @@ The GUI has one deliberate architectural escape hatch: the diagnostic workspace 
 
 ### Frontend architecture
 
-The initial implementation uses **Tauri 2, React, and TypeScript**. Tauri is a desktop shell only; browser deployment is unsupported. A typed frontend capability interface isolates Tauri invocation and native Finder/OS-search services from presentation state so the frontend remains testable and the shell boundary replaceable.
+The desktop uses SwiftUI with AppKit integration for controls and native behavior that need it. Pure SwiftUI is not a goal at the expense of native table editing, keyboard behavior, undo, menus, or termination. There is no browser product and no shared frontend package with SpielGantt.
 
-Use **Mantine Core, Mantine Hooks, Mantine UI, and Mantine tables throughout the initial frontend**, including Orders, Vendors, and Order Items. SpielOrders owns search, sorting, selection, draft, and persisted-column state behind small local table-component contracts, and Mantine-specific types do not escape those boundaries. TanStack Table or another engine is introduced only after an observed Mantine limitation, without changing callers.
+Swift directly links the Rust library and calls its generated C interface. [Effect and adapter boundaries](../../../../docs/architecture/boundaries.md) owns the division of responsibilities; the [implementation roadmap](../../../roadmaps/spielorders-implementation-roadmap.md) sequences native integration and deployment. Swift manages presentation and editor sessions, not Package rules. A future platform-independent service remains possible but is not an MVP requirement.
 
-SpielOrders does not create a shared frontend package with SpielGantt initially. It may follow compatible Mantine theme tokens and architectural patterns, but Orders, Vendors, navigation, inspectors, and table models remain local. When concrete duplicated low-level code exists, mark that code `TODO(shared-frontend-foundation)` and evaluate extracting only the proven duplicate into a policy-neutral shared foundation. No abstraction is created in anticipation of duplication.
+Use native controls and conventions rather than reproducing web-component internals. Concrete visual choices are evaluated in the real macOS application against the behavior above. [Desktop acceptance](../../../../docs/development/desktop-acceptance.md) governs validation.

@@ -2,9 +2,6 @@
 title: Define legacy Order adoption and metadata bootstrapping
 status: closed
 parent: Chart the SpielOrders product and architecture
-labels:
-  - wayfinder:grilling
-assignee: /root
 ---
 
 ## Decision
@@ -80,20 +77,6 @@ The agent must present a consolidated dry-run review before any future write. Fo
 
 Supporting Material is preserved in place and byte-for-byte. Core adoption does not inventory, parse, normalize, rename, move, delete, rewrite, or create files within it. Agent inspection is read-only and creates no archive-side manifests or annotations. This planning resolution does not execute, modify, migrate, rename, or add metadata to the existing archive.
 
-### Future SpielOrders agent skill guidance
+### Package-local guidance
 
-The future agent skill owns the high-level adoption protocol. It must instruct agents to:
-
-1. verify the exact SpielOrders Root and configured Orders and Removed Orders paths;
-2. distinguish physical direct-child candidates from aliases, links, hidden entries, working directories, and other excluded material;
-3. inspect legacy evidence read-only and keep source provenance, contradictions, and confidence visible;
-4. treat directory components as hints rather than authoritative field boundaries;
-5. query existing Vendors and Reusable Free-Entry Values before proposing reuse or creation;
-6. avoid placeholder Vendors and never attempt Vendor Merge;
-7. resolve duplicate Order evidence and damaged or partial prior adoption explicitly;
-8. use JSON dry runs to build one consolidated human review, wait for approval, then execute only the approved commands;
-9. resume from current Package state rather than replaying already committed work;
-10. validate after mutations, rebuild only the derived index when indicated, and surface any rollback or recovery diagnostic; and
-11. preserve all Supporting Material and never edit SpielOrders-managed metadata directly.
-
-The exact generated skill bundle, readiness and compatibility contracts, approval policy beyond this adoption workflow, and general JSON-first operating protocol remain with [Define the SpielOrders agent skill contract](011-agent-skill-contract.md).
+[Define the SpielOrders agent skill contract](011-agent-skill-contract.md) owns the generated guidance, readiness surface, and progressive-disclosure structure. It describes available operations and their effects without duplicating this adoption decision or prescribing an agent reasoning ritual.

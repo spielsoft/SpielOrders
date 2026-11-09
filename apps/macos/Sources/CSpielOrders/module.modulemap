@@ -1,0 +1,4 @@
+module CSpielOrders [system] {
+    header "../../../../crates/spielorders/include/spielorders.h"
+    export *
+}

@@ -3,133 +3,107 @@
   "contract_version": 1,
   "ok": true,
   "context": {
-    "package_root": "<PACKAGE_ROOT>",
-    "order_root": "<PACKAGE_ROOT>/Orders/<TODAY>_Laser_components"
+    "root": "<PACKAGE_ROOT>"
   },
   "data": {
-    "report": {
-      "committed": true,
-      "changed": true,
-      "outcome": "created",
-      "reusable_values": {
-        "ordering_institution": {
-          "outcome": "absent",
-          "value": null
-        },
-        "orderer": {
-          "outcome": "absent",
-          "value": null
-        },
-        "project": {
-          "outcome": "absent",
-          "value": null
-        },
-        "order_group": {
-          "outcome": "absent",
-          "value": null
-        }
+    "outcome": "committed_with_warning",
+    "committed": true,
+    "operations": [
+      {
+        "kind": "create_staging_directory",
+        "path": "<PACKAGE_ROOT>/Orders/.<TODAY>_Laser_components.spielorders-stage"
       },
-      "operations": [
-        {
-          "operation": "create_staging_directory",
-          "location": {
-            "absolute_path": "<PACKAGE_ROOT>/Orders/.<TODAY>_Laser_components.spielorders-stage",
-            "package_relative_path": "Orders/.<TODAY>_Laser_components.spielorders-stage"
-          }
-        },
-        {
-          "operation": "create_metadata_directory",
-          "location": {
-            "absolute_path": "<PACKAGE_ROOT>/Orders/.<TODAY>_Laser_components.spielorders-stage/.spielorders",
-            "package_relative_path": "Orders/.<TODAY>_Laser_components.spielorders-stage/.spielorders"
-          }
-        },
-        {
-          "operation": "write_order_record",
-          "location": {
-            "absolute_path": "<PACKAGE_ROOT>/Orders/.<TODAY>_Laser_components.spielorders-stage/.spielorders/order.json",
-            "package_relative_path": "Orders/.<TODAY>_Laser_components.spielorders-stage/.spielorders/order.json"
-          }
-        },
-        {
-          "operation": "write_readme",
-          "location": {
-            "absolute_path": "<PACKAGE_ROOT>/Orders/.<TODAY>_Laser_components.spielorders-stage/README.md",
-            "package_relative_path": "Orders/.<TODAY>_Laser_components.spielorders-stage/README.md"
-          }
-        },
-        {
-          "operation": "commit_directory",
-          "location": {
-            "absolute_path": "<PACKAGE_ROOT>/Orders/<TODAY>_Laser_components",
-            "package_relative_path": "Orders/<TODAY>_Laser_components"
-          }
-        },
-        {
-          "operation": "refresh_package_index",
-          "location": {
-            "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
-            "package_relative_path": ".spielorders/index.json"
-          }
-        }
-      ],
-      "index": {
-        "location": {
-          "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
-          "package_relative_path": ".spielorders/index.json"
-        },
-        "state": "stale",
-        "refresh": "replacement_failed",
-        "malformed_reasons": [],
-        "stale_reasons": [
-          "order_membership_changed",
-          "change_evidence_uncertain"
-        ],
-        "observed_version": null,
-        "expected_version": null
+      {
+        "kind": "create_metadata_directory",
+        "path": "<PACKAGE_ROOT>/Orders/.<TODAY>_Laser_components.spielorders-stage/.spielorders"
       },
-      "warnings": [
-        "index_refresh_failed"
-      ]
-    },
+      {
+        "kind": "write_order_record",
+        "path": "<PACKAGE_ROOT>/Orders/.<TODAY>_Laser_components.spielorders-stage/.spielorders/order.json"
+      },
+      {
+        "kind": "write_readme",
+        "path": "<PACKAGE_ROOT>/Orders/.<TODAY>_Laser_components.spielorders-stage/README.md"
+      },
+      {
+        "kind": "commit_directory",
+        "path": "<PACKAGE_ROOT>/Orders/<TODAY>_Laser_components"
+      },
+      {
+        "kind": "refresh_package_index",
+        "path": "<PACKAGE_ROOT>/.spielorders/index.json"
+      }
+    ],
+    "changes": [
+      {
+        "kind": "new_identity",
+        "field": null,
+        "position": null,
+        "before": null,
+        "after": null,
+        "reuse": null
+      },
+      {
+        "kind": "fact",
+        "field": "title",
+        "position": null,
+        "before": null,
+        "after": "Laser components",
+        "reuse": null
+      },
+      {
+        "kind": "fact",
+        "field": "date_ordered",
+        "position": null,
+        "before": null,
+        "after": "<TODAY>",
+        "reuse": null
+      },
+      {
+        "kind": "fact",
+        "field": "status",
+        "position": null,
+        "before": null,
+        "after": "in_preparation",
+        "reuse": null
+      }
+    ],
     "order": {
-      "paths": {
-        "directory": {
-          "absolute_path": "<PACKAGE_ROOT>/Orders/<TODAY>_Laser_components",
-          "package_relative_path": "Orders/<TODAY>_Laser_components"
-        },
-        "metadata_directory": {
-          "absolute_path": "<PACKAGE_ROOT>/Orders/<TODAY>_Laser_components/.spielorders",
-          "package_relative_path": "Orders/<TODAY>_Laser_components/.spielorders"
-        },
-        "order": {
-          "absolute_path": "<PACKAGE_ROOT>/Orders/<TODAY>_Laser_components/.spielorders/order.json",
-          "package_relative_path": "Orders/<TODAY>_Laser_components/.spielorders/order.json"
-        },
-        "readme": {
-          "absolute_path": "<PACKAGE_ROOT>/Orders/<TODAY>_Laser_components/README.md",
-          "package_relative_path": "Orders/<TODAY>_Laser_components/README.md"
-        }
-      },
-      "schema_version": 1,
-      "package_root": "../..",
-      "order_id": "<ORDER_ID>",
       "title": "Laser components",
       "date_ordered": "<TODAY>",
       "status": "in_preparation",
-      "vendor_id": null,
       "vendor": null,
       "orderer": null,
       "ordering_institution": null,
       "currency": null,
       "project": null,
       "order_group": null,
+      "order_id": "<ID-1>",
+      "directory_name": "<TODAY>_Laser_components",
+      "total": "0",
+      "damage": null,
+      "vendor_id": null,
+      "directory": "<PACKAGE_ROOT>/Orders/<TODAY>_Laser_components",
       "items": [],
-      "order_total": 0.0,
-      "readme_exists": true,
-      "readme_text": ""
-    }
+      "readme": {
+        "state": "present",
+        "path": "<PACKAGE_ROOT>/Orders/<TODAY>_Laser_components/README.md"
+      }
+    },
+    "final_path": "<PACKAGE_ROOT>/Orders/<TODAY>_Laser_components"
   },
-  "diagnostics": [],
+  "diagnostics": [
+    {
+      "code": "index_refresh_failed",
+      "severity": "warning",
+      "message": "Index refresh failed",
+      "field": null,
+      "reason": null,
+      "position": null,
+      "path": ".spielorders/index.json",
+      "before": null,
+      "after": null
+    }
+  ],
   "error": null
 }

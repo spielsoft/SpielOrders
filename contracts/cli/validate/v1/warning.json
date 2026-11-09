@@ -3,90 +3,37 @@
   "contract_version": 1,
   "ok": true,
   "context": {
-    "package_root": "<PACKAGE_ROOT>"
+    "root": "<PACKAGE_ROOT>"
   },
   "data": {
-    "scope": "package",
-    "package_readme": {
-      "absolute_path": "<PACKAGE_ROOT>/README.md",
-      "package_relative_path": "README.md"
-    },
-    "orders": [
-      {
-        "directory": {
-          "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace",
-          "package_relative_path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace"
-        },
-        "metadata_directory": {
-          "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders",
-          "package_relative_path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders"
-        },
-        "order": {
-          "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/order.json",
-          "package_relative_path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/order.json"
-        },
-        "readme": {
-          "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/README.md",
-          "package_relative_path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/README.md"
-        }
-      },
-      {
-        "directory": {
-          "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace",
-          "package_relative_path": "Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace"
-        },
-        "metadata_directory": {
-          "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace/.spielorders",
-          "package_relative_path": "Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace/.spielorders"
-        },
-        "order": {
-          "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace/.spielorders/order.json",
-          "package_relative_path": "Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace/.spielorders/order.json"
-        },
-        "readme": {
-          "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace/README.md",
-          "package_relative_path": "Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace/README.md"
-        }
-      }
-    ],
-    "offered_repairs": [
+    "valid": true,
+    "findings": [
       {
         "code": "staging_artifact_present",
-        "scope": "package",
-        "location": {
-          "absolute_path": "<PACKAGE_ROOT>/.spielorders/.vendors.json.spielorders-stage",
-          "package_relative_path": ".spielorders/.vendors.json.spielorders-stage"
-        },
+        "severity": "warning",
+        "message": "Staging artifact present",
+        "field": null,
+        "reason": null,
+        "position": null,
+        "path": ".spielorders/.vendors.json.spielorders-stage",
+        "before": null,
+        "after": null
+      }
+    ],
+    "cases": [
+      {
+        "handle": "staging_artifact_present:.spielorders/.vendors.json.spielorders-stage:<DIGEST>",
+        "code": "staging_artifact_present",
+        "path": ".spielorders/.vendors.json.spielorders-stage",
         "actions": [
           {
             "action": "promote_staging_candidate",
-            "required_values": [],
-            "command": null
+            "required_values": []
           }
         ]
       }
     ]
   },
-  "diagnostics": [
-    {
-      "code": "staging_artifact_present",
-      "severity": "warning",
-      "scope": "package",
-      "primary_location": {
-        "absolute_path": "<PACKAGE_ROOT>/.spielorders/.vendors.json.spielorders-stage",
-        "package_relative_path": ".spielorders/.vendors.json.spielorders-stage"
-      },
-      "related_locations": [
-        {
-          "absolute_path": "<PACKAGE_ROOT>/.spielorders/vendors.json",
-          "package_relative_path": ".spielorders/vendors.json"
-        }
-      ],
-      "evidence": {
-        "destination_valid": true,
-        "candidate_digest": "3d9476718b61237075664c8d0a88aec0664ff3c04322a3602b1a77556c0678b7"
-      }
-    }
-  ],
+  "diagnostics": [],
   "error": null
 }

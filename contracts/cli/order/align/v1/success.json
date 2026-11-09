@@ -3,110 +3,62 @@
   "contract_version": 1,
   "ok": true,
   "context": {
-    "package_root": "<PACKAGE_ROOT>",
-    "order_root": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace"
+    "root": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace"
   },
   "data": {
-    "report": {
-      "committed": true,
-      "changed": true,
-      "old_path": {
-        "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace",
-        "package_relative_path": "Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace"
+    "outcome": "committed",
+    "committed": true,
+    "operations": [
+      {
+        "kind": "rename_order_directory",
+        "path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_heads_Ada_Lovelace"
       },
-      "new_path": {
-        "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_heads_Ada_Lovelace",
-        "package_relative_path": "Orders/2026_08_22_Tarnwick_Laser_heads_Ada_Lovelace"
-      },
-      "basename": "2026_08_22_Tarnwick_Laser_heads_Ada_Lovelace",
-      "operations": [
-        {
-          "operation": "rename_order_directory",
-          "location": {
-            "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_heads_Ada_Lovelace",
-            "package_relative_path": "Orders/2026_08_22_Tarnwick_Laser_heads_Ada_Lovelace"
-          }
-        },
-        {
-          "operation": "refresh_package_index",
-          "location": {
-            "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
-            "package_relative_path": ".spielorders/index.json"
-          }
-        }
-      ],
-      "index": {
-        "location": {
-          "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
-          "package_relative_path": ".spielorders/index.json"
-        },
-        "state": "current",
-        "refresh": "rebuilt",
-        "malformed_reasons": [],
-        "stale_reasons": [],
-        "observed_version": null,
-        "expected_version": null
-      },
-      "warnings": []
-    },
+      {
+        "kind": "refresh_package_index",
+        "path": "<PACKAGE_ROOT>/.spielorders/index.json"
+      }
+    ],
+    "changes": [],
     "order": {
-      "paths": {
-        "directory": {
-          "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_heads_Ada_Lovelace",
-          "package_relative_path": "Orders/2026_08_22_Tarnwick_Laser_heads_Ada_Lovelace"
-        },
-        "metadata_directory": {
-          "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_heads_Ada_Lovelace/.spielorders",
-          "package_relative_path": "Orders/2026_08_22_Tarnwick_Laser_heads_Ada_Lovelace/.spielorders"
-        },
-        "order": {
-          "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_heads_Ada_Lovelace/.spielorders/order.json",
-          "package_relative_path": "Orders/2026_08_22_Tarnwick_Laser_heads_Ada_Lovelace/.spielorders/order.json"
-        },
-        "readme": {
-          "absolute_path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_heads_Ada_Lovelace/README.md",
-          "package_relative_path": "Orders/2026_08_22_Tarnwick_Laser_heads_Ada_Lovelace/README.md"
-        }
-      },
-      "schema_version": 1,
-      "package_root": "../..",
-      "order_id": "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
       "title": "Laser heads",
       "date_ordered": "2026-08-22",
       "status": "in_preparation",
-      "vendor_id": "e0990d31-06aa-42e9-97c8-088e3e894822",
-      "vendor": {
-        "vendor_id": "e0990d31-06aa-42e9-97c8-088e3e894822",
-        "name": "Tarnwick",
-        "hidden": false
-      },
+      "vendor": "Tarnwick",
       "orderer": "Ada Lovelace",
       "ordering_institution": "Northwind",
       "currency": "USD",
       "project": "Telescope",
       "order_group": "Summer build",
+      "order_id": "<ID-1>",
+      "directory_name": "2026_08_22_Tarnwick_Laser_heads_Ada_Lovelace",
+      "total": "181",
+      "damage": null,
+      "vendor_id": "<ID-2>",
+      "directory": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_heads_Ada_Lovelace",
       "items": [
         {
           "position": 1,
           "description": "Fiber collimator",
-          "quantity": 4.0,
-          "unit_price": 3.0,
+          "quantity": "4",
+          "unit_price": "3",
           "catalog_number": "F220APC",
-          "item_total": 12.0
+          "total": "12"
         },
         {
           "position": 2,
           "description": "Mirror mount",
-          "quantity": 2.0,
-          "unit_price": 84.5,
+          "quantity": "2",
+          "unit_price": "84.5",
           "catalog_number": null,
-          "item_total": 169.0
+          "total": "169"
         }
       ],
-      "order_total": 181.0,
-      "readme_exists": true,
-      "readme_text": ""
-    }
+      "readme": {
+        "state": "present",
+        "path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_heads_Ada_Lovelace/README.md"
+      }
+    },
+    "final_path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_heads_Ada_Lovelace"
   },
   "diagnostics": [],
   "error": null

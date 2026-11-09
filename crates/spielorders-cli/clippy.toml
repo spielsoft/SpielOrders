@@ -5,8 +5,7 @@
 # `src/effects.rs`.
 disallowed-methods = [
   # Every exit carries its status back to `main` as a value. `clippy::exit` names
-  # `std::process::exit`; these are the spellings it does not, and this crate links
-  # `libc` for the exclusive rename its port promises, so they are reachable here. See
+  # `std::process::exit`; these are the additional spellings covered by that boundary. See
   # `src/exit.rs`.
   { path = "std::process::abort", reason = "an exit is an `exit::Exit` returned to `main`" },
   { path = "libc::exit", reason = "an exit is an `exit::Exit` returned to `main`" },

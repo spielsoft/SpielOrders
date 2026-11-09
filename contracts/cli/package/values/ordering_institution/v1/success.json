@@ -3,16 +3,14 @@
   "contract_version": 1,
   "ok": true,
   "context": {
-    "package_root": "<PACKAGE_ROOT>"
+    "root": "<PACKAGE_ROOT>"
   },
-  "data": {
-    "values": [
-      {
-        "value": "Northwind",
-        "usage_count": 1
-      }
-    ]
-  },
+  "data": [
+    {
+      "value": "Northwind",
+      "usage_count": "1"
+    }
+  ],
   "diagnostics": [],
   "error": null
 }

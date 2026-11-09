@@ -3,21 +3,21 @@
   "contract_version": 1,
   "ok": false,
   "context": {
-    "package_root": "<PACKAGE_ROOT>"
+    "root": "<PACKAGE_ROOT>"
   },
   "data": null,
   "diagnostics": [],
   "error": {
-    "code": "index_replacement_failed",
-    "message": "the derived Package Index at <PACKAGE_ROOT>/.spielorders/index.json could not be replaced: write_stage. The stored index is preserved exactly as it was, and nothing canonical was touched.",
-    "scope": "operation",
-    "paths": [
-      {
-        "spelling": "resolved",
-        "path": "<PACKAGE_ROOT>/.spielorders/index.json",
-        "package_relative_path": ".spielorders/index.json"
-      }
-    ],
-    "identities": []
+    "code": "commit_failed",
+    "detail": {
+      "severity": "error",
+      "message": "Commit failed",
+      "field": null,
+      "reason": null,
+      "position": null,
+      "path": ".spielorders/index.json",
+      "before": null,
+      "after": null
+    }
   }
 }

@@ -3,60 +3,64 @@
   "contract_version": 1,
   "ok": true,
   "context": {
-    "package_root": "<PACKAGE_ROOT>"
+    "root": "<PACKAGE_ROOT>"
   },
   "data": {
-    "report": {
-      "committed": true,
-      "changed": true,
-      "outcome": "created",
-      "operations": [
-        {
-          "operation": "replace_vendor_record",
-          "location": {
-            "absolute_path": "<PACKAGE_ROOT>/.spielorders/vendors.json",
-            "package_relative_path": ".spielorders/vendors.json"
-          }
-        },
-        {
-          "operation": "refresh_package_index",
-          "location": {
-            "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
-            "package_relative_path": ".spielorders/index.json"
-          }
-        }
-      ],
-      "index": {
-        "location": {
-          "absolute_path": "<PACKAGE_ROOT>/.spielorders/index.json",
-          "package_relative_path": ".spielorders/index.json"
-        },
-        "state": "stale",
-        "refresh": "replacement_failed",
-        "malformed_reasons": [],
-        "stale_reasons": [
-          "vendors_changed"
-        ],
-        "observed_version": null,
-        "expected_version": null
+    "outcome": "committed_with_warning",
+    "committed": true,
+    "operations": [
+      {
+        "kind": "replace_vendor_record",
+        "path": "<PACKAGE_ROOT>/.spielorders/vendors.json"
       },
-      "warnings": [
-        "index_refresh_failed"
-      ]
-    },
+      {
+        "kind": "refresh_package_index",
+        "path": "<PACKAGE_ROOT>/.spielorders/index.json"
+      }
+    ],
+    "changes": [
+      {
+        "kind": "new_identity",
+        "field": null,
+        "position": null,
+        "before": null,
+        "after": null,
+        "reuse": null
+      },
+      {
+        "kind": "fact",
+        "field": "name",
+        "position": null,
+        "before": null,
+        "after": "Tarnwick",
+        "reuse": null
+      }
+    ],
     "vendor": {
-      "vendor_id": "<VENDOR_ID>",
       "name": "Tarnwick",
       "phone": null,
       "email": null,
       "website": null,
       "address": null,
       "purchasing_notes": null,
-      "hidden": false,
-      "contacts": [],
-      "referencing_orders": []
-    }
+      "vendor_id": "<ID-1>",
+      "hidden": "false",
+      "contacts": []
+    },
+    "final_path": null
   },
-  "diagnostics": [],
+  "diagnostics": [
+    {
+      "code": "index_refresh_failed",
+      "severity": "warning",
+      "message": "Index refresh failed",
+      "field": null,
+      "reason": null,
+      "position": null,
+      "path": ".spielorders/index.json",
+      "before": null,
+      "after": null
+    }
+  ],
   "error": null
 }

@@ -2,9 +2,6 @@
 title: Define the Order record and lifecycle contract
 status: closed
 parent: Chart the SpielOrders product and architecture
-labels:
-  - wayfinder:grilling
-assignee: /root
 ---
 
 ## Decision
@@ -32,8 +29,8 @@ order within an Order. Quantity and Unit Price have no sign restriction.
 
 Item Total Price is Quantity multiplied by Unit Price, and Order Total is the sum of Item
 Total Prices. Neither total is stored or manually overridden; fees, shipping, taxes, and
-discounts may be ordinary Order Items. Calculations are not rounded, while displayed
-monetary values use two decimal places.
+discounts may be ordinary Order Items. Calculations are not rounded, and each front end
+chooses the precision it displays monetary values with.
 
 Order Currency is an optional three-letter ISO code applied uniformly as decoration to
 every price in the Order. When absent, numbers are unlabeled; changing the code relabels

@@ -40,8 +40,11 @@ use clap::{
     Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum,
     error::{ContextKind, ContextValue, ErrorKind},
 };
-use spielorders_core::{readme::ConfigurationPathKind, repair_cases::RepairAction};
-use std::{collections::BTreeSet, ffi::OsString, path::PathBuf};
+use spielorders::{
+    SPIELORDERS_REPAIR_ACTION_REPLACE_MANAGED_RECORD, SpielordersConstant,
+    spielorders_constant_name,
+};
+use std::{ffi::OsString, path::PathBuf};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -85,8 +88,7 @@ impl Family {
             | Self::AddOrder { output, .. }
             | Self::AdoptOrder { output, .. }
             | Self::Validate { output, .. }
-            | Self::Repair { output, .. }
-            | Self::Upgrade { output, .. } => output.mode(),
+            | Self::Repair { output, .. } => output.mode(),
             Self::Package { command } => command.mode(),
             Self::Index { command } => command.mode(),
             Self::Order { command } => command.mode(),
@@ -333,25 +335,6 @@ pub(crate) enum Family {
         #[arg(value_name = "ASSIGNMENT", value_parser = FieldAssignment::parse)]
         assignments: Vec<FieldAssignment>,
 
-        #[command(flatten)]
-        target: PackageTarget,
-
-        #[command(flatten)]
-        execution: Execution,
-
-        #[command(flatten)]
-        output: OutputMode,
-    },
-    // A first-level command with no subcommand, because there is one thing to do to a
-    // Package whose metadata is behind this build: carry it to the newest version this
-    // build understands. There is no target to choose — an arbitrary target, a per-file
-    // upgrade, a downgrade, and a package-wide rollback do not exist.
-    /// Carry this Package's metadata to the newest version this build understands.
-    ///
-    /// The complete supported sequential Metadata Upgrade, resumed by rerunning it. Valid
-    /// artifacts are carried one at a time and stay carried across an interruption; the
-    /// Package marker advances only after every artifact has.
-    Upgrade {
         #[command(flatten)]
         target: PackageTarget,
 
@@ -741,6 +724,23 @@ pub(crate) fn insertion_assignments(
 /// one notion — and the same token the decided command tree writes.
 const POSITION_KEY: &str = "position";
 
+/// `init`'s configured Orders Directory.
+pub(crate) const ORDERS_PATH: &str = "orders_path";
+
+/// `init`'s configured Removed Orders Directory.
+pub(crate) const REMOVED_PATH: &str = "removed_path";
+
+/// Every repair action the library names, in its own spelling.
+fn repair_actions() -> impl Iterator<Item = &'static str> {
+    (SPIELORDERS_REPAIR_ACTION_REPLACE_MANAGED_RECORD.0..)
+        .map(|value| spielorders_constant_name(SpielordersConstant(value)))
+        .map_while(|name| name.to_str().filter(|name| !name.is_empty()))
+}
+
+fn is_repair_action(text: &str) -> bool {
+    repair_actions().any(|action| action == text)
+}
+
 /// The key that names one ephemeral diagnosed case.
 const CASE_KEY: &str = "case";
 
@@ -762,17 +762,17 @@ pub(crate) enum RepairRequest {
     Apply {
         /// The ephemeral handle the diagnosis reported. Not an identity, never persisted.
         case: String,
-        action: RepairAction,
+        action: String,
         /// Every assignment that is not `case` or `action`. Which of them the action needs
-        /// is the core's answer, asked of [`RepairAction::required_values`].
+        /// is the core's answer: the diagnosed case's `required_values`.
         resolutions: Vec<FieldAssignment>,
     },
 }
 
 /// The request one `repair` command line carries.
 ///
-/// **The action's spelling is the core's**, resolved through [`RepairAction::parse`] so
-/// this adapter never carries a second table of those words.
+/// **The action's spelling is the library's**, read through its name table so this
+/// adapter never carries a second table of those words.
 pub(crate) fn repair_request(assignments: &[FieldAssignment]) -> RepairRequest {
     let named = |key: &str| {
         assignments
@@ -783,12 +783,12 @@ pub(crate) fn repair_request(assignments: &[FieldAssignment]) -> RepairRequest {
     let (Some(case), Some(action)) = (named(CASE_KEY), named(ACTION_KEY)) else {
         return RepairRequest::Diagnose;
     };
-    let Some(action) = RepairAction::parse(action) else {
+    if !is_repair_action(action) {
         return RepairRequest::Diagnose;
-    };
+    }
     RepairRequest::Apply {
         case: case.to_owned(),
-        action,
+        action: action.to_owned(),
         resolutions: assignments
             .iter()
             .filter(|assignment| assignment.field != CASE_KEY && assignment.field != ACTION_KEY)
@@ -844,16 +844,13 @@ fn incomplete_repair_request(assignments: &[FieldAssignment]) -> Option<String> 
     }
     assignments
         .iter()
-        .find(|assignment| {
-            assignment.field == ACTION_KEY && RepairAction::parse(&assignment.value).is_none()
-        })
+        .find(|assignment| assignment.field == ACTION_KEY && !is_repair_action(&assignment.value))
         .map(|assignment| {
             format!(
                 "`{}` is not a repair action; this build offers {}",
                 assignment.value,
-                RepairAction::ALL
-                    .iter()
-                    .map(|action| format!("`{}`", action.as_str()))
+                repair_actions()
+                    .map(|action| format!("`{action}`"))
                     .collect::<Vec<_>>()
                     .join(", ")
             )
@@ -1098,28 +1095,18 @@ pub(crate) enum ItemCommand {
 
 /// One canonical `key=value` assignment on an `init` command line.
 ///
-/// **The two configuration keys are the core's own [`ConfigurationPathKind`]**, so one
-/// configured key is spelled one way on the command line, in `.spielorders/config.toml`,
-/// in a loaded Package's diagnostics, and in a refused initialization's response. A
-/// second spelling here is how a key comes to be accepted under one name and reported
-/// under another.
+/// The two configuration keys are spelled as `.spielorders/config.toml` spells them.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Assignment {
-    pub key: ConfigurationPathKind,
+    pub key: &'static str,
     pub value: String,
 }
 
 impl Assignment {
     /// The keys `init` accepts.
     ///
-    /// The core's two [`ConfigurationPathKind`] values, listed because an array cannot be
-    /// derived from an enum. A third configured key added to that enum is offered by this
-    /// command only once it is added here, which is the honest reading of this list: it
-    /// is what `init` takes, not a claim about what the configuration permits.
-    const KEYS: [ConfigurationPathKind; 2] = [
-        ConfigurationPathKind::OrdersPath,
-        ConfigurationPathKind::RemovedPath,
-    ];
+    /// What `init` takes, not a claim about what the configuration permits.
+    const KEYS: [&'static str; 2] = [ORDERS_PATH, REMOVED_PATH];
 
     /// Parses one assignment, splitting on the first `=` so a value may contain more.
     ///
@@ -1136,14 +1123,8 @@ impl Assignment {
             .ok_or_else(|| "an assignment is `key=value`".to_owned())?;
         let key = Self::KEYS
             .into_iter()
-            .find(|candidate| candidate.as_str() == key)
-            .ok_or_else(|| {
-                format!(
-                    "`init` takes `{}` and `{}`",
-                    ConfigurationPathKind::OrdersPath.as_str(),
-                    ConfigurationPathKind::RemovedPath.as_str()
-                )
-            })?;
+            .find(|candidate| *candidate == key)
+            .ok_or_else(|| format!("`init` takes `{ORDERS_PATH}` and `{REMOVED_PATH}`"))?;
         Ok(Self {
             key,
             value: value.to_owned(),
@@ -1570,7 +1551,7 @@ pub(crate) enum ListCommand {
 /// `package show`'s own human summary — one order for the four categories everywhere,
 /// rather than a published one and a presented one for a reader to reconcile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub enum ValueKind {
+pub(crate) enum ValueKind {
     #[value(name = "ordering_institution")]
     OrderingInstitution,
     #[value(name = "orderer")]
@@ -1579,38 +1560,6 @@ pub enum ValueKind {
     Project,
     #[value(name = "order_group")]
     OrderGroup,
-}
-
-/// Every set of options one command line may name at most one of.
-///
-/// **Read out of the parser's own groups rather than transcribed**, so this is what the
-/// grammar is rather than a second statement of it that can disagree: an exclusion is
-/// declared on the group that owns it — see [`OutputMode`] and [`OrderTarget`] — and a
-/// group that admits one member is exactly one of these. The same group is attached to
-/// every command that takes it, so a set is reported once however many commands declare
-/// it.
-///
-/// Each member is the parser's own argument id, which is what a caller writes with `--`
-/// in front of it for every option this command line has.
-pub fn exclusions() -> Vec<Vec<String>> {
-    let mut found = BTreeSet::new();
-    collect_exclusions(&Cli::command(), &mut found);
-    found.into_iter().collect()
-}
-
-fn collect_exclusions(command: &clap::Command, found: &mut BTreeSet<Vec<String>>) {
-    for group in command.get_groups() {
-        // `is_multiple` wants the group by value, and a group is only ever read here.
-        if !group.clone().is_multiple() {
-            let members: Vec<String> = group.get_args().map(ToString::to_string).collect();
-            if members.len() > 1 {
-                found.insert(members);
-            }
-        }
-    }
-    for subcommand in command.get_subcommands() {
-        collect_exclusions(subcommand, found);
-    }
 }
 
 /// Parses the command line, leaving every byte of output to the caller.
@@ -1631,7 +1580,7 @@ pub(crate) fn parse(arguments: &[OsString]) -> Result<Cli, clap::Error> {
         // refusal two output modes at once already gets.
         return Err(command.error(
             ErrorKind::ValueValidation,
-            format!("`{}` is assigned twice", repeated.as_str()),
+            format!("`{repeated}` is assigned twice"),
         ));
     }
     let creating = match &cli.family {
@@ -1728,7 +1677,7 @@ fn combined_subject_forms(
 }
 
 /// The first key assigned more than once, where a command line assigns one twice.
-fn repeated_assignment(assignments: &[Assignment]) -> Option<ConfigurationPathKind> {
+fn repeated_assignment(assignments: &[Assignment]) -> Option<&'static str> {
     assignments
         .iter()
         .enumerate()
@@ -1810,6 +1759,7 @@ fn terse(error: &clap::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
 
     // Decision sources: Define the Rust CLI capability contract.
 
@@ -1817,6 +1767,38 @@ mod tests {
         std::iter::once(OsString::from("spielorders"))
             .chain(rest.iter().map(OsString::from))
             .collect()
+    }
+
+    /// Every set of options one command line may name at most one of.
+    ///
+    /// **Read out of the parser's own groups rather than transcribed**, so this is what the
+    /// grammar is rather than a second statement of it that can disagree: an exclusion is
+    /// declared on the group that owns it — see [`OutputMode`] and [`OrderTarget`] — and a
+    /// group that admits one member is exactly one of these. The same group is attached to
+    /// every command that takes it, so a set is reported once however many commands declare
+    /// it.
+    ///
+    /// Each member is the parser's own argument id, which is what a caller writes with `--`
+    /// in front of it for every option this command line has.
+    fn exclusions() -> Vec<Vec<String>> {
+        let mut found = BTreeSet::new();
+        collect_exclusions(&Cli::command(), &mut found);
+        found.into_iter().collect()
+    }
+
+    fn collect_exclusions(command: &clap::Command, found: &mut BTreeSet<Vec<String>>) {
+        for group in command.get_groups() {
+            // `is_multiple` wants the group by value, and a group is only ever read here.
+            if !group.clone().is_multiple() {
+                let members: Vec<String> = group.get_args().map(ToString::to_string).collect();
+                if members.len() > 1 {
+                    found.insert(members);
+                }
+            }
+        }
+        for subcommand in command.get_subcommands() {
+            collect_exclusions(subcommand, found);
+        }
     }
 
     /// The command every exclusion this executable declares is reachable on.
@@ -1883,6 +1865,16 @@ mod tests {
     /// command it modifies, so a pair a caller can write is a pair the parser sees
     /// together. An option added to one of these groups is swept here without anyone
     /// remembering that this test is where that is asserted.
+    /// The parser's groups are the decided exclusions: the output modes, and the two ways
+    /// an `order` command names one Order.
+    #[test]
+    fn the_declared_exclusions_are_the_decided_ones() {
+        assert_eq!(
+            exclusions(),
+            [vec!["json", "quiet", "verbose"], vec!["root", "uuid"]]
+        );
+    }
+
     #[test]
     fn two_options_of_one_exclusion_are_refused_rather_than_ordered() {
         let command = every_excluded_option();
@@ -1936,7 +1928,7 @@ mod tests {
     ///
     /// The parser renders them after the clause, without a blank line, so they are part of
     /// its statement of the problem rather than the help that follows it. They are the one
-    /// part of this refusal a caller can act on, and this response's `message` is where a
+    /// part of this refusal a caller can act on, and the usage error's `detail` is where a
     /// caller reads it.
     #[test]
     fn a_refused_fixed_choice_value_names_what_would_have_been_accepted() {

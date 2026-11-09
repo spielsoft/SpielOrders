@@ -2,9 +2,6 @@
 title: Define the SpielOrders package topology
 status: closed
 parent: Chart the SpielOrders product and architecture
-labels:
-  - wayfinder:grilling
-assignee: /root
 ---
 
 ## Decision

@@ -2,14 +2,11 @@
 title: Define lookup and search behavior
 status: closed
 parent: Chart the SpielOrders product and architecture
-labels:
-  - wayfinder:grilling
-assignee: /root
 ---
 
 ## Decision
 
-SpielOrders has two distinct lookup experiences: deterministic native entity search and a complementary OS-indexed Supporting Material search. They do not mix results or behavior.
+SpielOrders has two distinct lookup experiences: deterministic native entity search and a complementary OS-indexed Supporting Material search. They do not mix results or behavior. Here, native entity search means Rust-owned search over managed facts, not a Swift or operating-system search API.
 
 ### Native entity search
 
@@ -22,7 +19,7 @@ The native query is deterministic:
 - matching is diacritic-insensitive and case-insensitive by default;
 - a visible `Aa` control switches between case-insensitive and case-sensitive matching without changing the other rules;
 - there is no fuzzy matching, stemming, Boolean syntax, phrase grammar, or relevance scoring;
-- a monetary fact matches both the spelling its record stores and the two-decimal spelling a reader is shown, so a Unit Price of `12.5` is found by `12.50`, while a quantity is not money and matches its stored spelling alone;
+- a monetary fact matches both the spelling its record stores and its spelling rounded to two decimal places, so a Unit Price of `12.5` is found by `12.50`, while a quantity is not money and matches its stored spelling alone;
 - an empty query applies no text restriction.
 
 For an Order, searchable content comprises Order ID; every user-facing canonical Order fact; Order Item descriptions, catalog numbers, quantities, and unit prices; the Order README's text; and every current shared fact of the associated Vendor, including Vendor Contacts and purchasing notes. Vendor changes therefore immediately affect which associated Orders match. For a Vendor, searchable content comprises Vendor ID and every user-facing canonical Vendor fact.
@@ -35,7 +32,7 @@ Post-MVP structured Order filters will cover Order Status, Date Ordered range, V
 
 ### OS-indexed Supporting Material search
 
-Supporting Material search is a distinct view within the application's single-window Tauri shell, never a second application window or a section of native results. On macOS the view is labeled **Spotlight**, using the established service name. On a platform without an equivalent branded service it is labeled **Supporting File Search**.
+Supporting Material search is a distinct view within the application's single native window, never a second application window or a section of native results. On macOS the view is labeled **Spotlight**, using the established service name. On a platform without an equivalent branded service it is labeled **Supporting File Search**.
 
 The view accepts an ordinary literal-word query, submits it asynchronously to the OS-native index after a short typing debounce, and displays gathering or update activity. It uses the provider's native matching semantics and offers no native-search case toggle, filter controls, or promise of matching parity with deterministic entity search.
 

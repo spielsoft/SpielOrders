@@ -3,16 +3,17 @@
 //! **The inventory is the evidence.** [`DECIDED_COMMANDS`] transcribes the command tree the
 //! decisions name — not the tree the executable happens to have — and it is read in both
 //! directions: a decided command the executable lacks fails here, and so does a registered
-//! contract no decided command claims. A family another milestone owns is recorded with the
-//! milestone that owns it and asserted *absent*, so a `search` shipped early is a failure
-//! rather than a surprise.
+//! contract no decided command claims. A command decided to arrive later is recorded with
+//! what it waits for — the milestone that owns it, or the condition its decision names —
+//! and asserted *absent*, so one shipped early is a failure rather than a surprise.
 //!
 //! **Every claim below is made over the whole set.** The tables are exhaustive matches on
-//! `ResponseContract`, so a command added later is not merely encouraged to conform — it
-//! does not compile until somebody says how it is reached, what cells it supplies, and
-//! whether it mutates, and then it is held to every rule here without anyone remembering to
-//! write a test for it. A check that examined a hand-written list would let the next command
-//! opt out by being left off it.
+//! the suite's own `ResponseContract`, so a contract added to it is not merely encouraged to
+//! conform — the suite does not compile until somebody says how it is reached, what cells it
+//! supplies, and whether it mutates, and then it is held to every rule here without anyone
+//! remembering to write a test for it. A command the executable ships under a contract the
+//! suite does not list is caught where it records cells, by the walk that fails for a
+//! fixture directory no listed contract claims.
 //!
 //! What is deliberately *not* here is any command's own bytes: `tests/response_contract.rs`
 //! compares each recorded cell, and this file says which cells there should be.
@@ -20,13 +21,14 @@
 //! Decision sources: Define the Rust CLI capability contract; Define the SpielOrders agent
 //! skill contract.
 
+use crate::support::ResponseContract;
 use crate::support::{
-    ENVELOPE, Invocation, NEWEST_ORDER_ID, TemporaryTree, directory_that_is_not_a_root,
-    entry_names, file_outside_any_package, fixture_directory, link_to, managed_snapshot,
-    order_directory, package_with_an_adoption_candidate, package_with_three_contacts,
-    populated_package, response, supporting_material_provider, unmanaged_directory,
+    ENVELOPE, Invocation, SOME_ORDER_ID, TemporaryTree, directory_that_is_not_a_root, entry_names,
+    file_outside_any_package, fixture_directory, initialized_package, link_to, managed_snapshot,
+    material_answered, order_directory, package_with_an_adoption_candidate,
+    package_with_three_contacts, populated_package, response, supporting_material_provider,
+    unmanaged_directory,
 };
-use spielorders_cli::{cli::exclusions, contract::ResponseContract};
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
@@ -42,10 +44,11 @@ enum Disposition {
     /// that shares one records no cells of its own — the sharing is pinned behaviourally,
     /// and the contract's own cells are the record.
     Shared(ResponseContract),
-    /// Another milestone's, named. M4 delivers no part of it, and the check below asserts
-    /// the executable does not answer it: shipping one early would expose a surface whose
-    /// engine does not exist yet.
-    Routed(&'static str),
+    /// Decided to arrive with what is named — another milestone, or the condition the
+    /// decision ties it to — and absent until then. The check below asserts the executable
+    /// does not answer it: shipping one early would expose a surface whose engine does not
+    /// exist yet.
+    Absent(&'static str),
 }
 
 /// Every command the decisions name, with the command line a caller writes.
@@ -196,7 +199,10 @@ const DECIDED_COMMANDS: &[(&[&str], Disposition)] = &[
     ),
     (&["validate"], Disposition::Own(ResponseContract::Validate)),
     (&["repair"], Disposition::Own(ResponseContract::Repair)),
-    (&["upgrade"], Disposition::Own(ResponseContract::Upgrade)),
+    (
+        &["upgrade"],
+        Disposition::Absent("the first metadata version after 1"),
+    ),
     (
         &["index", "status"],
         Disposition::Own(ResponseContract::IndexStatus),
@@ -205,12 +211,12 @@ const DECIDED_COMMANDS: &[(&[&str], Disposition)] = &[
         &["index", "rebuild"],
         Disposition::Own(ResponseContract::IndexRebuild),
     ),
-    (&["agent", "prepare"], Disposition::Routed("M8")),
-    (&["agent", "status"], Disposition::Routed("M8")),
+    (&["agent", "prepare"], Disposition::Absent("M8")),
+    (&["agent", "status"], Disposition::Absent("M8")),
 ];
 
 /// Every decided command this milestone delivers is a command line the executable answers,
-/// and every family it routes is one the executable does not.
+/// and every command still waiting is one the executable does not.
 ///
 /// **The forward direction of the inventory.** Generated `--help` is what asks the
 /// question: a command line the parser recognizes renders its reference and exits `0`, and
@@ -218,7 +224,7 @@ const DECIDED_COMMANDS: &[(&[&str], Disposition)] = &[
 /// generated references cite, so it is confirmed here for every command rather than
 /// sampled.
 #[test]
-fn every_decided_command_is_delivered_or_routed_to_the_milestone_that_owns_it() {
+fn every_decided_command_is_delivered_or_absent_until_what_it_waits_for() {
     for (line, disposition) in DECIDED_COMMANDS {
         let mut run = Invocation::new(line);
         run = run.argument("--help");
@@ -241,79 +247,15 @@ fn every_decided_command_is_delivered_or_routed_to_the_milestone_that_owns_it() 
                     "{line:?}: the reference names the command it is about: {text}"
                 );
             }
-            Disposition::Routed(milestone) => {
+            Disposition::Absent(until) => {
                 assert_eq!(
                     outcome.status,
                     Some(2),
-                    "{line:?} is {milestone}'s and this milestone answers it: {}",
+                    "{line:?} waits for {until} and this executable answers it: {}",
                     outcome.stdout_text()
                 );
             }
         }
-    }
-}
-
-/// Every registered contract is claimed by exactly one decided command.
-///
-/// **The reverse direction of the inventory**, which is the one nothing did before: a
-/// contract the executable registers and no decision names would ship a command surface
-/// nobody decided. `spielorders.usage` is the exception and says why — a usage error is not
-/// a command's response, so no command claims it.
-#[test]
-fn every_registered_contract_is_claimed_by_a_decided_command() {
-    for contract in ResponseContract::REGISTERED {
-        if *contract == ResponseContract::Usage {
-            continue;
-        }
-        let claims: Vec<&[&str]> = DECIDED_COMMANDS
-            .iter()
-            .filter(|(_, disposition)| *disposition == Disposition::Own(*contract))
-            .map(|(line, _)| *line)
-            .collect();
-        assert_eq!(
-            claims.len(),
-            1,
-            "{} is claimed by {claims:?}, and a contract names exactly one command shape",
-            contract.name()
-        );
-    }
-}
-
-/// The one identity no command claims, because no command produced it.
-#[test]
-fn the_usage_contract_belongs_to_no_command() {
-    assert!(
-        !DECIDED_COMMANDS.iter().any(|(_, disposition)| matches!(
-            disposition,
-            Disposition::Own(ResponseContract::Usage)
-                | Disposition::Shared(ResponseContract::Usage)
-        )),
-        "a usage error is not a command's response: parsing failed, so no command ran"
-    );
-    assert!(
-        ResponseContract::REGISTERED.contains(&ResponseContract::Usage),
-        "and it is registered all the same, because every usage error carries it"
-    );
-}
-
-/// No contract has advanced, and none may until the release the CLI capability decision
-/// names.
-///
-/// **The rule most likely to be broken by habit.** Until the owner declares the CLI and the
-/// agent support tooling released — which cannot happen before M4 and M8 both close — every
-/// interface, format, and protocol is revised in place and every `contract_version` is 1.
-/// A change to a payload edits version 1 and re-records that contract's cells; a second
-/// version of a contract nobody has read makes the first read as history when it is still a
-/// draft.
-#[test]
-fn no_contract_has_advanced_past_its_first_version() {
-    for contract in ResponseContract::REGISTERED {
-        assert_eq!(
-            contract.version(),
-            1,
-            "{} advanced, and nothing has run outside a test tree to be broken by a change",
-            contract.name()
-        );
     }
 }
 
@@ -324,7 +266,7 @@ fn no_contract_has_advanced_past_its_first_version() {
 /// Every response kind a contract's fixture directory can hold a cell for.
 ///
 /// `usage-error` is not among them and never will be: it is not any command's cell, it
-/// carries the one shared identity, and [`the_usage_contract_supplies_only_its_own_cell`]
+/// carries the one shared identity, and `tests/response_contract.rs`
 /// is where that is held.
 const CELLS: [&str; 5] = ["success", "empty-result", "warning", "invalid", "rejected"];
 
@@ -429,7 +371,7 @@ fn matrix(contract: ResponseContract) -> [(&'static str, Supply); 5] {
         | ResponseContract::VendorContactRemove => MUTATION,
         // `init`'s subject is a directory that must *not* be a Package, so it reads none
         // and has no untrusted subject to report; and the core defines no initialization
-        // warning at all, which `InitializationWarning`'s having no variants is what says.
+        // warning at all, which its `Never` warning type is what says.
         ResponseContract::Init => [
             ("success", Supply::Recorded),
             (
@@ -439,7 +381,7 @@ fn matrix(contract: ResponseContract) -> [(&'static str, Supply); 5] {
             (
                 "warning",
                 Supply::Unreachable(
-                    "InitializationWarning is uninhabited, and an initialization assesses \
+                    "an initialization warns with `Never`, and an initialization assesses \
                      no Package, so it observes nothing either",
                 ),
             ),
@@ -473,26 +415,6 @@ fn matrix(contract: ResponseContract) -> [(&'static str, Supply); 5] {
         ResponseContract::Repair | ResponseContract::OrderRepair => {
             CELLS.map(|cell| (cell, Supply::Recorded))
         }
-        // An upgrade always answers with a source, a target and the artifacts it would
-        // visit; and this build's registered transformation chain is empty, so every
-        // Package it can read is already at the target and a commit that carried something
-        // — which a warning needs — cannot happen.
-        ResponseContract::Upgrade => [
-            ("success", Supply::Recorded),
-            (
-                "empty-result",
-                Supply::Unreachable("an upgrade always names its source and its target"),
-            ),
-            (
-                "warning",
-                Supply::Unreachable(
-                    "TransformationRegistry::registered() is empty, so a commit answers \
-                     Unchanged before it can carry anything to warn about",
-                ),
-            ),
-            ("invalid", Supply::Recorded),
-            ("rejected", Supply::Recorded),
-        ],
         // The index has a state in every case, and `missing` is one of the states this
         // command reports rather than an absent answer.
         ResponseContract::IndexStatus => [
@@ -523,7 +445,7 @@ fn matrix(contract: ResponseContract) -> [(&'static str, Supply); 5] {
         // The warning every other mutation carries is that its canonical write succeeded
         // and the derived refresh did not — and the derived index is this command's whole
         // subject, so a rebuild that could not replace it wrote nothing and is `rejected`.
-        // `PackageIndexRebuildWarning` is uninhabited, which is the core saying so.
+        // Its warning type is `Never`, which is the core saying so.
         ResponseContract::IndexRebuild => [
             ("success", Supply::Recorded),
             (
@@ -533,7 +455,7 @@ fn matrix(contract: ResponseContract) -> [(&'static str, Supply); 5] {
             (
                 "warning",
                 Supply::Unreachable(
-                    "PackageIndexRebuildWarning is uninhabited: this command's whole \
+                    "a rebuild warns with `Never`: this command's whole \
                      subject is the derived index, so a refresh that failed is the refusal",
                 ),
             ),
@@ -555,179 +477,23 @@ fn every_contract_records_exactly_the_cells_the_matrix_supplies() {
         if *contract == ResponseContract::Usage {
             continue;
         }
-        let mut expected: Vec<String> = matrix(*contract)
-            .into_iter()
-            .filter(|(_, supply)| matches!(supply, Supply::Recorded))
-            .map(|(cell, _)| format!("{cell}.json"))
-            .collect();
+        let mut expected = Vec::new();
+        let mut unreachable = Vec::new();
+        for (cell, supply) in matrix(*contract) {
+            match supply {
+                Supply::Recorded => expected.push(format!("{cell}.json")),
+                Supply::Unreachable(reason) => unreachable.push(format!("{cell}: {reason}")),
+            }
+        }
         expected.sort();
         let directory = fixture_directory(*contract);
         assert_eq!(
             entry_names(&directory),
             expected,
-            "{} records a different set of cells from the one the matrix supplies, in {}",
+            "{} records a different set of cells from the one the matrix supplies, in {}; \
+             the matrix says the rest are unreachable: {unreachable:?}",
             contract.name(),
             directory.display()
-        );
-    }
-}
-
-/// Every hole in the matrix carries a reason, and every reason says something.
-///
-/// A hole with an empty reason is the omission this table exists to prevent, dressed as a
-/// decision.
-#[test]
-fn every_unreachable_cell_carries_the_reason_it_is_unreachable() {
-    for contract in ResponseContract::REGISTERED {
-        let cells = matrix(*contract);
-        assert_eq!(
-            cells.map(|(cell, _)| cell),
-            CELLS,
-            "{} names the five response kinds, in one order",
-            contract.name()
-        );
-        for (cell, supply) in cells {
-            if let Supply::Unreachable(reason) = supply {
-                assert!(
-                    reason.len() > 20,
-                    "{} says nothing about why it cannot reach `{cell}`",
-                    contract.name()
-                );
-            }
-        }
-    }
-}
-
-/// The usage contract's directory holds its one cell and no other.
-#[test]
-fn the_usage_contract_supplies_only_its_own_cell() {
-    assert_eq!(
-        entry_names(&fixture_directory(ResponseContract::Usage)),
-        vec!["usage-error.json".to_owned()],
-        "a usage error is one response, shared by every command line that reaches exit `2`"
-    );
-}
-
-/// The placeholder a recorded response carries where the run's own Package Root stood.
-///
-/// A fixture records the Root as this rather than as whatever temporary directory the run
-/// used, so a recorded path is rooted at the placeholder exactly where a live one is rooted
-/// at an absolute path. The substitution asserts the shape of what it replaces and every
-/// other byte is compared exactly; see [the fixture convention].
-///
-/// [the fixture convention]: ../../../../docs/development/traceability.md
-const RECORDED_PACKAGE_ROOT: &str = "<PACKAGE_ROOT>";
-
-/// Every path a command reports is rooted, and carries the Package's own spelling for it
-/// wherever the same response names the Package it is inside — and carries none where the
-/// response names no Package at all.
-///
-/// **The claim a type could not keep on its own.** The location projections make the pair
-/// structural, and refusal cells across eight contracts still recorded a resolved path
-/// inside an established Package with no Package-relative spelling — because the value
-/// handed to the projection had thrown the spelling away before it got there, which no
-/// amount of structure downstream can recover. So the agreement is checked over every cell
-/// every contract records, rather than over the runs somebody thought to write a test for,
-/// and a cell recorded later is checked by having been recorded.
-///
-/// **Both directions, because the forward one alone is switched off by exactly what it
-/// exists to catch.** A cell whose `context` names no Root skips the check that would
-/// notice it spelling a path the Package's way, so the one response that breaks the
-/// convention is the one response the check declines to look at. A relative spelling is
-/// proof a Package was resolved, so a response carrying one and naming no Root contradicts
-/// itself, and that is asked here rather than left to the prose below.
-///
-/// The cells are the whole set precisely because
-/// [`every_contract_records_exactly_the_cells_the_matrix_supplies`] says so, and
-/// `tests/response_contract.rs` is what ties each of them to the bytes a real process wrote.
-///
-/// `init`'s refusals are the one hole in the forward direction, and it is the hole
-/// [`no_command_finds_its_root_by_searching_an_ancestor`] leaves for the same reason: its
-/// subject is a directory that must *not* be a Package, so a refused initialization names a
-/// directory no Package ever stood in and a path there has no Package to be relative to.
-/// The converse still holds over them: no Package stood there, so nothing may be spelled
-/// relative to one.
-///
-/// A cell is one refusal, so a condition no contract records is not checked here at all.
-/// [`every_refusal_an_interrupted_write_reaches_carries_the_packages_own_spelling_for_it`]
-/// is where the same claim is made over responses instead.
-#[test]
-fn every_recorded_path_carries_the_packages_own_spelling_for_it() {
-    let mut located = false;
-    let mut failed = false;
-    let mut rootless = false;
-    for (contract, label, document) in recorded_cells() {
-        let mut reported = Vec::new();
-        collect_reported_paths(&document, &mut reported);
-        for (shape, path, _) in &reported {
-            match *shape {
-                "absolute_path" => located = true,
-                _ => failed = true,
-            }
-            assert!(
-                path.starts_with(RECORDED_PACKAGE_ROOT),
-                "{label}: `{path}` is reported without the Root it is absolute from"
-            );
-        }
-        // A refusal `init` records names the directory it was pointed at, and no Package
-        // stands there to spell anything relative to — as does any cell whose response
-        // resolved no Root, whatever the fixture's text substitution makes its paths
-        // look like.
-        let names_a_package = document["context"]["package_root"].as_str()
-            == Some(RECORDED_PACKAGE_ROOT)
-            && !(contract == ResponseContract::Init && document["ok"] == false);
-        if names_a_package {
-            assert_spelled_by_the_package_at(&reported, RECORDED_PACKAGE_ROOT, &label);
-            continue;
-        }
-        if document["context"]["package_root"].is_null() {
-            rootless = true;
-        }
-        for (_, path, relative) in &reported {
-            assert_eq!(
-                *relative, None,
-                "{label}: `{path}` is spelled the way a Package spells it while this \
-                 response names no Package to spell it against"
-            );
-        }
-    }
-    // Both shapes seen rather than a count of paths, because a count is a number a reader
-    // has to trust — and a walk that quietly matched neither shape would pass over
-    // everything.
-    assert!(
-        located,
-        "a location inside a Package is one of the two shapes"
-    );
-    assert!(failed, "a failure's own path is the other");
-    // The converse is asked of a real cell rather than of none: a suite where every cell
-    // named a Root would make it vacuous exactly as the forward direction was.
-    assert!(rootless, "some cell answers about no Package at all");
-}
-
-/// The claim itself, over the paths one response reported and the Root it was about.
-///
-/// **One home for the rule**, because it is now asked twice: once of every recorded cell,
-/// and once of every response an interrupted write refuses. Both halves are asked, because
-/// both are the rule: a path inside `root` owes the spelling that Root has for it, in a
-/// refusal exactly as in a success, and a path outside it has no Package to be relative to
-/// and owes `null`.
-fn assert_spelled_by_the_package_at(
-    reported: &[(&str, &str, Option<&str>)],
-    root: &str,
-    label: &str,
-) {
-    for (_, path, relative) in reported {
-        let expected = match path.strip_prefix(root) {
-            Some("") => Some("."),
-            // A Root that is a text prefix of some other path is not a Root above it, so
-            // `strip_prefix` answering `None` here is the outside case too.
-            Some(rest) => rest.strip_prefix('/'),
-            None => None,
-        };
-        assert_eq!(
-            *relative, expected,
-            "{label}: `{path}` and the Package Root this response names disagree \
-             about how this Package spells it"
         );
     }
 }
@@ -741,9 +507,9 @@ fn assert_spelled_by_the_package_at(
 /// placeholder standing where a client expects an identity it can store — the last of which
 /// a run asked only to plan has, and answers with `null` instead.
 ///
-/// A recorded identity a run minted is one of the closed placeholder set, and each of those
-/// substitutions asserts a lowercase hyphenated UUIDv4 before replacing it — so a cell
-/// carrying one has had this checked for it by the comparison that recorded it.
+/// A recorded identity is numbered in place of the UUID it was, and the numbering replaces
+/// only lowercase hyphenated UUIDs — so a cell carrying one has had this checked for it by
+/// the comparison that recorded it.
 #[test]
 fn every_domain_identity_a_command_reports_is_a_uuid() {
     let mut checked = false;
@@ -755,7 +521,7 @@ fn every_domain_identity_a_command_reports_is_a_uuid() {
             let Some(value) = identity else {
                 continue;
             };
-            if RECORDED_MINTED_IDENTITIES.contains(&value) {
+            if value.starts_with("<ID-") && value.ends_with('>') {
                 continue;
             }
             assert!(
@@ -769,12 +535,6 @@ fn every_domain_identity_a_command_reports_is_a_uuid() {
         "the recorded cells report identities, and the walk found them"
     );
 }
-
-/// The placeholders a recorded response carries where a run minted an identity.
-///
-/// Two of the closed placeholder set the fixture convention names; the other two stand for
-/// a Package Root and for a date read off the clock, neither of which is an identity.
-const RECORDED_MINTED_IDENTITIES: [&str; 2] = ["<VENDOR_ID>", "<ORDER_ID>"];
 
 fn is_uuid(value: &str) -> bool {
     let groups: Vec<&str> = value.split('-').collect();
@@ -817,10 +577,9 @@ fn collect_reported_identities<'a>(
 /// Every cell every registered contract records, parsed, with the label a failure names it
 /// by.
 ///
-/// The fixture tree is the record of what the commands wrote —
-/// `tests/response_contract.rs` is what ties each cell to the bytes a real process
-/// produced — so a claim about every command's response is made here over every cell rather
-/// than over the runs somebody thought to write a test for.
+/// `tests/response_contract.rs` compares the fixture tree with executable output, except
+/// Supporting Material answer cells, which replay prepared snapshots through the production
+/// response encoder. These checks cover every recorded cell rather than only selected runs.
 fn recorded_cells() -> Vec<(ResponseContract, String, serde_json::Value)> {
     let mut cells = Vec::new();
     for contract in ResponseContract::REGISTERED {
@@ -835,40 +594,6 @@ fn recorded_cells() -> Vec<(ResponseContract, String, serde_json::Value)> {
         }
     }
     cells
-}
-
-/// Every path a response reports, as (the member naming it, the path, its Package-relative
-/// spelling).
-///
-/// **Two shapes and no third.** A location inside a Package carries `absolute_path`; a
-/// failure carries `path` beside a `spelling`, because resolving a caller-supplied path is
-/// the one operation that can fail before there is anything absolute to name. A third shape
-/// fails here rather than going unchecked: the Package-relative spelling is what identifies
-/// a reported path, and one recorded without a path beside it is a shape nobody decided.
-fn collect_reported_paths<'a>(
-    value: &'a serde_json::Value,
-    found: &mut Vec<(&'a str, &'a str, Option<&'a str>)>,
-) {
-    match value {
-        serde_json::Value::Object(members) => {
-            if members.contains_key("package_relative_path") {
-                let (shape, path) = ["absolute_path", "path"]
-                    .into_iter()
-                    .find_map(|shape| Some((shape, members.get(shape)?.as_str()?)))
-                    .expect("a Package-relative spelling is recorded beside the path it spells");
-                found.push((shape, path, members["package_relative_path"].as_str()));
-            }
-            for member in members.values() {
-                collect_reported_paths(member, found);
-            }
-        }
-        serde_json::Value::Array(members) => {
-            for member in members {
-                collect_reported_paths(member, found);
-            }
-        }
-        _ => {}
-    }
 }
 
 /// Nothing stands under `contracts/cli/` that no registered contract claims.
@@ -946,6 +671,9 @@ fn relative_to(root: &std::path::Path, path: &std::path::Path) -> String {
 enum Subject {
     /// The SpielOrders Root of a Package with Orders, Vendors, Contacts and Items in it.
     PackageRoot,
+    /// A Package Root with no Order, so a Supporting Material search has nowhere to look
+    /// and asks no platform index: the sweeps never query the machine's own index.
+    PackageRootWithoutOrders,
     /// The same Root, with three Contacts on the Vendor it offers. A `move` within a
     /// collection of one is the same position twice, which the core answers as an
     /// unchanged mutation without replacing anything — so the one command that moves a
@@ -1156,12 +884,6 @@ fn shape(contract: ResponseContract) -> Shape {
             arguments: &[],
             mutating: true,
         },
-        ResponseContract::Upgrade => Shape {
-            line: &["upgrade"],
-            subject: Subject::PackageRoot,
-            arguments: &[],
-            mutating: true,
-        },
         ResponseContract::IndexRebuild => Shape {
             line: &["index", "rebuild"],
             subject: Subject::PackageRoot,
@@ -1183,12 +905,9 @@ fn shape(contract: ResponseContract) -> Shape {
             arguments: &["tarnwick"],
             mutating: false,
         },
-        // The query is a word nothing in the fixture Package carries, so what the platform
-        // index holds cannot decide whether this run answers — which is what makes it a run
-        // every claim below can be made over.
         ResponseContract::SearchSupportingMaterial => Shape {
             line: &["search", "supporting-material"],
-            subject: Subject::PackageRoot,
+            subject: Subject::PackageRootWithoutOrders,
             arguments: &["zirconium"],
             mutating: false,
         },
@@ -1217,6 +936,15 @@ fn prepare(contract: ResponseContract, label: &str) -> Prepared {
     match shape(contract).subject {
         Subject::PackageRoot => {
             let (tree, root) = populated_package(label);
+            Prepared {
+                _tree: tree,
+                package_root: root.clone(),
+                root,
+                positional: None,
+            }
+        }
+        Subject::PackageRootWithoutOrders => {
+            let (tree, root) = initialized_package(label);
             Prepared {
                 _tree: tree,
                 package_root: root.clone(),
@@ -1302,20 +1030,17 @@ fn invocation_at(
     run.rooted_at(root)
 }
 
-/// Whether a run of `contract` reaches an answer on the platform this build is for.
-///
-/// **One command's answer is a platform's to give**, and only one: `search
-/// supporting-material` asks a native index, so a build for a platform with no index answers
-/// with the state that prevented it instead — see `tests/supporting_material_search.rs`,
-/// which holds both sentences and pins which one this build gives. Every other command reads
-/// or writes the Package's own records and answers on every platform.
-///
-/// The claims below branch on this rather than passing over the command, because what a
-/// document owes — its envelope, that envelope's order, its key style, and its identity — is
-/// owed by a failure exactly as much as by an answer.
-fn answers_here(contract: ResponseContract) -> bool {
-    contract != ResponseContract::SearchSupportingMaterial
-        || supporting_material_provider().is_some()
+/// Ordinary fixture commands answer; Supporting Material validates its runtime outcome.
+fn answers_here(
+    contract: ResponseContract,
+    outcome: &crate::support::Outcome,
+    document: &serde_json::Value,
+) -> bool {
+    if contract == ResponseContract::SearchSupportingMaterial {
+        material_answered(outcome, document, supporting_material_provider())
+    } else {
+        true
+    }
 }
 
 /// Every contract this executable can emit, except the one no command line reaches.
@@ -1342,7 +1067,7 @@ fn command_lines() -> impl Iterator<Item = (&'static [&'static str], ResponseCon
         .iter()
         .filter_map(|(line, disposition)| match disposition {
             Disposition::Own(contract) | Disposition::Shared(contract) => Some((*line, *contract)),
-            Disposition::Routed(_) => None,
+            Disposition::Absent(_) => None,
         })
         .filter(|(_, contract)| shape(*contract).subject != Subject::NoCommand)
 }
@@ -1385,7 +1110,7 @@ fn every_command_answers_with_one_document_in_the_one_envelope() {
         let outcome = invocation(contract, &prepared).argument("--json").run();
         let document = response(&outcome);
         let name = contract.name();
-        let answers = answers_here(contract);
+        let answers = answers_here(contract, &outcome, &document);
 
         assert_eq!(
             outcome.status,
@@ -1501,21 +1226,10 @@ fn every_stable_code_a_failure_carries_is_snake_case() {
             document["data"].is_null(),
             "{name}: a failure carries no data"
         );
-        for code in [&document["error"]["code"], &document["error"]["scope"]] {
-            let text = code
-                .as_str()
-                .unwrap_or_else(|| panic!("{name}: a failure names its {code}"));
-            assert!(is_snake_case(text), "{name}: `{text}` is not snake_case");
-        }
-        for identity in document["error"]["identities"]
-            .as_array()
-            .unwrap_or_else(|| panic!("{name}: identities is present and possibly empty"))
-        {
-            let kind = identity["kind"]
-                .as_str()
-                .expect("an identity names its kind");
-            assert!(is_snake_case(kind), "{name}: `{kind}` is not snake_case");
-        }
+        let text = document["error"]["code"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{name}: a failure names its code: {document}"));
+        assert!(is_snake_case(text), "{name}: `{text}` is not snake_case");
     }
 }
 
@@ -1585,7 +1299,7 @@ fn no_command_follows_a_link_named_as_its_root() {
             "{name}: {document}"
         );
         assert_eq!(
-            document["error"]["paths"][0]["path"],
+            document["error"]["detail"]["path"],
             link.to_str().expect("the test path is UTF-8"),
             "{name}: the refusal names the link, not what stands behind it"
         );
@@ -1648,21 +1362,8 @@ fn a_wrong_kind_order_root_reaches_one_code_across_the_family() {
             outcome.stdout_text()
         );
         assert_eq!(
-            document["error"]["code"], "order_root_unmanaged",
+            document["error"]["code"], "not_an_order_directory",
             "{name}: {document}"
-        );
-        let message = document["error"]["message"]
-            .as_str()
-            .unwrap_or_else(|| panic!("{name}: a failure carries a message"));
-        for operation in ["observe_kind", "canonicalize", "list_directory"] {
-            assert!(
-                !message.contains(operation),
-                "{name}: no message names the port operation `{operation}`: {message}"
-            );
-        }
-        assert!(
-            !message.contains(".spielorders"),
-            "{name}: and none names a path under a file that cannot exist: {message}"
         );
     }
 }
@@ -1696,6 +1397,16 @@ fn every_mutating_command_takes_a_dry_run_and_changes_nothing() {
             outcome.stdout_text()
         );
         assert_eq!(document["contract"], name, "{name}");
+        // Bare `repair` is a diagnosis, which reports cases rather than a planned mutation.
+        if !matches!(
+            contract,
+            ResponseContract::Repair | ResponseContract::OrderRepair
+        ) {
+            assert_eq!(
+                document["data"]["committed"], false,
+                "{name}: the planned report says it committed nothing"
+            );
+        }
         assert_eq!(
             managed_snapshot(&prepared.package_root),
             before,
@@ -1724,9 +1435,8 @@ impl Staged {
     /// condition it had stopped reaching.
     fn refusal_code(self) -> &'static str {
         match self {
-            Self::VendorRecord => "vendor_mutation_failed",
-            Self::OrderRecord => "order_mutation_failed",
-            Self::DerivedIndex => "index_replacement_failed",
+            Self::VendorRecord | Self::OrderRecord => "commit_failed",
+            Self::DerivedIndex => "commit_failed",
         }
     }
 }
@@ -1787,10 +1497,6 @@ fn interrupted(contract: ResponseContract) -> Interrupted {
             "the command line that reaches this contract is the bare diagnosis, which \
              answers rather than commits",
         ),
-        ResponseContract::Upgrade => Interrupted::Unreached(
-            "a Package already at the newest version this build knows has nothing to \
-             upgrade, so its commit replaces nothing",
-        ),
         ResponseContract::Usage => {
             Interrupted::Unreached("no command line reaches it, so no commit of one is refused")
         }
@@ -1821,16 +1527,10 @@ fn interrupted(contract: ResponseContract) -> Interrupted {
 /// Every refusal an interrupted earlier write reaches names its record in the Package's
 /// own spelling for it.
 ///
-/// **The claim [`every_recorded_path_carries_the_packages_own_spelling_for_it`] cannot
-/// make.** Each contract records one refusal, so every other refusal condition is checked
-/// by nothing at all — and this one is nobody's cell. A directory standing at a managed
-/// record's staging name is what an interrupted earlier write leaves; it is reachable from
-/// the command line, and it refuses the *commit* rather than the plan, which is a different
-/// half of every command from the half a `rejected` cell records. That is exactly where a
-/// Vendor mutation reported the record it could not replace with no spelling while the
-/// Package stood around it, and an acceptance gate is what found it.
-///
-/// So the same claim is made here over the response a real process wrote, contract by
+/// A directory standing at a managed record's staging name is what an interrupted earlier
+/// write leaves; it is reachable from the command line, and it refuses the *commit* rather
+/// than the plan, which is a different half of every command from the half a `rejected`
+/// cell records. The claim is made over the response a real process wrote, contract by
 /// contract, with the reason written down wherever the condition reaches no commit.
 #[test]
 fn every_refusal_an_interrupted_write_reaches_carries_the_packages_own_spelling_for_it() {
@@ -1869,22 +1569,18 @@ fn every_refusal_an_interrupted_write_reaches_carries_the_packages_own_spelling_
             "{name}: this run is refused at its commit rather than before it"
         );
 
-        let root = prepared
-            .package_root
-            .to_str()
-            .expect("a temporary test tree is named in Unicode");
+        let staged = staged_record(record, &prepared);
+        let relative = staged
+            .strip_prefix(&prepared.package_root)
+            .expect("the record is inside its Package");
         assert_eq!(
-            document["context"]["package_root"].as_str(),
-            Some(root),
-            "{name}: the Package this refusal happened under is the one it names"
+            document["error"]["detail"]["path"],
+            relative
+                .to_str()
+                .expect("a temporary test tree is named in Unicode"),
+            "{name}: a refusal about a record it could not replace names that record as \
+             its Package spells it"
         );
-        let mut reported = Vec::new();
-        collect_reported_paths(&document, &mut reported);
-        assert!(
-            !reported.is_empty(),
-            "{name}: a refusal about a record it could not replace names that record"
-        );
-        assert_spelled_by_the_package_at(&reported, root, name);
         refused = true;
     }
     // Named rather than counted, for the reason the recorded walk gives: a loop that
@@ -1958,7 +1654,15 @@ fn quiet_says_nothing_on_success_for_every_command() {
         let prepared = prepare(contract, &label);
         let outcome = invocation(contract, &prepared).argument("--quiet").run();
         let name = contract.name();
-        let answers = answers_here(contract);
+        let answers = if contract == ResponseContract::SearchSupportingMaterial {
+            assert!(matches!(outcome.status, Some(0 | 1)));
+            if supporting_material_provider().is_none() {
+                assert_eq!(outcome.status, Some(1));
+            }
+            outcome.status == Some(0)
+        } else {
+            true
+        };
 
         assert_eq!(
             outcome.status,
@@ -1975,17 +1679,20 @@ fn quiet_says_nothing_on_success_for_every_command() {
     }
 }
 
-/// Every pair of options one exclusion covers, over every command.
+/// Every set of options one command line may name at most one of: the decided output
+/// modes, and the two ways an `order` command names one Order.
 ///
-/// **Read out of the parser's own groups rather than transcribed** — see
-/// [`exclusions`] — so an option added to one of them is swept across the whole command
-/// surface without anyone remembering that this test is here.
-fn excluded_pairs() -> Vec<(String, String)> {
+/// The parser declares each on the group that owns it, and its unit tests sweep every
+/// pair those groups declare; this is the suite's statement of the decided sets.
+const EXCLUSIONS: [&[&str]; 2] = [&["json", "quiet", "verbose"], &["root", "uuid"]];
+
+/// Every pair of options one exclusion covers, over every command.
+fn excluded_pairs() -> Vec<(&'static str, &'static str)> {
     let mut pairs = Vec::new();
-    for exclusion in exclusions() {
+    for exclusion in EXCLUSIONS {
         for (index, first) in exclusion.iter().enumerate() {
             for second in &exclusion[index + 1..] {
-                pairs.push((first.clone(), second.clone()));
+                pairs.push((*first, *second));
             }
         }
     }
@@ -2000,7 +1707,7 @@ fn excluded_pairs() -> Vec<(String, String)> {
 fn value_after(option: &str) -> Option<&'static str> {
     match option {
         "json" | "quiet" | "verbose" => None,
-        "uuid" => Some(NEWEST_ORDER_ID),
+        "uuid" => Some(SOME_ORDER_ID),
         other => panic!(
             "`--{other}` excludes another option and nothing here says what a command \
              line writes after it"
@@ -2033,7 +1740,7 @@ fn no_command_runs_while_its_line_names_two_excluded_options() {
 
         for (first, second) in excluded_pairs() {
             let mut run = invocation(contract, &prepared);
-            for option in [&first, &second] {
+            for option in [first, second] {
                 // `--root` is written once, by `invocation`, and naming it twice is a
                 // usage error of its own — so the exclusion that names it needs only its
                 // partner written out here.

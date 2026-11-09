@@ -3,21 +3,14 @@
   "contract_version": 1,
   "ok": false,
   "context": {
-    "package_root": "<PACKAGE_ROOT>"
+    "root": "<PACKAGE_ROOT>"
   },
   "data": null,
   "diagnostics": [],
   "error": {
-    "code": "repair_case_unknown",
-    "message": "no currently diagnosed case answers to `staging_artifact_present:.spielorders/.vendors.json.spielorders-stage:0000000000000000000000000000000000000000000000000000000000000000`. A case handle is derived from the evidence it was diagnosed from, so a handle from an older diagnosis stops naming a case as soon as that evidence moves — it is refused rather than resolved against whatever stands there now. Diagnose the scope again.",
-    "scope": "operation",
-    "paths": [
-      {
-        "spelling": "resolved",
-        "path": "<PACKAGE_ROOT>",
-        "package_relative_path": "."
-      }
-    ],
-    "identities": []
+    "code": "unknown_case",
+    "detail": {
+      "handle": "staging_artifact_present:.spielorders/.vendors.json.spielorders-stage:<DIGEST>"
+    }
   }
 }
