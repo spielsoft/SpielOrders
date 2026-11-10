@@ -70,15 +70,11 @@ extension PackageSession {
 
     public func inspectVendor(_ row: VendorRow, cancellation: LibraryCancellation) throws -> VendorDetails {
         guard let package else { throw SessionAccessError.reopenRequired }
-        var vendor: UnsafeMutablePointer<SpielordersVendor>?
+        let (owner, entries) = try readVendor(id: row.id, token: cancellation.token)
+        defer { withExtendedLifetime(owner) {} }
+        let vendor = owner.pointer
+        let notices = entries.map(\.message)
         var outcome: UnsafeMutablePointer<SpielordersEntries>?
-        let result = row.id.withCString {
-            spielorders_package_read_vendor(package.pointer, SPIELORDERS_VENDOR_SELECTOR_ID, $0,
-                                             cancellation.token, &vendor, &outcome)
-        }
-        let notices = try checked(result, outcome).map(\.message)
-        defer { spielorders_vendor_free(vendor) }
-        guard let vendor else { throw LibraryFailure(result: SPIELORDERS_RESULT_INTERNAL, entries: []) }
         let values = Dictionary(uniqueKeysWithValues: vendorFields.map { ($0, String(cString: spielorders_vendor_field(vendor, $0))) })
         let contacts = (0..<spielorders_vendor_contact_count(vendor)).map { index in
             func field(_ key: Int32) -> String { String(cString: spielorders_vendor_contact_field(vendor, index, key)) }
@@ -87,7 +83,6 @@ extension PackageSession {
         }
         var associated: UnsafeMutablePointer<SpielordersList>?
         defer { spielorders_list_free(associated) }
-        outcome = nil
         let related = row.id.withCString {
             spielorders_package_orders_of_vendor(package.pointer, $0, cancellation.token, &associated, &outcome)
         }

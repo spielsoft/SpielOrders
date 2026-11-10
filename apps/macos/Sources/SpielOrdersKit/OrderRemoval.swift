@@ -61,7 +61,7 @@ extension PackageSession {
         }
     }
 
-    private func refreshPackageAfterCommit(_ previous: LibraryHandle<SpielordersPackage>) -> [LibraryEntry] {
+    func refreshPackageAfterCommit(_ previous: LibraryHandle<SpielordersPackage>) -> [LibraryEntry] {
         package = nil
         var refreshed: UnsafeMutablePointer<SpielordersPackage>?
         var outcome: UnsafeMutablePointer<SpielordersEntries>?

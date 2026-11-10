@@ -19,111 +19,40 @@ metadata:
 
 See [tests.md](tests.md) for examples and [mocking.md](mocking.md) for mocking guidelines.
 
-## Anti-Pattern: Horizontal Slices
+## Vertical slices
 
-**DO NOT write all tests first, then all implementation.** This is "horizontal slicing" - treating RED as "write all tests" and GREEN as "write all code."
+Build one behavior at a time, end to end: a test for it, the code that makes it pass, then
+the next behavior. Each test then responds to what the last cycle taught you. Writing
+every test first and all the code afterwards tests imagined behavior: the shape of data
+structures and signatures, not what the system does.
 
-This produces **crap tests**:
+How strictly you alternate is your call. What matters is that each test was seen to fail
+for the right reason before the code made it pass, because that RED run is the only
+evidence the test can fail.
 
-- Tests written in bulk test _imagined_ behavior, not _actual_ behavior
-- You end up testing the _shape_ of things (data structures, function signatures) rather than user-facing behavior
-- Tests become insensitive to real changes - they pass when behavior breaks, fail when behavior is fine
-- You outrun your headlights, committing to test structure before understanding the implementation
+## Deciding what to test
 
-**Correct approach**: Vertical slices via tracer bullets. One test → one implementation → repeat. Each test responds to what you learned from the previous cycle. Because you just wrote the code, you know exactly what behavior matters and how to verify it.
+- Take the public interface and the prioritized behaviors from the approved spec and its
+  decisions. An approved spec is planning approval; ask only if an interface or product
+  choice is still open.
+- Prefer [deep modules](deep-modules.md) and [interfaces designed for testability](interface-design.md).
+- For each test, be able to state the running-system failure it would catch.
+- Test the acceptance criteria and the failure paths a user can reach. Add a test for an
+  edge case nobody named only when you can state the realistic input that reaches it. A
+  few good tests beat many exhaustive ones.
+- A test of an exclusion or a refusal exercises every entry the surface offers to reach
+  it: each option placement a command line allows, each route to the same failure. A test
+  that passes from one placement has certified one placement.
 
-```
-WRONG (horizontal):
-  RED:   test1, test2, test3, test4, test5
-  GREEN: impl1, impl2, impl3, impl4, impl5
+## When the behavior is green
 
-RIGHT (vertical):
-  RED→GREEN: test1→impl1
-  RED→GREEN: test2→impl2
-  RED→GREEN: test3→impl3
-  ...
-```
+Run the full checks, then hand the complete diff to review as the repository's
+`AGENTS.md` describes. Restructuring belongs after green, with the tests holding
+behavior still. Use [refactoring](refactoring.md) for that pass.
 
-## Workflow
+## What a good test looks like
 
-### 1. Planning
-
-Before writing any code:
-
-- [ ] Establish the approved public interface and prioritized behaviors from the
-      ticket/spec and its linked decisions
-- [ ] Identify opportunities for [deep modules](deep-modules.md) (small interface, deep implementation)
-- [ ] Design interfaces for [testability](interface-design.md)
-- [ ] List the behaviors to test (not implementation steps)
-- [ ] For each proposed test, state the running-system failure it would catch
-- [ ] Ask the user only if a material interface or product choice is still open
-
-An approved implementation ticket is planning approval. Do not repeat its design
-interview in a fresh agent. Read additional decisions only when the selected
-behavior is ambiguous.
-
-**You can't test everything.** Follow the approved ticket's priorities and focus
-testing effort on critical paths and complex logic, not every possible edge case.
-
-Test the acceptance criteria and the failure paths a user can reach. Do not add a test
-for an edge case the ticket does not name unless you can state the realistic input that
-reaches it. Three good tests beat twelve exhaustive ones.
-
-A test of an exclusion or a refusal exercises every entry the surface offers to reach it:
-each option placement a command line allows, each route to the same failure. The RED run
-is what proves each entry was reachable; a test that passes from one placement has
-certified one placement.
-
-### 2. Tracer Bullet
-
-Write ONE test that confirms ONE thing about the system:
-
-```
-RED:   Write test for first behavior → test fails
-GREEN: Write minimal code to pass → test passes
-```
-
-This is your tracer bullet - proves the path works end-to-end.
-
-### 3. Incremental Loop
-
-For each remaining behavior:
-
-```
-RED:   Write next test → fails
-GREEN: Minimal code to pass → passes
-```
-
-Rules:
-
-- One test at a time
-- Only enough code to pass current test
-- Don't anticipate future tests
-- Keep tests focused on observable behavior
-
-### 4. Hand Off to Code Review
-
-After all planned behavior is GREEN, stop the TDD loop and hand the complete ticket
-diff to `/code-review`, run in its parallel sub-agent form. Refactoring and structural
-cleanup belong to that explicit review stage rather than being mixed into red-green
-implementation.
-
-- [ ] Run the focused tests for the behavior under review
-- [ ] Let `/implement` run the affected repository gate once after the ticket is stable
-- [ ] Invoke `/code-review` against the ticket's fixed starting point, parallel axes
-- [ ] Address accepted correctness, specification, and maintainability findings
-- [ ] Rerun focused and full tests after review-driven changes
-
-Do not skip remediation merely because review is a separate stage. The ticket is
-complete only after review findings are resolved or explicitly dispositioned.
-
-## Checklist Per Cycle
-
-```
-[ ] Test describes behavior, not implementation
-[ ] Test uses public interface only
-[ ] Test would survive internal refactor
-[ ] Test would fail for the real bug, not merely for a changed implementation shape
-[ ] Code is minimal for this test
-[ ] No speculative features added
-```
+- It describes behavior, not implementation.
+- It uses a public interface only.
+- It would survive an internal refactor.
+- It would fail for the real bug, not merely for a changed implementation shape.

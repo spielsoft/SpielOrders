@@ -25,9 +25,10 @@ use crate::interface::{
     records::{Facts, contact_facts, item_facts, number, order_facts, vendor_facts},
 };
 use crate::{
-    Assignments, Change, OrderRef, draft_date_ordered, draft_item_total, draft_order_total,
+    Assignments, Change, NEW_ORDER_TITLE, OrderRef, draft_date_ordered, draft_item_total,
+    draft_order_total,
     model::{OrderDocument, Vendor},
-    new_order_defaults,
+    new_order_defaults, new_vendor_name,
     ports::Effects,
 };
 use std::{
@@ -475,7 +476,8 @@ pub extern "C" fn spielorders_vendor_draft(
     })
 }
 
-/// A draft of a new Order in `package`, holding its Date Ordered and Status defaults.
+/// A draft of a new Order in `package`, holding its Title, Date Ordered, and Status
+/// defaults.
 /// Saving it creates the Order with its facts and Item rows.
 #[unsafe(no_mangle)]
 pub extern "C" fn spielorders_package_new_order_draft(
@@ -492,6 +494,7 @@ pub extern "C" fn spielorders_package_new_order_draft(
                     root: package.root().to_path_buf(),
                 },
                 vec![
+                    (SPIELORDERS_ORDER_FIELD_TITLE, NEW_ORDER_TITLE.to_owned()),
                     (SPIELORDERS_ORDER_FIELD_DATE_ORDERED, date),
                     (SPIELORDERS_ORDER_FIELD_STATUS, status.to_owned()),
                 ],
@@ -502,8 +505,8 @@ pub extern "C" fn spielorders_package_new_order_draft(
     })
 }
 
-/// A draft of a new Vendor in `package`. Saving it creates the Vendor with its facts and
-/// Contact rows.
+/// A draft of a new Vendor in `package`, holding a Name no Vendor of the Package uses.
+/// Saving it creates the Vendor with its facts and Contact rows.
 #[unsafe(no_mangle)]
 pub extern "C" fn spielorders_package_new_vendor_draft(
     package: &SpielordersPackage,
@@ -511,13 +514,16 @@ pub extern "C" fn spielorders_package_new_vendor_draft(
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
     fallible(outcome, |entries| {
-        let result = package.healthy(entries).map(|_| {
+        let result = package.healthy(entries).map(|opened| {
             SpielordersDraft::new(
                 SPIELORDERS_DRAFT_KIND_VENDOR,
                 Origin::NewVendor {
                     root: package.root().to_path_buf(),
                 },
-                Vec::new(),
+                vec![(
+                    SPIELORDERS_VENDOR_FIELD_NAME,
+                    new_vendor_name(&opened.contents.vendors),
+                )],
                 Vec::new(),
             )
         });

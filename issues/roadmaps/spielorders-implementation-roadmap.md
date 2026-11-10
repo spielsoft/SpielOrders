@@ -32,28 +32,19 @@ decisions govern compatibility. A different frontend alone needs no metadata cha
 | R4 — CLI test surface removal | Accepted | None |
 | M6 — Native foundation and integration | Accepted | None |
 | M7 — Browse and search | Accepted | None |
-| M8 — Create and edit | Not decomposed | M7 |
-| M9 — Removal and recovery | Not decomposed | M8 |
-| [M10 — Agent Ready](../implementation/m10-agent-ready/README.md) | Bundled CLI ticket deferred; remaining work not decomposed | M9 |
-| M11 — MVP acceptance | Not decomposed | M9 and M10 |
-| M12 — App Store release | Not decomposed | M11 |
+| M8 — Create and edit | Accepted | None |
+| M9 — Removal and recovery | Not started | M8 |
+| [M10 — Agent Ready](../implementation/m10-agent-ready.md) | Not started | M9 |
+| M11 — MVP acceptance | Not started | M9 and M10 |
+| M12 — App Store release | Not started | M11 |
 
 The GUI sequence runs through M9 before Agent Ready work starts in M10. The existing
 CLI supplies ordinary Package operations; M10 is not another CLI implementation or
 general cleanup pass. Bundling, permissions, the missing opt-in Agent Ready features,
 and external-agent validation do not block GUI milestones or run alongside them.
-Existing CLI regression checks remain in the repository gate.
+Existing CLI regression checks remain in [the check](../../scripts/check.sh).
 [AGENTS.md](../../AGENTS.md) governs concurrent worktrees and landing. The interface choice is settled by
 [Effect and adapter boundaries](../../docs/architecture/boundaries.md).
-
-## M8 — Create and edit
-
-Outcome: explicit-save Order and Vendor creation/editing, Items, Contacts, visibility,
-undo, nested sheets, and draft protection from the desktop decision.
-
-Gate: successful, refused, and stale saves preserve intended facts and complete drafts;
-creation publishes no early Order, collection changes commit atomically, and native
-keyboard actions target the active editor.
 
 ## M9 — Removal and recovery
 
@@ -82,11 +73,12 @@ changing the real archive.
 
 ## M11 — MVP acceptance
 
-Outcome: an integrated, independently validated native application and bundled CLI.
+Outcome: an integrated native application and bundled CLI that pass partner review, one
+acceptance pass, and the owner's sign-off.
 
 Gate: decided capabilities, supported OS releases, cross-adapter results, filesystem
 failures, first launch, preferences, lifecycle, and real archive-copy responsiveness
-pass fresh validation.
+pass the acceptance pass on the final build.
 Test metadata stays in the copy. The owner accepts the functional MVP and resolves
 the provisional CLI identity selector before declaring its contract stable.
 

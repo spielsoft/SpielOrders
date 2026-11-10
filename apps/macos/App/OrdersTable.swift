@@ -9,8 +9,9 @@ struct OrdersTable: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(model: model) }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let table = NSTableView()
+        let table = OrdersTableView()
         table.setAccessibilityLabel("Orders")
+        table.setAccessibilityIdentifier("orders.table")
         table.usesAlternatingRowBackgroundColors = true
         table.rowHeight = 22
         table.allowsMultipleSelection = false
@@ -21,6 +22,7 @@ struct OrdersTable: NSViewRepresentable {
         for field in OrderColumn.allCases {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(field.rawValue))
             column.title = field.label
+            column.headerCell.setAccessibilityIdentifier("orders.column.\(field.rawValue)")
             column.minWidth = 65
             column.width = field.initialWidth
             column.isHidden = !field.initiallyVisible
@@ -39,6 +41,9 @@ struct OrdersTable: NSViewRepresentable {
         }
         table.delegate = context.coordinator
         table.dataSource = context.coordinator
+        table.target = context.coordinator
+        table.doubleAction = #selector(Coordinator.openClicked(_:))
+        table.open = { [weak coordinator = context.coordinator] in coordinator?.openSelected() }
         table.headerView?.menu = context.coordinator.columnsMenu
         table.menu = context.coordinator.rowMenu
         context.coordinator.table = table
@@ -64,13 +69,6 @@ struct OrdersTable: NSViewRepresentable {
         private var rows: [OrderRow] = []
         private var revision = -1
         private var updating = false
-        private let amount: NumberFormatter = {
-            let format = NumberFormatter()
-            format.numberStyle = .decimal
-            format.minimumFractionDigits = 2
-            format.maximumFractionDigits = 2
-            return format
-        }()
 
         init(model: DesktopModel) {
             self.model = model
@@ -82,6 +80,7 @@ struct OrdersTable: NSViewRepresentable {
                 let item = NSMenuItem(title: column.label, action: #selector(toggleColumn(_:)), keyEquivalent: "")
                 item.representedObject = column.rawValue
                 item.target = self
+                item.setAccessibilityIdentifier("orders.column.visibility.\(column.rawValue)")
                 columnsMenu.addItem(item)
             }
         }
@@ -135,11 +134,15 @@ struct OrdersTable: NSViewRepresentable {
             cell.toolTip = damagedTitle ? value.damage : nil
             let raw = value.values[column.field] ?? ""
             if damagedTitle { cell.textField?.stringValue = value.directoryName }
-            else if column == .total, !raw.isEmpty {
-                let number = NSDecimalNumber(string: raw, locale: Locale(identifier: "en_US_POSIX"))
-                cell.textField?.stringValue = number == .notANumber ? raw : amount.string(from: number) ?? raw
-            } else { cell.textField?.stringValue = raw }
+            else if column == .total { cell.textField?.stringValue = Money.display(raw) }
+            else { cell.textField?.stringValue = raw }
+            cell.textField?.setAccessibilityLabel(column.label)
+            cell.textField?.setAccessibilityIdentifier("\(rowIdentifier(value)).\(column.rawValue)")
             return cell
+        }
+
+        private func rowIdentifier(_ row: OrderRow) -> String {
+            "orders.row." + (row.damage == nil ? row.id : "damaged:" + row.directoryName)
         }
 
         func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { !model.busy }
@@ -202,9 +205,18 @@ struct OrdersTable: NSViewRepresentable {
             } else {
                 menu.removeAllItems()
                 guard rows.indices.contains(table.clickedRow) else { return }
+                let row = rows[table.clickedRow]
+                if row.damage == nil {
+                    let open = NSMenuItem(title: "Open", action: #selector(open(_:)), keyEquivalent: "")
+                    open.representedObject = row.id
+                    open.target = self
+                    open.setAccessibilityIdentifier("\(rowIdentifier(row)).open")
+                    menu.addItem(open)
+                }
                 let item = NSMenuItem(title: "Reveal in Finder", action: #selector(reveal(_:)), keyEquivalent: "")
-                item.representedObject = rows[table.clickedRow].id
+                item.representedObject = row.id
                 item.target = self
+                item.setAccessibilityIdentifier("\(rowIdentifier(row)).reveal")
                 menu.addItem(item)
             }
         }
@@ -216,9 +228,33 @@ struct OrdersTable: NSViewRepresentable {
             column.isHidden.toggle()
         }
 
+        @objc func openClicked(_ sender: NSTableView) {
+            guard rows.indices.contains(sender.clickedRow) else { return }
+            model.openOrder(rows[sender.clickedRow].id)
+        }
+
+        func openSelected() {
+            guard let table, rows.indices.contains(table.selectedRow) else { return }
+            model.openOrder(rows[table.selectedRow].id)
+        }
+
+        @objc private func open(_ sender: NSMenuItem) {
+            guard let id = sender.representedObject as? String else { return }
+            model.openOrder(id)
+        }
+
         @objc private func reveal(_ sender: NSMenuItem) {
             guard let id = sender.representedObject as? String else { return }
             model.selectOrder(id, revealInFinder: true)
         }
+    }
+}
+
+/// Return opens the selected Order in its editor.
+final class OrdersTableView: NSTableView {
+    var open: () -> Void = {}
+
+    override func keyDown(with event: NSEvent) {
+        if [36, 76].contains(event.keyCode) { open() } else { super.keyDown(with: event) }
     }
 }

@@ -8,11 +8,31 @@
 use crate::{
     Coded,
     creation::OrderCreationDefaults,
-    metadata::OrderStatus,
+    metadata::{OrderStatus, Vendor},
     order::{item_total, order_total},
     order_edits::{date_ordered_after_status_change, item_number, parse_status},
     ports::LocalDate,
+    vendors::vendor_names_match,
 };
+
+/// The Title a new Order's draft starts with.
+pub const NEW_ORDER_TITLE: &str = "New Order";
+
+/// The Name a new Vendor's draft starts with: `New Vendor`, numbered from 2 past every
+/// Name the Package already uses, since Vendor Names are unique within it.
+pub fn new_vendor_name(vendors: &[Vendor]) -> String {
+    (1..)
+        .map(|number| match number {
+            1 => "New Vendor".to_owned(),
+            _ => format!("New Vendor {number}"),
+        })
+        .find(|name| {
+            !vendors
+                .iter()
+                .any(|vendor| vendor_names_match(name, vendor.name.as_str()))
+        })
+        .expect("a Package holds finitely many Vendors")
+}
 
 /// The Date Ordered and Status a new Order's draft starts with.
 pub fn new_order_defaults(today: LocalDate) -> (String, &'static str) {

@@ -42,6 +42,7 @@ struct AboutView: View {
                 .padding(.top, 16)
             Link("Source code", destination: Self.sourceCodeURL)
                 .font(.footnote)
+                .accessibilityIdentifier("about.sourceCode")
         }
         .padding(.horizontal, 40)
         .padding(.vertical, 28)

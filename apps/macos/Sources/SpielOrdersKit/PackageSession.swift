@@ -3,6 +3,9 @@ import Foundation
 
 struct LibraryEntry: Sendable {
     let message: String
+    let code: Int32
+    let field: Int32
+    let row: Int64
 }
 
 struct LibraryFailure: Error, LocalizedError, Sendable {
@@ -36,7 +39,9 @@ final class LibraryHandle<T>: @unchecked Sendable {
 func consumeEntries(_ outcome: UnsafeMutablePointer<SpielordersEntries>?) -> [LibraryEntry] {
     defer { spielorders_entries_free(outcome) }
     return (0..<spielorders_entries_count(outcome)).map { index in
-        LibraryEntry(message: String(cString: spielorders_entries_message(outcome, index)))
+        LibraryEntry(message: String(cString: spielorders_entries_message(outcome, index)),
+                     code: spielorders_entries_code(outcome, index), field: spielorders_entries_field(outcome, index),
+                     row: spielorders_entries_row(outcome, index))
     }
 }
 

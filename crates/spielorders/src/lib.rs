@@ -57,7 +57,8 @@ pub(crate) use change::{
 pub(crate) use code::Coded;
 pub(crate) use diagnosis::Diagnosis;
 pub(crate) use drafting::{
-    draft_date_ordered, draft_item_total, draft_order_total, new_order_defaults,
+    NEW_ORDER_TITLE, draft_date_ordered, draft_item_total, draft_order_total, new_order_defaults,
+    new_vendor_name,
 };
 pub(crate) use order_reads::OrderRead;
 pub(crate) use readme::ReadmeRead;

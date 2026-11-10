@@ -54,7 +54,7 @@ canonical facts through an undocumented bulk inference.
 ## Verification and retained evidence
 
 Record initialization configuration, adoption inputs and their evidence, unresolved facts,
-alias compatibility, and observed application behavior. Keep numerical inventories and
-test-result evidence in the milestone acceptance record rather than duplicating them here.
+alias compatibility, and observed application behavior. Numerical inventories and test results
+belong in the accepting commit's verdict under [Desktop acceptance](desktop-acceptance.md), not here.
 Verify copy preservation separately from canonical metadata changes. A successful smoke
 does not establish that test-only facts are correct for production adoption.

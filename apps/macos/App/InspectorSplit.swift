@@ -12,6 +12,8 @@ struct InspectorSplit<Content: View, Detail: View>: NSViewControllerRepresentabl
         let controller = ReadInspectorController()
         controller.splitView.isVertical = true
         controller.splitView.dividerStyle = .thin
+        controller.splitView.setAccessibilityLabel("Content and inspector")
+        controller.splitView.setAccessibilityIdentifier("workspace.split")
         let main = NSHostingController(rootView: content)
         main.sizingOptions = [.minSize]
         let inspector = NSHostingController(rootView: detail)
@@ -68,6 +70,7 @@ struct InspectorSplit<Content: View, Detail: View>: NSViewControllerRepresentabl
         super.viewDidAppear()
         appeared = true
         restoreWidth()
+        nameDivider()
     }
 
     override func viewDidDisappear() {
@@ -83,6 +86,16 @@ struct InspectorSplit<Content: View, Detail: View>: NSViewControllerRepresentabl
         defer { restoringWidth = false }
         inspector.isCollapsed = !visible
         if visible, appeared { restoreWidth() }
+        if appeared { nameDivider() }
+    }
+
+    private func nameDivider() {
+        for case let element as any NSAccessibilityProtocol in splitView.accessibilityChildren() ?? [] {
+            if element.accessibilityRole() == .splitter {
+                element.setAccessibilityLabel("Inspector width")
+                element.setAccessibilityIdentifier("inspector.width")
+            }
+        }
     }
 
     private func restoreWidth() {

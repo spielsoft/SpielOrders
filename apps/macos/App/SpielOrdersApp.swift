@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import OSLog
 import SwiftUI
 
@@ -13,24 +14,40 @@ struct SpielOrdersApp: App {
         .restorationBehavior(.disabled)
         .defaultLaunchBehavior(.suppressed)
         .handlesExternalEvents(matching: [])
-        .commands { ApplicationCommands() }
+        .commands { ApplicationCommands(application: application) }
     }
 }
 
 private struct ApplicationCommands: Commands {
+    @ObservedObject var application: NativeApplication
     @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
         CommandGroup(replacing: .appInfo) {
             Button("About SpielOrders") { openWindow(id: AboutView.windowID) }
+                .accessibilityIdentifier("app.about")
+        }
+        CommandGroup(replacing: .undoRedo) {
+            Button(application.undoTitle, action: application.performUndo)
+                .keyboardShortcut("z", modifiers: .command)
+                .disabled(!application.canUndo)
+                .accessibilityIdentifier("edit.undo")
+            Button(application.redoTitle, action: application.performRedo)
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+                .disabled(!application.canRedo)
+                .accessibilityIdentifier("edit.redo")
         }
     }
 }
 
-@MainActor final class NativeApplication: NSObject, NSApplicationDelegate, NSWindowDelegate {
+@MainActor final class NativeApplication: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableObject {
     private let model = DesktopModel()
     private var window: NSWindow?
     private var terminationPending = false
+    @Published private(set) var canUndo = false
+    @Published private(set) var canRedo = false
+    @Published private(set) var undoTitle = "Undo"
+    @Published private(set) var redoTitle = "Redo"
     // Choice: a path-free receipt makes real lifecycle races diagnosable.
     private let lifecycle = Logger(subsystem: Bundle.main.bundleIdentifier ?? "SpielOrders", category: "Lifecycle")
 
@@ -52,6 +69,28 @@ private struct ApplicationCommands: Commands {
         model.restore()
     }
 
+    func applicationWillUpdate(_ notification: Notification) {
+        let manager = NSApp.keyWindow?.firstResponder?.undoManager
+        let undo = !model.busy && manager?.canUndo == true
+        let redo = !model.busy && manager?.canRedo == true
+        let undoName = manager?.undoMenuItemTitle ?? "Undo"
+        let redoName = manager?.redoMenuItemTitle ?? "Redo"
+        if canUndo != undo { canUndo = undo }
+        if canRedo != redo { canRedo = redo }
+        if undoTitle != undoName { undoTitle = undoName }
+        if redoTitle != redoName { redoTitle = redoName }
+    }
+
+    func performUndo() {
+        guard !model.busy else { return }
+        NSApp.sendAction(Selector(("undo:")), to: nil, from: nil)
+    }
+
+    func performRedo() {
+        guard !model.busy else { return }
+        NSApp.sendAction(Selector(("redo:")), to: nil, from: nil)
+    }
+
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         NSApp.terminate(nil)
         return false
@@ -61,7 +100,7 @@ private struct ApplicationCommands: Commands {
         let activeWork = model.busy ? 1 : 0
         lifecycle.notice("termination-request active-work=\(activeWork, privacy: .public)")
         guard !terminationPending else { return .terminateLater }
-        guard model.confirmDiscard() else { return .terminateCancel }
+        guard model.confirmDiscard(retry: { NSApp.terminate(nil) }) else { return .terminateCancel }
         guard model.busy else { return .terminateNow }
         terminationPending = true
         Task {

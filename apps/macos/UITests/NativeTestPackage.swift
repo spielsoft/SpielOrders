@@ -51,7 +51,7 @@ func addNativeTestOrder(in root: URL, title: String = "Lifecycle optics", date: 
 }
 
 @MainActor func packageMenu(in app: XCUIApplication) -> XCUIElement {
-    app.descendants(matching: .any).matching(identifier: "Package").firstMatch
+    app.descendants(matching: .any).matching(identifier: "package.menu").firstMatch
 }
 
 @MainActor func showPackageReadme(in app: XCUIApplication) {

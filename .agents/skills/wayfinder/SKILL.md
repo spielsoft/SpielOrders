@@ -14,12 +14,11 @@ The destination varies per effort, and naming it is the first act of charting �
 
 Wayfinder is **planning** by default: each ticket resolves a decision, and the map is done when the way is clear — nothing left to decide before someone goes and does the thing. The pull to just do the work is usually the signal you've reached the edge of the map and it's time to hand off. An effort can override this in its **Notes** — carrying execution into the map itself — but absent that, produce decisions, not deliverables.
 
-Do not invoke Wayfinder merely because an implementation roadmap has milestones,
-claims, blockers, or one-ticket workers. Once product decisions are closed, use
-`/to-tickets` to decompose a milestone, `/implement` and `/tdd` for one
-implementation ticket, and `/code-review` for its diff. Acceptance execution and
-external validation are likewise outside Wayfinder unless they uncover a genuinely
-new decision that must be mapped.
+Do not invoke Wayfinder merely because an implementation roadmap has milestones and
+dependencies. Once product decisions are closed, use `/to-tickets` to plan a milestone,
+`/implement` and `/tdd` to build it, and `/code-review` for its diff. Review and
+acceptance are likewise outside Wayfinder unless they uncover a genuinely new decision
+that must be mapped.
 
 ## Refer by name
 

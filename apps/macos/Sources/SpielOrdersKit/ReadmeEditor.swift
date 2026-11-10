@@ -5,11 +5,13 @@ public struct ReadmeEditor: NSViewRepresentable {
     @Binding private var text: String
     private let isEditable: Bool
     private let label: String
+    private let identifier: String
 
-    public init(text: Binding<String>, isEditable: Bool, label: String) {
+    public init(text: Binding<String>, isEditable: Bool, label: String, identifier: String) {
         _text = text
         self.isEditable = isEditable
         self.label = label
+        self.identifier = identifier
     }
 
     public func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
@@ -28,6 +30,7 @@ public struct ReadmeEditor: NSViewRepresentable {
         editor.isAutomaticLinkDetectionEnabled = false
         editor.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
         editor.setAccessibilityLabel(label)
+        editor.setAccessibilityIdentifier(identifier)
         editor.delegate = context.coordinator
         return scroll
     }
@@ -38,6 +41,7 @@ public struct ReadmeEditor: NSViewRepresentable {
         context.coordinator.editor = editor
         editor.isEditable = isEditable
         editor.setAccessibilityLabel(label)
+        editor.setAccessibilityIdentifier(identifier)
         if editor.string != text {
             editor.string = text
             editor.undoManager?.removeAllActions()

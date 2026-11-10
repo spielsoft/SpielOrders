@@ -11,6 +11,7 @@ struct DestinationPicker: NSViewRepresentable {
                                          trackingMode: .selectOne, target: context.coordinator,
                                          action: #selector(Coordinator.changed(_:)))
         control.setAccessibilityLabel("Destination")
+        control.setAccessibilityIdentifier("navigation.destinations")
         return control
     }
 

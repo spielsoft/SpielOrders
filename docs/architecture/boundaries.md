@@ -80,13 +80,10 @@ Package operations use Rust capabilities.
 
 ## Integration ownership
 
-Desktop integration adds no Rust interface or crate and does not edit existing Rust
-crates or the generated header. A needed library capability is requested through the
-owner for the Rust worker rather than added incidentally by the desktop worker.
-
-Production Swift integration consumes the header, so its callable signatures are
-additive-only; breaking changes require owner approval. Internals the header does not
-expose remain free to change.
+The desktop reaches Rust only through the generated header. A library capability a
+desktop milestone needs is added to the library and exposed in the header, under the
+public-surface rule in [AGENTS.md](../../AGENTS.md); Swift never reaches around the
+header. Internals the header does not expose remain free to change.
 
 ## Reuse boundary
 

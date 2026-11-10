@@ -76,9 +76,10 @@ pub(crate) fn run(family: &Family) -> Shown<'_> {
             let assignments = cli::subject_assignments(subject, cli::VENDOR_NAME_FIELD);
             let answer = answered(|calls| {
                 let package = open(calls, &target.root)?;
-                let draft = calls.get(|draft, outcome| {
+                let mut draft = calls.get(|draft, outcome| {
                     spielorders_package_new_vendor_draft(&package, draft, outcome)
                 })?;
+                without_default(&mut draft, SPIELORDERS_VENDOR_FIELD_NAME);
                 save(
                     calls,
                     draft,
@@ -98,9 +99,10 @@ pub(crate) fn run(family: &Family) -> Shown<'_> {
             let assignments = cli::subject_assignments(subject, cli::ORDER_TITLE_FIELD);
             let answer = answered(|calls| {
                 let package = open(calls, &target.root)?;
-                let draft = calls.get(|draft, outcome| {
+                let mut draft = calls.get(|draft, outcome| {
                     spielorders_package_new_order_draft(&package, draft, outcome)
                 })?;
+                without_default(&mut draft, SPIELORDERS_ORDER_FIELD_TITLE);
                 save(
                     calls,
                     draft,
@@ -1011,6 +1013,13 @@ fn remove_row(
 
 /// Saves `draft` with `assignments` set on its own facts: the one mutation shape a
 /// record edit takes.
+/// Clears the name a new draft starts with: on the command line, the Order Title and the
+/// Vendor Name are the user's to give.
+fn without_default(draft: &mut SpielordersDraft, field: SpielordersConstant) {
+    let blank = c_text("");
+    let _ = spielorders_draft_set(draft, field, Text::new(&blank), None);
+}
+
 fn save(
     calls: &mut Calls,
     mut draft: Box<SpielordersDraft>,

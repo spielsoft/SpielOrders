@@ -2,16 +2,11 @@
 
 Decision sources: [Chart the SpielOrders product and architecture](../../issues/wayfinder/spielorders-product-architecture/MAP.md) and [SpielOrders implementation roadmap](../../issues/roadmaps/spielorders-implementation-roadmap.md).
 
-## Implementation tickets
+## Naming
 
-What sections a ticket carries, open and closed, is [`AGENTS.md`](../../AGENTS.md)'s to
-say, and it says it once.
-
-What this document adds is how such a ticket names things. A `Decision sources` link's
-visible text is the governing decision's full name. Human-facing text uses decision names
-everywhere: paths and identifiers may be link targets, never substitutes for names. The
-milestone index links every ticket and is updated when claims, dependencies, results, or
-status change.
+Human-facing text uses decision names everywhere: a link's visible text is the governing
+decision's full name, and a path or identifier may be a link target, never a substitute
+for the name.
 
 ## Contract tests
 
@@ -19,7 +14,7 @@ Every baseline contract-test source contains a `Decision sources:` comment namin
 governing decisions.
 
 Test and fixture names describe durable public behavior, not implementation helpers,
-line numbers, or ticket identifiers. One marker may govern a small source file; split a
+line numbers, or milestone and slice identifiers. One marker may govern a small source file; split a
 file when its tests no longer share the same decision sources.
 
 ## Shared fixtures
@@ -71,10 +66,10 @@ built through the library's interface, which mints their identities; and `<DIGES
 evidence digest, which changes with the identities the evidence holds. The set is closed:
 only a lowercase hyphenated UUID is numbered, only a 64-digit hexadecimal run is a
 digest, and only a local date is replaced by `<TODAY>`. Every other byte is compared exactly, so a fixture diff is a contract change,
-and the causing ticket says what changed and why. No contract advances before the release
+and the commit that causes it says what changed and why. No contract advances before the release
 [the roadmap](../../issues/roadmaps/spielorders-implementation-roadmap.md) names: a change
 edits version 1 in place and re-records its cells. Adding a
-placeholder belongs to a ticket that says why. For a command whose response has no
+placeholder belongs to a commit that says why. For a command whose response has no
 byte-stable value to record, the placeholder set is extended rather than the `success`
 cell omitted.
 

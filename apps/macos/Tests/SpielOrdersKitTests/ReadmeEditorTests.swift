@@ -7,7 +7,7 @@ import Testing
     NSApplication.shared.setActivationPolicy(.prohibited)
     var text = "Original"
     let binding = Binding(get: { text }, set: { text = $0 })
-    let host = NSHostingView(rootView: ReadmeEditor(text: binding, isEditable: true, label: "Package README"))
+    let host = NSHostingView(rootView: ReadmeEditor(text: binding, isEditable: true, label: "Package README", identifier: "package.readme.editor"))
     let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
                           styleMask: [], backing: .buffered, defer: false)
     window.isReleasedWhenClosed = false
@@ -15,11 +15,13 @@ import Testing
     window.contentView = host
     host.layoutSubtreeIfNeeded()
     let editor = try #require(nativeTextView(in: host))
+    #expect(editor.accessibilityLabel() == "Package README")
+    #expect(editor.accessibilityIdentifier() == "package.readme.editor")
     window.makeFirstResponder(editor)
     editor.insertText(" X", replacementRange: NSRange(location: 8, length: 0))
     #expect(text == "Original X")
 
-    host.rootView = ReadmeEditor(text: binding, isEditable: false, label: "Package README")
+    host.rootView = ReadmeEditor(text: binding, isEditable: false, label: "Package README", identifier: "package.readme.editor")
     host.layoutSubtreeIfNeeded()
     let readOnly = try #require(nativeTextView(in: host))
     readOnly.insertText("blocked", replacementRange: NSRange(location: text.utf16.count, length: 0))
@@ -27,7 +29,7 @@ import Testing
     #expect(text == "Original X")
     #expect(readOnly.isSelectable)
 
-    host.rootView = ReadmeEditor(text: binding, isEditable: true, label: "Package README")
+    host.rootView = ReadmeEditor(text: binding, isEditable: true, label: "Package README", identifier: "package.readme.editor")
     host.layoutSubtreeIfNeeded()
     let reopened = try #require(nativeTextView(in: host))
     reopened.insertText(" Y", replacementRange: NSRange(location: text.utf16.count, length: 0))
@@ -44,7 +46,7 @@ func markdownEditingKeepsPlainTextAndNativeUndo(label: String) throws {
     NSApplication.shared.setActivationPolicy(.prohibited)
     var text = ""
     let host = NSHostingView(rootView: ReadmeEditor(text: Binding(get: { text }, set: { text = $0 }),
-                                                  isEditable: true, label: label))
+                                                  isEditable: true, label: label, identifier: "markdown.editor"))
     let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
                           styleMask: [], backing: .buffered, defer: false)
     window.isReleasedWhenClosed = false
@@ -74,7 +76,7 @@ func markdownEditingKeepsPlainTextAndNativeUndo(label: String) throws {
                           styleMask: [], backing: .buffered, defer: false)
     window.isReleasedWhenClosed = false
     defer { window.close() }
-    let first = NSHostingView(rootView: ReadmeEditor(text: binding, isEditable: true, label: "Order README"))
+    let first = NSHostingView(rootView: ReadmeEditor(text: binding, isEditable: true, label: "Order README", identifier: "order.readme.editor"))
     window.contentView = first
     first.layoutSubtreeIfNeeded()
     let previous = try #require(nativeTextView(in: first))
@@ -82,7 +84,7 @@ func markdownEditingKeepsPlainTextAndNativeUndo(label: String) throws {
     previous.insertText("Saved notes", replacementRange: NSRange(location: 0, length: 0))
     #expect(text == "Saved notes")
     text = ""
-    let next = NSHostingView(rootView: ReadmeEditor(text: binding, isEditable: true, label: "Order README"))
+    let next = NSHostingView(rootView: ReadmeEditor(text: binding, isEditable: true, label: "Order README", identifier: "order.readme.editor"))
     window.contentView = next
     next.layoutSubtreeIfNeeded()
     let current = try #require(nativeTextView(in: next))

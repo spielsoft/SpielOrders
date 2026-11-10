@@ -34,6 +34,7 @@ import SpielOrdersKit
     private var canBrowseRecords = false
     var text = ""
     var original = ""
+    var readmeDocumentID = UUID()
     var editingOrder: OrderRow?
     var root: URL?
     var message = ""
@@ -45,13 +46,22 @@ import SpielOrdersKit
     var refreshingLookup = false
     var searchAnswer: MaterialAnswer?
     var searching = false
-    private var library = PackageSession()
+    var orderEditor: RecordEditor?
+    var vendorEditor: RecordEditor?
+    var vendorSheet: RecordEditor?
+    var vendorChoices: [String] = []
+    var reusableValues: [Int32: [String]] = [:]
+    var library = PackageSession()
     private let preferences = UserDefaults.standard
-    private var folder: AuthorizedFolder?
-    private var work: OwnedOperation?
+    var folder: AuthorizedFolder?
+    var work: OwnedOperation?
     private var activeSearch: SpotlightSearch?
     private var lookupRevision = 0
-    var dirty: Bool { text != original }
+    var readmeDirty: Bool { text != original }
+    var dirty: Bool {
+        readmeDirty || [orderEditor, vendorEditor, vendorSheet].contains { $0?.dirty == true }
+    }
+    var canSave: Bool { recordEditor != nil ? canSaveRecord : !busy && editingReadme && writable && readmeDirty }
     var editingReadme: Bool { destination == .packageReadme || editingOrder != nil }
 
     func restore() {
@@ -61,25 +71,29 @@ import SpielOrdersKit
     }
 
     func choosePackage() {
-        guard !busy, confirmDiscard() else { return }
+        guard !busy, confirmDiscard(retry: { [self] in choosePackage() }) else { return }
         let picker = NSOpenPanel()
         picker.canChooseDirectories = true
         picker.canChooseFiles = false
         picker.allowsMultipleSelection = false
         picker.prompt = "Open Package"
         picker.message = "Choose a SpielOrder Package."
+        picker.setAccessibilityLabel("Open Package")
+        picker.setAccessibilityIdentifier("package.open.dialog")
         guard picker.runModal() == .OK, let url = picker.url else { return }
         do { open(try AuthorizedFolder(url), preserveSelection: false) }
         catch { message = error.localizedDescription }
     }
 
     func reopenPackage() {
-        guard !busy, let folder, confirmDiscard() else { return }
+        guard !busy, let folder, confirmDiscard(retry: { [self] in reopenPackage() }) else { return }
         open(folder, preserveSelection: true)
     }
 
     func navigate(to destination: Destination) {
-        guard !busy, (destination != self.destination || editingOrder != nil), confirmDiscard() else { return }
+        guard !busy, (destination != self.destination || editingOrder != nil || recordEditor != nil),
+              confirmDiscard(retry: { [self] in navigate(to: destination) }) else { return }
+        discardEditors()
         if destination == .packageReadme {
             beginReadmeEdit(order: nil)
             return
@@ -91,7 +105,7 @@ import SpielOrdersKit
     }
 
     func editOrderReadme(_ row: OrderRow) {
-        guard !busy, row.damage == nil, confirmDiscard() else { return }
+        guard !busy, row.damage == nil, confirmDiscard(retry: { [self] in editOrderReadme(row) }) else { return }
         beginReadmeEdit(order: row)
     }
 
@@ -107,7 +121,9 @@ import SpielOrdersKit
                     return try await library.editPackageReadme(cancellation: cancellation)
                 } onCancel: { cancellation.request() }
                 try Task.checkCancellation()
+                discardEditors()
                 editingOrder = order
+                readmeDocumentID = UUID()
                 destination = order == nil ? .packageReadme : .orders
                 text = loaded
                 original = loaded
@@ -118,7 +134,7 @@ import SpielOrdersKit
     }
 
     func backToOrders() {
-        guard !busy, let order = editingOrder, confirmDiscard() else { return }
+        guard !busy, let order = editingOrder, confirmDiscard(retry: { [self] in backToOrders() }) else { return }
         text = original
         editingOrder = nil
         selectedOrderID = nil
@@ -126,7 +142,7 @@ import SpielOrdersKit
     }
 
     func selectOrder(_ id: String?, revealInFinder: Bool) {
-        guard !busy, (id != selectedOrderID || revealInFinder), confirmDiscard() else { return }
+        guard !busy, (id != selectedOrderID || revealInFinder), confirmDiscard(retry: { [self] in selectOrder(id, revealInFinder: revealInFinder) }) else { return }
         selectedOrderID = id
         inspection = nil
         message = ""
@@ -184,7 +200,7 @@ import SpielOrdersKit
     }
 
     func selectVendor(_ id: String?) {
-        guard !busy, id != selectedVendorID, confirmDiscard() else { return }
+        guard !busy, id != selectedVendorID, confirmDiscard(retry: { [self] in selectVendor(id) }) else { return }
         selectedVendorID = id
         vendorDetails = nil
         message = ""
@@ -243,13 +259,15 @@ import SpielOrdersKit
     }
 
     func chooseInitialization() {
-        guard !busy, confirmDiscard() else { return }
+        guard !busy, confirmDiscard(retry: { [self] in chooseInitialization() }) else { return }
         let picker = NSOpenPanel()
         picker.canChooseDirectories = true
         picker.canChooseFiles = false
         picker.canCreateDirectories = true
         picker.allowsMultipleSelection = false
         picker.prompt = "Choose Package Folder"
+        picker.setAccessibilityLabel("Choose Package Folder")
+        picker.setAccessibilityIdentifier("package.initialize.dialog")
         guard picker.runModal() == .OK, let url = picker.url else { return }
 
         let configuration = NSAlert()
@@ -257,12 +275,18 @@ import SpielOrdersKit
         configuration.informativeText = url.lastPathComponent + "\nExisting user content is preserved. Directory names are relative to this folder; leave blank for the conventional defaults."
         configuration.addButton(withTitle: "Initialize Package")
         configuration.addButton(withTitle: "Cancel")
+        configuration.window.setAccessibilityLabel("Initialize Package")
+        configuration.window.setAccessibilityIdentifier("package.initialize.confirmation")
+        configuration.buttons[0].setAccessibilityIdentifier("package.initialize.confirm")
+        configuration.buttons[1].setAccessibilityIdentifier("package.initialize.cancel")
         let orders = NSTextField(string: "")
         orders.placeholderString = "Default Orders directory"
         orders.setAccessibilityLabel("Orders directory")
+        orders.setAccessibilityIdentifier("package.initialize.ordersDirectory")
         let removed = NSTextField(string: "")
         removed.placeholderString = "Default Removed Orders directory"
         removed.setAccessibilityLabel("Removed Orders directory")
+        removed.setAccessibilityIdentifier("package.initialize.removedDirectory")
         let fields = NSStackView(views: [NSTextField(labelWithString: "Orders directory"), orders,
                                        NSTextField(labelWithString: "Removed Orders directory"), removed])
         fields.orientation = .vertical
@@ -294,7 +318,9 @@ import SpielOrdersKit
                 folder = selected
                 library = candidate
                 root = selected.url
+                discardEditors()
                 text = initialized.readmeText ?? ""
+                readmeDocumentID = UUID()
                 original = text
                 editingOrder = nil
                 writable = await candidate.readmeWritable && initialized.readmeText != nil
@@ -372,7 +398,9 @@ import SpielOrdersKit
                 folder = selected
                 library = candidate
                 root = selected.url
+                discardEditors()
                 text = loaded
+                readmeDocumentID = UUID()
                 original = loaded
                 editingOrder = nil
                 writable = canWrite
@@ -414,7 +442,8 @@ import SpielOrdersKit
     }
 
     func save() {
-        guard !busy, editingReadme, writable, dirty, let retainedFolder = folder else { return }
+        if recordEditor != nil { saveRecord(); return }
+        guard !busy, editingReadme, writable, readmeDirty, let retainedFolder = folder else { return }
         busy = true
         message = ""
         let draft = text
@@ -575,7 +604,7 @@ import SpielOrdersKit
     }
 
     func removeOrderToTrash() {
-        guard !busy, !dirty, let root, let retainedFolder = folder else { return }
+        guard !busy, !dirty, recordEditor == nil, let root, let retainedFolder = folder else { return }
         let picker = NSOpenPanel()
         picker.canChooseDirectories = true
         picker.canChooseFiles = false
@@ -583,12 +612,18 @@ import SpielOrdersKit
         picker.directoryURL = root
         picker.prompt = "Select Order"
         picker.message = "Choose the Order Directory to remove and move to Trash."
+        picker.setAccessibilityLabel("Select Order to move to Trash")
+        picker.setAccessibilityIdentifier("order.trash.dialog")
         guard picker.runModal() == .OK, let directory = picker.url else { return }
         let confirmation = NSAlert()
         confirmation.messageText = "Move this Order to Trash?"
         confirmation.informativeText = directory.lastPathComponent
         confirmation.addButton(withTitle: "Move to Trash")
         confirmation.addButton(withTitle: "Cancel")
+        confirmation.window.setAccessibilityLabel("Move Order to Trash")
+        confirmation.window.setAccessibilityIdentifier("order.trash.confirmation")
+        confirmation.buttons[0].setAccessibilityIdentifier("order.trash.confirm")
+        confirmation.buttons[1].setAccessibilityIdentifier("order.trash.cancel")
         guard confirmation.runModal() == .alertFirstButtonReturn else { return }
         busy = true
         message = ""
@@ -606,14 +641,38 @@ import SpielOrdersKit
         }
     }
 
-    func confirmDiscard() -> Bool {
+    /// Asks before leaving a dirty draft, and answers whether to go on now. Save, the
+    /// default, saves the draft and then runs `retry`, which asks again if anything is
+    /// still unsaved; a refused save keeps the editor where it is.
+    func confirmDiscard(retry: @escaping @MainActor () -> Void) -> Bool {
         guard dirty else { return true }
+        let sheet = vendorSheet?.dirty == true
+        let draft = readmeDirty ? "README" : sheet || recordEditor?.kind == .vendor ? "Vendor" : "Order"
+        let prefix = readmeDirty ? "readme.unsaved" : "draft.unsaved"
         let alert = NSAlert()
-        alert.messageText = "Discard unsaved changes?"
-        alert.informativeText = "Your README draft has not been saved."
-        alert.addButton(withTitle: "Discard Changes")
+        alert.messageText = "Do you want to save the changes to this \(draft)?"
+        alert.informativeText = "Your changes will be lost if you don’t save them."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Don’t Save")
         alert.addButton(withTitle: "Cancel")
-        return alert.runModal() == .alertFirstButtonReturn
+        alert.buttons[1].keyEquivalent = "d"
+        alert.buttons[1].keyEquivalentModifierMask = .command
+        alert.window.setAccessibilityIdentifier(prefix + ".dialog")
+        for (button, name) in zip(alert.buttons, ["save", "discard", "cancel"]) {
+            button.setAccessibilityIdentifier(prefix + "." + name)
+        }
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            if sheet { saveVendorSheet() } else { save() }
+            guard busy, let work else { return false }
+            Task {
+                await work.settleForExit()
+                retry()
+            }
+            return false
+        case .alertSecondButtonReturn: return true
+        default: return false
+        }
     }
 
     func settle() async {

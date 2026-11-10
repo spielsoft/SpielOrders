@@ -17,11 +17,11 @@ Use the Rust toolchain selected by `rust-toolchain.toml`:
 
 ```sh
 cargo build --workspace --locked
-scripts/loop.sh
+scripts/check.sh
 scripts/gate.sh
 ```
 
-[Running tests](docs/development/test-loop.md) explains the loop and the current gate.
+[Running tests](docs/development/test-loop.md) explains the check and the gate.
 For native integration, `cargo build -p spielorders --release --locked` builds
 `target/release/libspielorders.a`. Import the generated
 [C header](crates/spielorders/include/spielorders.h) through a Swift module map or
@@ -31,9 +31,9 @@ caller; [Effect and adapter boundaries](docs/architecture/boundaries.md) governs
 integration and ownership.
 
 The [native Xcode project](apps/macos/SpielOrders.xcodeproj/project.pbxproj) builds the
-SwiftUI app and its UI-test target. The gate compiles them and runs headless Swift
-checks on macOS; [Running tests](docs/development/test-loop.md) distinguishes that
-from interactive acceptance.
+SwiftUI app and its UI-test target. The check runs the headless Swift tests and the gate
+builds the app and its UI tests on macOS; [Running tests](docs/development/test-loop.md)
+distinguishes both from [Desktop acceptance](docs/development/desktop-acceptance.md).
 
 The [first-collection conversion guide](docs/development/first-collection-conversion.md)
 records the boundary between the real archive and disposable test copies.

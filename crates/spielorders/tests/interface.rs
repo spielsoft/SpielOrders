@@ -851,6 +851,59 @@ fn a_cancelled_call_returns_cancelled_and_a_released_token_cancels_nothing() {
     );
 }
 
+/// A new draft from `package`, Order or Vendor.
+fn new_draft(
+    package: &SpielordersPackage,
+    start: extern "C" fn(
+        &SpielordersPackage,
+        &mut Option<Box<SpielordersDraft>>,
+        Option<&mut Option<Box<SpielordersEntries>>>,
+    ) -> SpielordersResult,
+) -> Box<SpielordersDraft> {
+    let mut draft = None;
+    assert_eq!(start(package, &mut draft, None), SPIELORDERS_RESULT_OK);
+    draft.unwrap()
+}
+
+#[test]
+fn new_drafts_start_with_a_name_that_saves_as_it_is() {
+    let root = initialized("default-names");
+    let package = open(&root.0);
+    let order = new_draft(&package, spielorders_package_new_order_draft);
+    assert_eq!(
+        string(spielorders_draft_field(
+            &order,
+            SPIELORDERS_ORDER_FIELD_TITLE
+        )),
+        "New Order"
+    );
+    commit(&plan_draft(&order).unwrap());
+
+    let vendor = new_draft(&package, spielorders_package_new_vendor_draft);
+    assert_eq!(
+        string(spielorders_draft_field(
+            &vendor,
+            SPIELORDERS_VENDOR_FIELD_NAME
+        )),
+        "New Vendor"
+    );
+    let mut lower = vendor;
+    set(&mut lower, SPIELORDERS_VENDOR_FIELD_NAME, "new vendor");
+    commit(&plan_draft(&lower).unwrap());
+
+    let package = open(&root.0);
+    let next = new_draft(&package, spielorders_package_new_vendor_draft);
+    assert_eq!(
+        string(spielorders_draft_field(
+            &next,
+            SPIELORDERS_VENDOR_FIELD_NAME
+        )),
+        "New Vendor 2",
+        "a Name already used in any case is passed over"
+    );
+    commit(&plan_draft(&next).unwrap());
+}
+
 #[test]
 fn vendors_are_created_edited_with_contacts_and_hidden_through_drafts() {
     let root = initialized("vendors");
@@ -1492,6 +1545,7 @@ fn a_new_order_saves_its_item_rows_and_refuses_with_every_fault_located() {
     let mut draft = None;
     spielorders_package_new_order_draft(&package, &mut draft, None);
     let mut draft = draft.unwrap();
+    set(&mut draft, SPIELORDERS_ORDER_FIELD_TITLE, "");
     for row in 0..2 {
         assert_eq!(
             spielorders_draft_row_insert(&mut draft, row, None),
@@ -1537,6 +1591,7 @@ fn a_new_vendor_saves_its_contact_rows_in_one_commit_and_refuses_with_every_faul
     let mut draft = None;
     spielorders_package_new_vendor_draft(&package, &mut draft, None);
     let mut draft = draft.unwrap();
+    set(&mut draft, SPIELORDERS_VENDOR_FIELD_NAME, "");
     for row in 0..2 {
         assert_eq!(
             spielorders_draft_row_insert(&mut draft, row, None),

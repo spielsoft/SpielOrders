@@ -24,13 +24,8 @@ private struct OrdersGrid: View {
 
 private struct OrderInspector: View {
     @Bindable var model: DesktopModel
-    private static let facts: [(Int32, String)] = [
-        (SPIELORDERS_ORDER_FIELD_DATE_ORDERED, "Date"), (SPIELORDERS_ORDER_FIELD_STATUS, "Status"),
-        (SPIELORDERS_ORDER_FIELD_VENDOR, "Vendor"), (SPIELORDERS_ORDER_FIELD_ORDERER, "Orderer"),
-        (SPIELORDERS_ORDER_FIELD_ORDERING_INSTITUTION, "Institution"),
-        (SPIELORDERS_ORDER_FIELD_PROJECT, "Project"), (SPIELORDERS_ORDER_FIELD_ORDER_GROUP, "Order Group"),
-        (SPIELORDERS_ORDER_FIELD_CURRENCY, "Currency"), (SPIELORDERS_ORDER_FIELD_DIRECTORY_NAME, "Directory Name"),
-    ]
+    private static let facts: [OrderColumn] = [.date, .status, .vendor, .orderer, .institution,
+                                               .project, .orderGroup, .currency, .directory]
 
     var body: some View {
         ScrollView {
@@ -39,40 +34,71 @@ private struct OrderInspector: View {
                     switch model.inspection {
                     case let .healthy(details):
                         Text(details.values[SPIELORDERS_ORDER_FIELD_TITLE] ?? "").font(.headline)
-                        ForEach(Self.facts, id: \.0) { fact in
-                            LabeledContent(fact.1, value: details.values[fact.0] ?? "")
+                            .accessibleValue("Order Title", value: details.values[SPIELORDERS_ORDER_FIELD_TITLE] ?? "",
+                                             identifier: "order.inspector.title")
+                        ForEach(Self.facts, id: \.self) { fact in
+                            LabeledContent(fact.label, value: details.values[fact.field] ?? "")
+                                .accessibleValue(fact.label, value: details.values[fact.field] ?? "",
+                                                 identifier: "order.inspector.\(fact.rawValue)")
                         }
                         Divider()
-                        Text("Items").font(.headline)
+                        Text("Items").font(.headline).accessibilityAddTraits(.isHeader)
                         if details.items.isEmpty { Text("No Items").foregroundStyle(.secondary) }
                         else {
                             Table(details.items) {
-                                TableColumn("Catalog Number", value: \.catalogNumber).width(min: 55, ideal: 65)
-                                TableColumn("Description", value: \.description).width(min: 75, ideal: 120)
-                                TableColumn("Quantity", value: \.quantity).width(min: 35, ideal: 45)
-                                TableColumn("Unit Price", value: \.unitPrice).width(min: 50, ideal: 65)
-                                TableColumn("Total", value: \.total).width(min: 50, ideal: 65)
+                                TableColumn("Catalog Number") { item in
+                                    Text(item.catalogNumber).accessibleValue("Catalog Number", value: item.catalogNumber,
+                                        identifier: "order.items.row.\(item.id).catalogNumber")
+                                }.width(min: 55, ideal: 65)
+                                TableColumn("Description") { item in
+                                    Text(item.description).accessibleValue("Description", value: item.description,
+                                        identifier: "order.items.row.\(item.id).description")
+                                }.width(min: 75, ideal: 120)
+                                TableColumn("Quantity") { item in
+                                    Text(item.quantity).accessibleValue("Quantity", value: item.quantity,
+                                        identifier: "order.items.row.\(item.id).quantity")
+                                }.width(min: 35, ideal: 45)
+                                TableColumn("Unit Price") { item in
+                                    Text(item.unitPrice).accessibleValue("Unit Price", value: item.unitPrice,
+                                        identifier: "order.items.row.\(item.id).unitPrice")
+                                }.width(min: 50, ideal: 65)
+                                TableColumn("Total") { item in
+                                    Text(item.total).accessibleValue("Item Total", value: item.total,
+                                        identifier: "order.items.row.\(item.id).total")
+                                }.width(min: 50, ideal: 65)
                             }
+                            .accessibilityLabel("Order Items")
+                            .accessibilityIdentifier("order.items")
                             .frame(minHeight: 90, idealHeight: 140, maxHeight: 200)
                             .font(.caption)
                         }
                         LabeledContent("Total", value: details.values[SPIELORDERS_ORDER_FIELD_TOTAL] ?? "")
+                            .accessibleValue("Total", value: details.values[SPIELORDERS_ORDER_FIELD_TOTAL] ?? "",
+                                             identifier: "order.inspector.total")
                         Divider()
-                        Text("README").font(.headline)
+                        Text("README").font(.headline).accessibilityAddTraits(.isHeader)
                         if details.readmeState == SPIELORDERS_README_STATE_UNREADABLE {
                             Text("README is unreadable. Reopen the Package to refresh.")
-                        } else { Text(details.readmeText).font(.system(.body, design: .monospaced)) }
+                        } else {
+                            Text(details.readmeText).font(.system(.body, design: .monospaced))
+                                .textSelection(.enabled)
+                                .accessibleValue("Order README", value: details.readmeText, identifier: "order.inspector.readme")
+                        }
                         Button("Edit README") { model.editOrderReadme(row) }
                             .disabled(model.busy || details.readmeState == SPIELORDERS_README_STATE_UNREADABLE)
+                            .accessibilityIdentifier("order.readme.edit")
                         if !details.notices.isEmpty { Text(details.notices.joined(separator: "\n")).foregroundStyle(.secondary) }
                     case let .damaged(messages):
                         Text(row.directoryName).font(.headline)
+                            .accessibleValue("Directory Name", value: row.directoryName, identifier: "order.inspector.directory")
                         Text(messages.joined(separator: "\n"))
+                            .accessibleValue("Diagnosis", value: messages.joined(separator: "\n"), identifier: "order.inspector.diagnosis")
                     case nil:
                         if model.busy { ProgressView("Reading Order…") }
                         else { Text("Order details are unavailable. Reopen the Package to refresh.") }
                     }
                     Button("Reveal in Finder") { model.selectOrder(row.id, revealInFinder: true) }.disabled(model.busy)
+                        .accessibilityIdentifier("order.inspector.reveal")
                 } else {
                     Text("Select an Order").foregroundStyle(.secondary)
                 }
@@ -81,5 +107,7 @@ private struct OrderInspector: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.leading, 12)
         }
+        .accessibilityLabel("Order inspector")
+        .accessibilityIdentifier("order.inspector")
     }
 }

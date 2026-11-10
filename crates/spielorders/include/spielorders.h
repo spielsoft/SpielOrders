@@ -1118,14 +1118,15 @@ SpielordersResult spielorders_order_draft(const struct SpielordersOrder *_Nonnul
 SpielordersResult spielorders_vendor_draft(const struct SpielordersVendor *_Nonnull vendor,
                                            struct SpielordersDraft *_Nullable *_Nonnull draft);
 
-// A draft of a new Order in `package`, holding its Date Ordered and Status defaults.
+// A draft of a new Order in `package`, holding its Title, Date Ordered, and Status
+// defaults.
 // Saving it creates the Order with its facts and Item rows.
 SpielordersResult spielorders_package_new_order_draft(const struct SpielordersPackage *_Nonnull package,
                                                       struct SpielordersDraft *_Nullable *_Nonnull draft,
                                                       struct SpielordersEntries *_Nullable *_Nullable outcome);
 
-// A draft of a new Vendor in `package`. Saving it creates the Vendor with its facts and
-// Contact rows.
+// A draft of a new Vendor in `package`, holding a Name no Vendor of the Package uses.
+// Saving it creates the Vendor with its facts and Contact rows.
 SpielordersResult spielorders_package_new_vendor_draft(const struct SpielordersPackage *_Nonnull package,
                                                        struct SpielordersDraft *_Nullable *_Nonnull draft,
                                                        struct SpielordersEntries *_Nullable *_Nullable outcome);
