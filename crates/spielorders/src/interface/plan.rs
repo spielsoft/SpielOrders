@@ -234,6 +234,31 @@ fn draft_changes(draft: &SpielordersDraftData, plan: &Plan) -> Vec<PlannedChange
     changes
 }
 
+/// Plans missing Package-local agent guidance without reading or changing root AGENTS.md.
+/// Existing regular guidance is preserved. Commit rechecks configuration and destinations.
+#[unsafe(no_mangle)]
+pub extern "C" fn spielorders_package_plan_provision_agent_setup(
+    package: &SpielordersPackage,
+    token: u64,
+    plan: &mut Option<Box<SpielordersPlan>>,
+    outcome: Option<&mut Option<Box<SpielordersEntries>>>,
+) -> SpielordersResult {
+    fallible(outcome, |entries| {
+        let result = package.healthy(entries).and_then(|_| {
+            let root = package.root().to_path_buf();
+            planned(
+                &Change::ProvisionAgentSetup { root: root.clone() },
+                root,
+                Subject::Other,
+                token,
+                entries,
+                |_| Vec::new(),
+            )
+        });
+        deliver(result, plan)
+    })
+}
+
 impl SpielordersPlan {
     fn of(
         plan: crate::Plan,

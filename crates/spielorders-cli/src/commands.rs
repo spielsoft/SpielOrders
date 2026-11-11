@@ -8,9 +8,9 @@
 
 use crate::{
     cli::{
-        self, ContactCommand, Execution, Family, FieldAssignment, IndexCommand, ItemCommand,
-        ListCommand, OrderCommand, OrderTarget, PackageCommand, RepairRequest, SearchCommand,
-        ValueKind, VendorCommand,
+        self, AgentCommand, ContactCommand, Execution, Family, FieldAssignment, IndexCommand,
+        ItemCommand, ListCommand, OrderCommand, OrderTarget, PackageCommand, RepairRequest,
+        SearchCommand, ValueKind, VendorCommand,
     },
     contract::ResponseContract as Contract,
     library::{self, Calls, c_path, c_text, constant, resolution_name},
@@ -34,6 +34,30 @@ type Read = Result<Value, Answer>;
 /// Runs the command `family` names and answers with what it will show.
 pub(crate) fn run(family: &Family) -> Shown<'_> {
     let (contract, root, answer, human) = match family {
+        Family::Agent {
+            command: AgentCommand::Provision {
+                target, execution, ..
+            },
+        } => {
+            let answer = answered(|calls| {
+                let package = open(calls, &target.root)?;
+                let plan = calls.get(|plan, outcome| {
+                    spielorders_package_plan_provision_agent_setup(&package, 0, plan, outcome)
+                })?;
+                mutate(calls, &plan, execution)
+            });
+            (Contract::AgentProvision, &target.root, answer, Human::Whole)
+        }
+        Family::Agent {
+            command: AgentCommand::Defaults { .. },
+        } => {
+            return Shown {
+                contract: Contract::AgentDefaults,
+                root: None,
+                answer: crate::resources::defaults(),
+                human: Human::Whole,
+            };
+        }
         Family::Init {
             assignments,
             target,

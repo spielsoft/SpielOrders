@@ -19,6 +19,12 @@ pub extern "C" fn spielorders_library_version() -> Text<'static> {
     Text::new(VERSION)
 }
 
+/// A suggested agent request after provisioning. Borrowed static UTF-8; never freed.
+#[unsafe(no_mangle)]
+pub extern "C" fn spielorders_library_agent_setup_prompt() -> Text<'static> {
+    Text::new(c"Read .agents/skills/spielorders/SKILL.md. Add a concise pointer to it in AGENTS.md, preserving all existing instructions. Use the installed SpielOrders CLI for managed data.")
+}
+
 /// The name of `value`: the snake_case spelling of any `SPIELORDERS_*` constant,
 /// such as "damaged_package" for SPIELORDERS_FAILURE_DAMAGED_PACKAGE, or "" for a value
 /// that is no constant.

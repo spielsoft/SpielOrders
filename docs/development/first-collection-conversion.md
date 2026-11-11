@@ -7,6 +7,9 @@ Conversion testing operates only on an isolated copy; the source remains unchang
 The disposable acceptance copy is
 `/Users/example/Documents/Administration/SpielOrders-M6-Test.M3Zj4f/Orders`. Test-only metadata is not a proposed
 production conversion and must never be copied back to the source.
+The retained acceptance copy contains fabricated SpielOrders metadata, not confirmed
+adoption facts. For a first-use rehearsal, make a further copy and separate that test
+metadata from the copied user content before initializing it.
 
 ## Existing organization
 

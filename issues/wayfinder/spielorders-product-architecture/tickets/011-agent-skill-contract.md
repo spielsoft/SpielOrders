@@ -8,14 +8,18 @@ parent: Chart the SpielOrders product and architecture
 
 SpielOrders provides a package-local agent skill only. It does not install or maintain a global skill. The app and CLI ship the source material used to prepare a copy inside a SpielOrder Package, so the guidance travels with the Package an agent is operating on.
 
-Agent Ready setup is explicit and opt-in. Ordinary Package initialization and opening create no agent files. A user may request it during initialization with `spielorders init --agent-ready ...`, prepare it later with `spielorders agent prepare --root <PATH>`, or use a simple Agent Ready action alongside Open and Initialize in the GUI Project menu. The CLI and GUI use the same core preparation operation.
+Agent Ready setup is explicit and opt-in. Ordinary Package initialization and opening
+create no agent files. `spielorders agent provision --root <PATH>` plans and commits
+missing Package-local guidance. The GUI Package menu provides Agent Ready using the
+same library operation. The GUI first obtains a separate, persistent macOS folder
+grant for the bundled CLI, which has its own sandbox. It reports authorization success,
+cancellation, or failure before reporting setup complete.
 
 ### Generated guidance
 
-Preparation writes a minimal root `AGENTS.md` and one project-local skill:
+Provisioning creates missing directories and files for one project-local skill:
 
 ```text
-AGENTS.md
 .agents/skills/spielorders/
   SKILL.md
   references/
@@ -26,7 +30,20 @@ AGENTS.md
     diagnostics-and-repair.md
 ```
 
-`agent prepare` has deliberately simple behavior: it creates these files when absent and overwrites them when present. It performs no ownership-marker check, merge, preservation of edits, version comparison, compatibility classification, history, manifest maintenance, or other lifecycle management. Its concise human-readable output lists the paths created or overwritten.
+Provisioning preserves every existing regular guidance file, including user edits. It
+does not merge, replace, version, classify, or maintain a manifest. It refuses linked or
+unsuitable destination components and overlap with configured Orders or Removed Orders
+paths. Planning writes nothing and honors cancellation. Commit revalidates the Package
+configuration and destinations, never replaces a concurrently created file, and reports
+rollback or cleanup failures. An entirely preserved setup is unchanged. Guidance writes
+do not refresh the Package Index.
+
+The library exposes this through
+`spielorders_package_plan_provision_agent_setup` and the existing Plan, operation,
+commit, report, and Entries readers. `spielorders_library_agent_setup_prompt` returns a
+static borrowed request asking an agent to read the local skill and add a concise
+AGENTS.md pointer while preserving existing instructions. Provisioning itself never
+reads or writes root AGENTS.md.
 
 The generated skill has no skill version or custom metadata. Its frontmatter contains only:
 
@@ -35,28 +52,28 @@ name: spielorders
 description: Working with SpielOrders packages.
 ```
 
-`AGENTS.md` is an absolute-minimum pointer: it identifies the directory as a SpielOrder Package, points to `.agents/skills/spielorders/SKILL.md`, names the `spielorders` CLI as the authority for managed data, and states the managed-metadata and Supporting Material boundaries. It contains no command catalog, examples, version field, or ownership marker.
-
 `SKILL.md` assumes a capable agent. It briefly explains what SpielOrders is for, the SpielOrders Root and Package boundary, the CLI-wide `--root <PATH>` convention, the availability of default human output and opt-in `--json` output, the essential safety rules, and when each directly linked reference is useful. Generic facts such as `--json` appear once in `SKILL.md`, not repeatedly in the references. There are no scripts, assets, README, UI metadata, or auxiliary documentation in the generated skill.
 
 The references use progressive disclosure and concise examples. They document how to use SpielOrders and what data each operation needs; they do not prescribe an agent reasoning process, interview sequence, inspection ritual, validation ritual, or approval workflow. Agents use their own intelligence to interpret names, documents, provenance, contradictions, and incomplete evidence and to choose human or JSON output, dry runs, inspection, and validation appropriate to the task.
 
 ### Agent command surface
 
-The complete agent-specific CLI surface is:
+The agent-specific commands are `spielorders agent provision --root <PATH>` and
+`spielorders agent defaults`. They use ordinary human/JSON output conventions;
+provisioning accepts the ordinary dry-run option. Defaults is a read-only query of
+installed default resource locations and requires no Package. Packaging supplies
+actual macOS resource or Linux shared-data paths, using the same canonical templates
+the library embeds.
 
-```text
-spielorders agent prepare --root <PATH>
-spielorders agent status --root <PATH>
-```
-
-These commands accept only the normal Package root option and have human-readable output; they add no command-specific `--json` flag. `agent status` reports only whether root `AGENTS.md` and `.agents/skills/spielorders/SKILL.md` exist. A valid Package returns success whether either file is present or absent. An invalid or missing Package root fails through the CLI's ordinary error behavior. Status does not read or compare contents, inspect reference files, or report skill versions or compatibility.
-
-There is no `agent runtime` command: runtime discovery is not an agent-specific concern. There is no `agent snapshot` command: the already-decided `spielorders package show` operation is the canonical complete Package inspection, including under the CLI's ordinary `--json` output mode. The skill points agents to the existing Package, Order, Vendor, search, validation, repair, upgrade, and index commands rather than introducing agent-only duplicates.
+The portable CLI does not prompt for sandbox authorization or know GUI permission UI.
+The macOS launcher restores remembered CLI access before ordinary invocations.
+Unauthorized Packages refuse through ordinary command results. There is no separate
+global installation, agent status command, initialization setup flag, runtime command,
+or snapshot command. `package show` remains the complete Package inspection.
 
 ### Command and data guidance
 
-`packages-and-adoption.md` explains and exemplifies Package initialization, optional Agent Ready preparation, Package paths, `add-order` for a newly created Order Directory, and `adopt-order` for an eligible existing direct child. It states the facts these commands require and their effects. For legacy material, filenames and directory components are evidence rather than an automatic field grammar; the agent supplies explicit facts through ordinary CLI assignments. The reference explains existing Vendor and Reusable Free-Entry Value lookup, one-Order-at-a-time adoption, resumability from current Package state, and preservation of existing directory contents. It does not reproduce the full legacy-adoption decision or turn evidence interpretation into a fixed workflow.
+`packages-and-adoption.md` explains and exemplifies Package initialization, optional Agent Ready provisioning, Package paths, `add-order` for a newly created Order Directory, and `adopt-order` for an eligible existing direct child. It states the facts these commands require and their effects. For legacy material, filenames and directory components are evidence rather than an automatic field grammar; the agent supplies explicit facts through ordinary CLI assignments. The reference explains existing Vendor and Reusable Free-Entry Value lookup, one-Order-at-a-time adoption, resumability from current Package state, and preservation of existing directory contents. It does not reproduce the full legacy-adoption decision or turn evidence interpretation into a fixed workflow.
 
 `orders-and-items.md` documents Order and Order Item create, show, edit, move, remove, alignment, README, and scoped-validation commands with short examples. Agent-supplied Order facts are `title`, `date_ordered`, and `status`, plus optional Vendor, Orderer, Ordering Institution, currency, Project, and Order Group. Item facts are required Description, Quantity, and Unit Price plus optional Catalog Number. It documents accepted statuses, date and currency formats, optional-field clearing, calculated rather than supplied totals, and one-based Item positions.
 
@@ -74,5 +91,3 @@ The skill carries two compact, non-negotiable facts:
 
 - Never directly edit SpielOrders-managed metadata when a CLI operation exists. Use the CLI so validation, atomic writes, cross-record rules, and Package Index refresh remain consistent. `.spielorders` configuration and JSON are managed metadata; Package and Order READMEs are ordinary user-authored content. Diagnostics may identify damage for which no supported CLI mutation exists, but the skill does not invent an unsupported metadata edit.
 - Supporting Material is opaque user-owned content inside an Order Directory, outside SpielOrders-managed metadata and without a required internal layout. Metadata editing, validation, repair, alignment, upgrade, and index operations preserve it. Only an explicit whole-Order removal moves or trashes the complete Order Directory containing it. `search supporting-material` provides OS-indexed lookup without making Supporting Material managed data.
-
-This decision specifies the future generated guidance and its CLI contract only. It does not scaffold or implement the skill.

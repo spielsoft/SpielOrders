@@ -32,6 +32,10 @@
 pub(crate) enum ResponseContract {
     /// Every usage error, which reached no command and so carries no command's identity.
     Usage,
+    /// `spielorders agent provision`
+    AgentProvision,
+    /// `spielorders agent defaults`
+    AgentDefaults,
     /// `spielorders init`
     Init,
     /// `spielorders package readme`
@@ -114,6 +118,8 @@ impl ResponseContract {
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Usage => "spielorders.usage",
+            Self::AgentProvision => "spielorders.agent.provision",
+            Self::AgentDefaults => "spielorders.agent.defaults",
             Self::Init => "spielorders.init",
             Self::PackageReadme => "spielorders.package.readme",
             Self::PackageShow => "spielorders.package.show",
@@ -160,6 +166,7 @@ impl ResponseContract {
     pub(crate) fn version(self) -> u32 {
         match self {
             Self::Usage => 1,
+            Self::AgentProvision | Self::AgentDefaults => 1,
             Self::Init => 1,
             Self::PackageReadme => 1,
             Self::PackageShow => 1,

@@ -1,0 +1,14 @@
+{
+  "contract": "spielorders.agent.defaults",
+  "contract_version": 1,
+  "ok": false,
+  "context": {
+    "root": null
+  },
+  "data": null,
+  "diagnostics": [],
+  "error": {
+    "code": "resources_unavailable",
+    "detail": "Default guidance is not installed at <RESOURCE_DIRECTORY>"
+  }
+}

@@ -211,8 +211,14 @@ const DECIDED_COMMANDS: &[(&[&str], Disposition)] = &[
         &["index", "rebuild"],
         Disposition::Own(ResponseContract::IndexRebuild),
     ),
-    (&["agent", "prepare"], Disposition::Absent("M8")),
-    (&["agent", "status"], Disposition::Absent("M8")),
+    (
+        &["agent", "provision"],
+        Disposition::Own(ResponseContract::AgentProvision),
+    ),
+    (
+        &["agent", "defaults"],
+        Disposition::Own(ResponseContract::AgentDefaults),
+    ),
 ];
 
 /// Every decided command this milestone delivers is a command line the executable answers,
@@ -325,6 +331,37 @@ fn matrix(contract: ResponseContract) -> [(&'static str, Supply); 5] {
         ("rejected", Supply::Recorded),
     ];
     match contract {
+        ResponseContract::AgentProvision => [
+            ("success", Supply::Recorded),
+            (
+                "empty-result",
+                Supply::Unreachable("an unchanged provisioning still reports its preserved paths"),
+            ),
+            (
+                "warning",
+                Supply::Unreachable(
+                    "guidance creation has no warning-producing mutation or index refresh",
+                ),
+            ),
+            ("invalid", Supply::Recorded),
+            ("rejected", Supply::Recorded),
+        ],
+        ResponseContract::AgentDefaults => [
+            ("success", Supply::Recorded),
+            (
+                "empty-result",
+                Supply::Unreachable("a resource query always names its installed directory"),
+            ),
+            (
+                "warning",
+                Supply::Unreachable("a resource query loads no Package and has no findings"),
+            ),
+            (
+                "invalid",
+                Supply::Unreachable("a resource query loads no Package to judge invalid"),
+            ),
+            ("rejected", Supply::Recorded),
+        ],
         // A usage error is not a command's response. Its one cell is the shared
         // `usage-error`, which is not one of the five and lives outside this table.
         ResponseContract::Usage => CELLS.map(|cell| {
@@ -689,6 +726,8 @@ enum Subject {
     AdoptionCandidate,
     /// No command line reaches it.
     NoCommand,
+    /// Installed resources: no Package root is accepted.
+    InstalledResources,
 }
 
 /// One command line that reaches one contract, and what it needs to reach it.
@@ -718,6 +757,15 @@ fn shape(contract: ResponseContract) -> Shape {
         mutating: false,
     };
     match contract {
+        ResponseContract::AgentDefaults => {
+            read(&["agent", "defaults"], Subject::InstalledResources)
+        }
+        ResponseContract::AgentProvision => Shape {
+            line: &["agent", "provision"],
+            subject: Subject::PackageRoot,
+            arguments: &[],
+            mutating: true,
+        },
         ResponseContract::Usage => Shape {
             line: &[],
             subject: Subject::NoCommand,
@@ -989,7 +1037,7 @@ fn prepare(contract: ResponseContract, label: &str) -> Prepared {
                 positional: Some(candidate),
             }
         }
-        Subject::NoCommand => unreachable_subject(),
+        Subject::NoCommand | Subject::InstalledResources => unreachable_subject(),
     }
 }
 
@@ -1043,12 +1091,18 @@ fn answers_here(
     }
 }
 
-/// Every contract this executable can emit, except the one no command line reaches.
+/// Every Package-targeted contract. Installed-resource queries are covered separately
+/// because they accept no Package root.
 fn commanded() -> impl Iterator<Item = ResponseContract> {
     ResponseContract::REGISTERED
         .iter()
         .copied()
-        .filter(|contract| shape(*contract).subject != Subject::NoCommand)
+        .filter(|contract| {
+            !matches!(
+                shape(*contract).subject,
+                Subject::NoCommand | Subject::InstalledResources
+            )
+        })
 }
 
 /// Every command line a caller can write, with the contract it answers under.
@@ -1069,7 +1123,12 @@ fn command_lines() -> impl Iterator<Item = (&'static [&'static str], ResponseCon
             Disposition::Own(contract) | Disposition::Shared(contract) => Some((*line, *contract)),
             Disposition::Absent(_) => None,
         })
-        .filter(|(_, contract)| shape(*contract).subject != Subject::NoCommand)
+        .filter(|(_, contract)| {
+            !matches!(
+                shape(*contract).subject,
+                Subject::NoCommand | Subject::InstalledResources
+            )
+        })
 }
 
 /// One command line as the caller writes it, targeted somewhere else.
@@ -1478,6 +1537,12 @@ fn interrupted(contract: ResponseContract) -> Interrupted {
         | ResponseContract::OrderItemMove
         | ResponseContract::OrderItemRemove => Interrupted::Refused(Staged::OrderRecord),
         ResponseContract::IndexRebuild => Interrupted::Refused(Staged::DerivedIndex),
+        ResponseContract::AgentDefaults => {
+            Interrupted::Unreached("a resource location query does not write anything")
+        }
+        ResponseContract::AgentProvision => Interrupted::Unreached(
+            "an occupied guidance staging path refuses planning before a commit exists",
+        ),
         ResponseContract::Init => Interrupted::Unreached(
             "no Package stands where `init` is pointed, so it replaces no record of one",
         ),

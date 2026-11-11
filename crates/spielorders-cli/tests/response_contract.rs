@@ -221,6 +221,12 @@ fn every_recorded_cell_is_one_this_file_compares() {
     supporting_cells.extend(SUPPORTING_MATERIAL_REPLAYED_CELLS);
 
     let mut compared: Vec<(ResponseContract, Vec<&str>)> = vec![
+        // The installation/provisioning suite drives these executable responses.
+        (
+            ResponseContract::AgentProvision,
+            vec!["success", "invalid", "rejected"],
+        ),
+        (ResponseContract::AgentDefaults, vec!["success", "rejected"]),
         (ResponseContract::PackageReadme, README_CELLS.to_vec()),
         (ResponseContract::PackageShow, SHOW_CELLS.to_vec()),
         (ResponseContract::Init, INIT_CELLS.to_vec()),

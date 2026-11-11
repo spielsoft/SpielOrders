@@ -119,6 +119,224 @@ fn open(root: &Path) -> Box<SpielordersPackage> {
     package.unwrap()
 }
 
+#[test]
+fn agent_setup_provisions_only_missing_guidance_and_preserves_customizations() {
+    let directory = initialized("agent-setup");
+    let root = &directory.0;
+    let skill = root.join(".agents/skills/spielorders");
+    fs::create_dir_all(&skill).unwrap();
+    fs::write(skill.join("SKILL.md"), "custom skill\n").unwrap();
+    fs::write(root.join("AGENTS.md"), "owner instructions\n").unwrap();
+    let index = fs::read(root.join(".spielorders/index.json")).unwrap();
+    let package = open(root);
+    let mut plan = None;
+    assert_eq!(
+        spielorders_package_plan_provision_agent_setup(&package, 0, &mut plan, None),
+        SPIELORDERS_RESULT_OK
+    );
+    assert!(
+        !skill.join("references").exists(),
+        "planning writes nothing"
+    );
+    assert_eq!(
+        spielorders_report_kind(&commit(&plan.unwrap())),
+        SPIELORDERS_REPORT_COMMITTED
+    );
+    assert!(skill.join("references/packages-and-adoption.md").is_file());
+    assert_eq!(
+        fs::read_to_string(skill.join("SKILL.md")).unwrap(),
+        "custom skill\n"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("AGENTS.md")).unwrap(),
+        "owner instructions\n"
+    );
+    assert_eq!(
+        fs::read(root.join(".spielorders/index.json")).unwrap(),
+        index
+    );
+    let mut plan = None;
+    assert_eq!(
+        spielorders_package_plan_provision_agent_setup(&package, 0, &mut plan, None),
+        SPIELORDERS_RESULT_OK
+    );
+    assert_eq!(
+        spielorders_report_kind(&commit(&plan.unwrap())),
+        SPIELORDERS_REPORT_UNCHANGED
+    );
+    assert!(
+        string(spielorders_library_agent_setup_prompt())
+            .contains(".agents/skills/spielorders/SKILL.md")
+    );
+}
+
+#[test]
+fn agent_setup_refuses_stale_configuration_and_concurrent_destinations_before_writing() {
+    let directory = initialized("agent-setup-stale");
+    let root = &directory.0;
+    let package = open(root);
+    let mut plan = None;
+    assert_eq!(
+        spielorders_package_plan_provision_agent_setup(&package, 0, &mut plan, None),
+        SPIELORDERS_RESULT_OK
+    );
+    let plan = plan.unwrap();
+    fs::write(
+        root.join(".spielorders/config.toml"),
+        "removed_path = \"Archived\"\n",
+    )
+    .unwrap();
+    let mut report = None;
+    let mut outcome = None;
+    assert_eq!(
+        spielorders_plan_commit(&plan, &mut report, Some(&mut outcome)),
+        SPIELORDERS_RESULT_REFUSED
+    );
+    assert!(codes(&outcome).contains(&"preconditions_changed".to_owned()));
+    assert!(!root.join(".agents").exists());
+
+    let mut plan = None;
+    assert_eq!(
+        spielorders_package_plan_provision_agent_setup(&package, 0, &mut plan, None),
+        SPIELORDERS_RESULT_OK,
+        "planning reads fresh configuration"
+    );
+    fs::create_dir(root.join(".agents")).unwrap();
+    fs::write(root.join(".agents/owner.txt"), "concurrent work").unwrap();
+    assert_eq!(
+        spielorders_plan_commit(&plan.unwrap(), &mut report, Some(&mut outcome)),
+        SPIELORDERS_RESULT_REFUSED
+    );
+    assert_eq!(
+        fs::read_to_string(root.join(".agents/owner.txt")).unwrap(),
+        "concurrent work"
+    );
+    assert!(!root.join(".agents/skills").exists());
+}
+
+#[test]
+fn agent_setup_cancels_and_rejects_unsuitable_components_without_touching_root_instructions() {
+    use std::os::unix::fs::symlink;
+    let directory = initialized("agent-setup-paths");
+    let root = &directory.0;
+    let outside = Directory::new("agent-setup-outside");
+    fs::write(outside.0.join("instructions"), "private owner instructions").unwrap();
+    symlink(outside.0.join("instructions"), root.join("AGENTS.md")).unwrap();
+    let package = open(root);
+    let token = spielorders_cancel_new();
+    spielorders_cancel_request(token);
+    let mut plan = None;
+    assert_eq!(
+        spielorders_package_plan_provision_agent_setup(&package, token, &mut plan, None),
+        SPIELORDERS_RESULT_CANCELLED
+    );
+    spielorders_cancel_release(token);
+    assert!(!root.join(".agents").exists());
+    fs::write(root.join(".agents"), "not a directory").unwrap();
+    assert_eq!(
+        spielorders_package_plan_provision_agent_setup(&package, 0, &mut plan, None),
+        SPIELORDERS_RESULT_REFUSED
+    );
+    fs::remove_file(root.join(".agents")).unwrap();
+    symlink(&outside.0, root.join(".agents")).unwrap();
+    assert_eq!(
+        spielorders_package_plan_provision_agent_setup(&package, 0, &mut plan, None),
+        SPIELORDERS_RESULT_REFUSED
+    );
+    fs::remove_file(root.join(".agents")).unwrap();
+    assert_eq!(
+        spielorders_package_plan_provision_agent_setup(&package, 0, &mut plan, None),
+        SPIELORDERS_RESULT_OK
+    );
+    commit(&plan.unwrap());
+    assert_eq!(
+        fs::read_to_string(outside.0.join("instructions")).unwrap(),
+        "private owner instructions"
+    );
+    assert!(
+        fs::symlink_metadata(root.join("AGENTS.md"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}
+
+#[test]
+fn agent_setup_refuses_guidance_overlapping_configured_managed_directories() {
+    for (label, config) in [
+        ("agent-overlap-removed", "removed_path = \".agents\"\n"),
+        ("agent-overlap-orders", "orders_path = \".agents\"\n"),
+    ] {
+        let directory = initialized(label);
+        let root = &directory.0;
+        fs::write(root.join(".spielorders/config.toml"), config).unwrap();
+        if config.starts_with("orders") {
+            fs::create_dir(root.join(".agents")).unwrap();
+        }
+        let package = open(root);
+        let mut plan = None;
+        assert_eq!(
+            spielorders_package_plan_provision_agent_setup(&package, 0, &mut plan, None),
+            SPIELORDERS_RESULT_REFUSED
+        );
+        assert!(!root.join(".agents/skills").exists());
+    }
+}
+
+#[test]
+fn agent_setup_refuses_an_orders_directory_linked_to_the_guidance() {
+    use std::os::unix::fs::symlink;
+    let directory = initialized("agent-alias-plan");
+    let root = &directory.0;
+    fs::create_dir(root.join(".agents")).unwrap();
+    symlink(root.join(".agents"), root.join("Linked")).unwrap();
+    fs::write(
+        root.join(".spielorders/config.toml"),
+        "orders_path = \"Linked\"\n",
+    )
+    .unwrap();
+    let package = open(root);
+    let mut plan = None;
+    let mut outcome = None;
+    assert_eq!(
+        spielorders_package_plan_provision_agent_setup(&package, 0, &mut plan, Some(&mut outcome)),
+        SPIELORDERS_RESULT_REFUSED
+    );
+    assert!(codes(&outcome).contains(&"destination_collision".to_owned()));
+    assert!(!root.join(".agents/skills").exists());
+}
+
+#[test]
+fn agent_setup_rolls_back_when_the_orders_directory_becomes_a_link_to_the_guidance() {
+    use std::os::unix::fs::symlink;
+    let directory = initialized("agent-alias-commit");
+    let root = &directory.0;
+    fs::create_dir(root.join("Linked")).unwrap();
+    fs::write(
+        root.join(".spielorders/config.toml"),
+        "orders_path = \"Linked\"\n",
+    )
+    .unwrap();
+    let package = open(root);
+    let mut plan = None;
+    assert_eq!(
+        spielorders_package_plan_provision_agent_setup(&package, 0, &mut plan, None),
+        SPIELORDERS_RESULT_OK
+    );
+    fs::remove_dir(root.join("Linked")).unwrap();
+    symlink(root.join(".agents"), root.join("Linked")).unwrap();
+    let mut report = None;
+    let mut outcome = None;
+    assert_eq!(
+        spielorders_plan_commit(&plan.unwrap(), &mut report, Some(&mut outcome)),
+        SPIELORDERS_RESULT_REFUSED
+    );
+    assert!(
+        !root.join(".agents").exists(),
+        "the created directory is removed"
+    );
+}
+
 fn set(draft: &mut SpielordersDraft, field: SpielordersConstant, value: &str) {
     let value = c(value);
     assert_eq!(

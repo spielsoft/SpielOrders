@@ -704,84 +704,97 @@ import SpielOrdersKit
             } catch { message = "Couldn’t complete \(action.title.lowercased()).\n" + error.localizedDescription }
         }
     }
-
-    /// Navigation returns now and resumes only after the attached sheet resolves.
-    /// Discard authorizes this synchronous retry without destroying its editor first.
+    /// Navigation returns now; only an approved decision retries the caller.
+    /// The retry bypass is synchronous so it cannot authorize unrelated navigation.
     func confirmDiscard(retry: @escaping @MainActor () -> Void) -> Bool {
         if discardingForNavigation { return true }
         guard !navigationPending, !dialogs.isPresenting else { return false }
         guard dirty else { return true }
-        // An untouched nested draft has nothing to resolve. End its sheet before
-        // asking about the Order, whose Save is unavailable while the sheet exists.
-        if let sheet = vendorSheet, !sheet.dirty {
-            let vendorWindow = dialogs.window?.attachedSheet
-            navigationPending = true
-            sheet.close()
-            vendorSheet = nil
-            Task {
-                await dialogs.waitForDismissal(of: vendorWindow)
-                navigationPending = false
-                retry()
-            }
-            return false
-        }
-        let sheet = vendorSheet?.dirty == true
-        let vendorWindow = sheet ? dialogs.window?.attachedSheet : nil
-        let editor = sheet ? vendorSheet : recordEditor
-        let wasReadme = readmeDirty
-        let wasRaw = rawDirty
-        let repair = recoveryEditor
-        let draft = expertDocument != nil ? "raw JSON document" : recoveryEditor != nil ? "repair" : readmeDirty ? "README" : sheet || recordEditor?.kind == .vendor ? "Vendor" : "Order"
-        let prefix = readmeDirty ? "readme.unsaved" : "draft.unsaved"
-        let alert = NSAlert()
-        alert.messageText = "Do you want to save the changes to this \(draft)?"
-        alert.informativeText = "Your changes will be lost if you don’t save them."
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Don’t Save")
-        alert.addButton(withTitle: "Cancel")
-        alert.buttons[1].hasDestructiveAction = true
-        alert.buttons[1].keyEquivalent = "d"
-        alert.buttons[1].keyEquivalentModifierMask = .command
-        alert.window.setAccessibilityIdentifier(prefix + ".dialog")
-        for (button, name) in zip(alert.buttons, ["save", "discard", "cancel"]) {
-            button.setAccessibilityIdentifier(prefix + "." + name)
-        }
         navigationPending = true
         Task {
-            let response = await dialogs.present(alert)
+            let approved = await resolveDrafts()
             navigationPending = false
+            guard approved else { return }
+            discardingForNavigation = true
+            defer { discardingForNavigation = false }
+            retry()
+        }
+        return false
+    }
+
+    /// The delegate reserves navigation before starting this decision, and keeps its
+    /// original AppKit termination request pending until this answer is final.
+    func confirmExit() async -> Bool {
+        dialogs.isTerminating = true
+        await settle()
+        dialogs.isTerminating = false
+        return await resolveDrafts()
+    }
+
+    /// Resolve the nested Vendor first, then its parent. Approval does not destroy an
+    /// outer draft: a navigation that subsequently fails or is cancelled still shows it.
+    private func resolveDrafts() async -> Bool {
+        while dirty {
+            if let sheet = vendorSheet, !sheet.dirty {
+                let vendorWindow = dialogs.window?.attachedSheet
+                sheet.close()
+                vendorSheet = nil
+                await dialogs.waitForDismissal(of: vendorWindow)
+                continue
+            }
+            let sheet = vendorSheet?.dirty == true
+            let vendorWindow = sheet ? dialogs.window?.attachedSheet : nil
+            let editor = sheet ? vendorSheet : recordEditor
+            let wasReadme = readmeDirty
+            let wasRaw = rawDirty
+            let repair = recoveryEditor
+            let draft = expertDocument != nil ? "raw JSON document" : recoveryEditor != nil ? "repair" : readmeDirty ? "README" : sheet || recordEditor?.kind == .vendor ? "Vendor" : "Order"
+            let prefix = readmeDirty ? "readme.unsaved" : "draft.unsaved"
+            let alert = NSAlert()
+            alert.messageText = "Do you want to save the changes to this \(draft)?"
+            alert.informativeText = "Your changes will be lost if you don’t save them."
+            alert.addButton(withTitle: "Save")
+            alert.addButton(withTitle: "Don’t Save")
+            alert.addButton(withTitle: "Cancel")
+            alert.buttons[1].hasDestructiveAction = true
+            alert.buttons[1].keyEquivalent = "d"
+            alert.buttons[1].keyEquivalentModifierMask = .command
+            alert.window.setAccessibilityIdentifier(prefix + ".dialog")
+            for (button, name) in zip(alert.buttons, ["save", "discard", "cancel"]) {
+                button.setAccessibilityIdentifier(prefix + "." + name)
+            }
+            let response = await dialogs.present(alert)
             switch response {
             case .alertFirstButtonReturn:
+                // Save's entry guards must see idle state. Restore the reservation
+                // before suspending, so it protects the whole asynchronous save.
+                navigationPending = false
                 if sheet { saveVendorSheet() } else { save() }
-                guard busy, let work else { return }
-                await work.settleForExit()
-                // A refused save stays in the editor without asking again.
-                if wasReadme && readmeDirty || wasRaw && rawDirty { return }
-                if let repair, recoveryEditor === repair { return }
-                if let editor, (recordEditor === editor || vendorSheet === editor), editor.dirty { return }
+                let saving = operationBusy ? work : nil
+                navigationPending = true
+                guard let saving else { return false }
+                await saving.settleForExit()
+                if wasReadme && readmeDirty || wasRaw && rawDirty { return false }
+                if let repair, recoveryEditor === repair { return false }
+                if let editor, (recordEditor === editor || vendorSheet === editor), editor.dirty { return false }
                 if sheet {
-                    navigationPending = true
                     await dialogs.waitForDismissal(of: vendorWindow)
-                    navigationPending = false
+                    continue
                 }
-                retry()
+                return true
             case .alertSecondButtonReturn:
                 if sheet {
                     vendorSheet?.close()
                     vendorSheet = nil
-                    navigationPending = true
                     await dialogs.waitForDismissal(of: vendorWindow)
-                    navigationPending = false
-                    retry()
-                    return
+                    continue
                 }
-                discardingForNavigation = true
-                defer { discardingForNavigation = false }
-                retry()
-            default: break
+                return true
+            default:
+                return false
             }
         }
-        return false
+        return true
     }
 
     func settle() async {

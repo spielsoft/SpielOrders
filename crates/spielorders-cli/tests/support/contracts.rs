@@ -40,6 +40,8 @@ macro_rules! contracts {
 contracts! {
     Usage => "spielorders.usage" at 1,
     Init => "spielorders.init" at 1,
+    AgentProvision => "spielorders.agent.provision" at 1,
+    AgentDefaults => "spielorders.agent.defaults" at 1,
     PackageReadme => "spielorders.package.readme" at 1,
     PackageShow => "spielorders.package.show" at 1,
     PackageListOrders => "spielorders.package.list.orders" at 1,

@@ -45,6 +45,7 @@ import Observation
                                     ("Initialize Package…", #selector(initializePackage)),
                                     ("Reopen Package", #selector(reopenPackage)),
                                     ("Diagnose Package", #selector(diagnosePackage)),
+                                    ("Agent Ready…", #selector(agentReady)),
                                     ("Reveal Package in Finder", #selector(revealPackage))] {
                 let entry = NSMenuItem(title: title, action: action, keyEquivalent: "")
                 entry.target = self
@@ -102,6 +103,7 @@ import Observation
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         guard !model.busy, model.vendorSheet == nil else { return false }
         switch menuItem.action {
+        case #selector(agentReady): return model.root != nil && model.canBrowseRecords
         case #selector(reopenPackage), #selector(diagnosePackage), #selector(revealPackage): return model.root != nil
         default: return true
         }
@@ -111,6 +113,7 @@ import Observation
     @objc private func initializePackage() { model.chooseInitialization() }
     @objc private func reopenPackage() { model.reopenPackage() }
     @objc private func diagnosePackage() { model.showDiagnosis(directory: nil) }
+    @objc private func agentReady() { model.makeAgentReady() }
     @objc private func revealPackage() { model.reveal() }
     @objc private func newOrder() { model.newOrder() }
     @objc private func save() { if model.vendorSheet != nil { model.saveVendorSheet() } else { model.save() } }

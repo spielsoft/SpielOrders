@@ -1,0 +1,23 @@
+{
+  "contract": "spielorders.agent.provision",
+  "contract_version": 1,
+  "ok": false,
+  "context": {
+    "root": "<PACKAGE_ROOT>"
+  },
+  "data": null,
+  "diagnostics": [],
+  "error": {
+    "code": "destination_collision",
+    "detail": {
+      "severity": "error",
+      "message": "Destination collision",
+      "field": null,
+      "reason": null,
+      "position": null,
+      "path": ".agents",
+      "before": null,
+      "after": null
+    }
+  }
+}

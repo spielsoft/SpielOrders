@@ -1261,6 +1261,9 @@ void spielorders_entries_free(struct SpielordersEntries *_Nullable entries);
 // This library's version, as text.
 SpielordersText spielorders_library_version(void);
 
+// A suggested agent request after provisioning. Borrowed static UTF-8; never freed.
+SpielordersText spielorders_library_agent_setup_prompt(void);
+
 // The name of `value`: the snake_case spelling of any `SPIELORDERS_*` constant,
 // such as "damaged_package" for SPIELORDERS_FAILURE_DAMAGED_PACKAGE, or "" for a value
 // that is no constant.
@@ -1490,6 +1493,13 @@ SpielordersResult spielorders_package_read_readme(const struct SpielordersPackag
 
 // Frees `package`. Freeing NULL does nothing; handles read from it stay valid.
 void spielorders_package_free(struct SpielordersPackage *_Nullable package);
+
+// Plans missing Package-local agent guidance without reading or changing root AGENTS.md.
+// Existing regular guidance is preserved. Commit rechecks configuration and destinations.
+SpielordersResult spielorders_package_plan_provision_agent_setup(const struct SpielordersPackage *_Nonnull package,
+                                                                 uint64_t token,
+                                                                 struct SpielordersPlan *_Nullable *_Nonnull plan,
+                                                                 struct SpielordersEntries *_Nullable *_Nullable outcome);
 
 // Plans saving `draft`: every rule it breaks refuses together, each entry located by
 // field and row. The plan of an edit is guarded by the read the draft was made from.

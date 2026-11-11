@@ -94,6 +94,7 @@ impl Family {
             Self::Order { command } => command.mode(),
             Self::Vendor { command } => command.mode(),
             Self::Search { command } => command.mode(),
+            Self::Agent { command } => command.mode(),
         }
     }
 }
@@ -106,6 +107,32 @@ impl SearchCommand {
             | Self::SupportingMaterial { output, .. } => output.mode(),
         }
     }
+}
+
+impl AgentCommand {
+    fn mode(&self) -> Mode {
+        match self {
+            Self::Provision { output, .. } | Self::Defaults { output } => output.mode(),
+        }
+    }
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum AgentCommand {
+    /// Create missing Package-local guidance, preserving every existing file.
+    Provision {
+        #[command(flatten)]
+        target: PackageTarget,
+        #[command(flatten)]
+        execution: Execution,
+        #[command(flatten)]
+        output: OutputMode,
+    },
+    /// Locate installed default guidance without opening a Package.
+    Defaults {
+        #[command(flatten)]
+        output: OutputMode,
+    },
 }
 
 impl PackageCommand {
@@ -188,6 +215,11 @@ impl ContactCommand {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum Family {
+    /// Provision Package-local guidance or locate the installed defaults.
+    Agent {
+        #[command(subcommand)]
+        command: AgentCommand,
+    },
     // A first-level command with no subcommand of its own, because there is one thing to
     // do to a directory that is not yet a Package. Its two optional configuration keys
     // arrive as assignments rather than as options: an option governs targeting, output,

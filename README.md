@@ -11,6 +11,14 @@ The [product decisions](issues/wayfinder/spielorders-product-architecture/MAP.md
 constrain future work. [Effect and adapter boundaries](docs/architecture/boundaries.md)
 define ownership across Rust and the desktop.
 
+## Agent access
+
+The Package menu's Agent Ready action provisions missing local guidance and obtains the
+bundled CLI's separate folder grant. It shows the executable's installed path and copies
+the request to give an agent. Invoke that executable in place; no global CLI installation
+is needed. [The agent skill contract](issues/wayfinder/spielorders-product-architecture/tickets/011-agent-skill-contract.md)
+defines preservation and authorization boundaries.
+
 ## Development
 
 Use the Rust toolchain selected by `rust-toolchain.toml`:

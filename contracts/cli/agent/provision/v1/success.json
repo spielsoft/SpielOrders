@@ -1,0 +1,58 @@
+{
+  "contract": "spielorders.agent.provision",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "root": "<PACKAGE_ROOT>"
+  },
+  "data": {
+    "outcome": "committed",
+    "committed": true,
+    "operations": [
+      {
+        "kind": "create_directory",
+        "path": "<PACKAGE_ROOT>/.agents"
+      },
+      {
+        "kind": "create_directory",
+        "path": "<PACKAGE_ROOT>/.agents/skills"
+      },
+      {
+        "kind": "create_directory",
+        "path": "<PACKAGE_ROOT>/.agents/skills/spielorders"
+      },
+      {
+        "kind": "create_directory",
+        "path": "<PACKAGE_ROOT>/.agents/skills/spielorders/references"
+      },
+      {
+        "kind": "create_file",
+        "path": "<PACKAGE_ROOT>/.agents/skills/spielorders/SKILL.md"
+      },
+      {
+        "kind": "create_file",
+        "path": "<PACKAGE_ROOT>/.agents/skills/spielorders/references/packages-and-adoption.md"
+      },
+      {
+        "kind": "create_file",
+        "path": "<PACKAGE_ROOT>/.agents/skills/spielorders/references/orders-and-items.md"
+      },
+      {
+        "kind": "create_file",
+        "path": "<PACKAGE_ROOT>/.agents/skills/spielorders/references/vendors-and-contacts.md"
+      },
+      {
+        "kind": "create_file",
+        "path": "<PACKAGE_ROOT>/.agents/skills/spielorders/references/search-and-inspection.md"
+      },
+      {
+        "kind": "create_file",
+        "path": "<PACKAGE_ROOT>/.agents/skills/spielorders/references/diagnostics-and-repair.md"
+      }
+    ],
+    "changes": [],
+    "final_path": null
+  },
+  "diagnostics": [],
+  "error": null
+}

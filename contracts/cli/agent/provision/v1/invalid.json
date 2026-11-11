@@ -1,0 +1,23 @@
+{
+  "contract": "spielorders.agent.provision",
+  "contract_version": 1,
+  "ok": false,
+  "context": {
+    "root": "<PACKAGE_ROOT>"
+  },
+  "data": null,
+  "diagnostics": [],
+  "error": {
+    "code": "unmanaged_package",
+    "detail": {
+      "severity": "error",
+      "message": "Unmanaged package",
+      "field": null,
+      "reason": null,
+      "position": null,
+      "path": "<PACKAGE_ROOT>",
+      "before": null,
+      "after": null
+    }
+  }
+}

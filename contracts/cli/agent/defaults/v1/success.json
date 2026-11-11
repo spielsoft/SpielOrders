@@ -1,0 +1,13 @@
+{
+  "contract": "spielorders.agent.defaults",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "root": null
+  },
+  "data": {
+    "skill_directory": "<RESOURCE_DIRECTORY>"
+  },
+  "diagnostics": [],
+  "error": null
+}

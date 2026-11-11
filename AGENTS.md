@@ -21,6 +21,7 @@ owns what.
   default, branch, field, conformance, or hook that only tests reach. Tests express
   behavior through a public interface and assert outcomes, never how an action was
   performed. The `test-cleanup` skill is the standard a test is kept to.
+- A name is as short as it can be while still conveying its intent, and no shorter.
 - The owner's data and machine come first. Never touch the real archive or the production
   app identity. Do not generate synthetic load. Take over the pointer, keyboard, or
   foreground only with the owner's agreement; driving the app in the background through
@@ -65,13 +66,14 @@ The reviewer fixes an unambiguous defect directly, with its test. A finding that
 a product or interface choice goes to the owner. The builder does not write while the
 reviewer holds the tree.
 
-## Worktrees
+## One checkout
 
-Nobody builds in the main checkout. Every agent works on a branch in its own worktree
-under `.agents/worktrees/`, and the branch is the claim on its work. It lands on `main` by
-fast-forward and the worktree is removed afterwards. Stage the files you changed by name,
-so a commit never carries another agent's work. Before starting, check that no other
-branch is editing the same files.
+Work is serial and happens in the main checkout, with no worktrees. A milestone has one
+branch, named for it, and the builder, the partner reviewer, and acceptance commit to it
+in turn; nobody makes a branch of their own. It lands on `main` at the owner's sign-off
+and is deleted. An abandoned attempt is deleted, not kept beside its replacement. A direct
+change commits to `main`, or to the milestone branch while one is checked out. Stage the
+files you changed by name, so a commit never carries another session's work.
 
 ## Questions
 

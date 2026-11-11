@@ -40,6 +40,7 @@ mod human;
 mod library;
 mod output;
 mod platform;
+mod resources;
 mod response;
 
 use exit::Exit;

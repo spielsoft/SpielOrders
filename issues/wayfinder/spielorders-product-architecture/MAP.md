@@ -34,7 +34,7 @@ Define SpielOrders as a single-user, local-first order manager with a macOS-nati
 - [Define the Rust CLI capability contract](tickets/006-cli-contract.md) — Use a human-first shared-library CLI with contextual roots, assignment-based mutations, recoverable Order removal, scoped validation and repair, native and OS-indexed search, and opt-in CLI-owned JSON built from the common interface; use relative Package locators and no Vendor Merge.
 - [Prototype the SpielOrders desktop experience](tickets/007-desktop-experience.md) — Use a macOS-native SwiftUI grid/inspector/editor experience, AppKit where appropriate, Finder-owned Supporting Material, explicit repair, and a thin boundary over Rust.
 - [Define legacy Order adoption and metadata bootstrapping](tickets/009-legacy-adoption.md) — Keep adoption exceptional and agent-orchestrated: initialize the Package, explicitly adopt existing directories one at a time with current-version metadata, and leave evidence interpretation, consolidated review, and resumable batching to the agent skill.
-- [Define the SpielOrders agent skill contract](tickets/011-agent-skill-contract.md) — Generate an opt-in, package-local, versionless skill with minimal AGENTS guidance, progressively disclosed CLI examples, two simple agent commands, and firm managed-metadata and Supporting Material boundaries.
+- [Define the SpielOrders agent skill contract](tickets/011-agent-skill-contract.md) — Provision missing package-local guidance without overwriting customizations or root AGENTS.md; ship default resources, a setup prompt, and separate bundled-CLI folder authorization.
 
 ## Implementation planning
 

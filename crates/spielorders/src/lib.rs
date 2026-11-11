@@ -8,12 +8,14 @@
 //! the production filesystem, clock, and identities.
 
 mod adoption;
+mod agent_setup;
 mod alignment;
 mod answer;
 mod canonical;
 mod change;
 mod code;
 mod creation;
+mod creation_batch;
 mod diagnosis;
 mod digest;
 mod drafting;

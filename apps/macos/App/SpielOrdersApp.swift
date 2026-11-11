@@ -124,20 +124,15 @@ private struct ApplicationCommands: Commands {
             model.dialogs.focus()
             return .terminateCancel
         }
-        if model.busy {
-            terminationPending = true
-            // A not-yet-presented mutation question is cancelled while work settles.
-            model.dialogs.isTerminating = true
-            Task {
-                await model.settle()
-                model.dialogs.isTerminating = false
-                terminationPending = false
-                sender.reply(toApplicationShouldTerminate: false)
-                NSApp.terminate(nil)
-            }
-            return .terminateLater
+        guard model.busy || model.dirty else { return .terminateNow }
+        terminationPending = true
+        model.navigationPending = true
+        Task {
+            let approved = await model.confirmExit()
+            model.navigationPending = false
+            terminationPending = false
+            sender.reply(toApplicationShouldTerminate: approved)
         }
-        guard model.confirmDiscard(retry: { NSApp.terminate(nil) }) else { return .terminateCancel }
-        return .terminateNow
+        return .terminateLater
     }
 }

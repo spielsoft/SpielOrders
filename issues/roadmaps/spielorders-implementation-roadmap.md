@@ -34,36 +34,16 @@ decisions govern compatibility. A different frontend alone needs no metadata cha
 | M7 — Browse and search | Accepted | None |
 | M8 — Create and edit | Accepted | None |
 | M9 — Removal and recovery | Accepted | M8 |
-| [M10 — Agent Ready](../implementation/m10-agent-ready.md) | Not started | M9 |
+| M10 — Agent Ready | Accepted | M9 |
 | M11 — MVP acceptance | Not started | M9 and M10 |
 | M12 — App Store release | Not started | M11 |
 
 Native controls and their standard interaction behavior apply throughout the desktop;
 broader visual refinement follows core functionality.
 
-The GUI sequence runs through M9 before Agent Ready work starts in M10. The existing
-CLI supplies ordinary Package operations; M10 is not another CLI implementation or
-general cleanup pass. Bundling, permissions, the missing opt-in Agent Ready features,
-and external-agent validation do not block GUI milestones or run alongside them.
 Existing CLI regression checks remain in [the check](../../scripts/check.sh).
-[AGENTS.md](../../AGENTS.md) governs concurrent worktrees and landing. The interface choice is settled by
+The interface choice is settled by
 [Effect and adapter boundaries](../../docs/architecture/boundaries.md).
-
-## M10 — Agent Ready
-
-Outcome: the existing CLI is delivered inside the app with proven external-agent
-authorization. The only planned command additions are `agent prepare`, `agent status`,
-and `init --agent-ready`, with the generated guidance and GUI action defined by
-[Define the SpielOrders agent skill contract](../wayfinder/spielorders-product-architecture/tickets/011-agent-skill-contract.md).
-This is the last feature milestone before integrated MVP acceptance.
-
-Gate: with the GUI closed, an external agent uses the exact bundled CLI and generated
-guidance to inspect and mutate an authorized disposable Package under the intended
-sandbox permissions. Opt-in setup works without changing ordinary initialization or
-opening, examples match the existing command contracts, and a resumable adoption
-rehearsal follows the
-[conversion guide](../../docs/development/first-collection-conversion.md) without
-changing the real archive.
 
 ## M11 — MVP acceptance
 

@@ -1,5 +1,6 @@
 //! The one integration-test target for `spielorders-cli`.
 
+mod agent;
 mod support;
 
 mod cross_command_conformance;

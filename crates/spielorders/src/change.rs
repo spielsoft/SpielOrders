@@ -11,6 +11,7 @@ use crate::{
         OrderAdoptionInput, OrderAdoptionPlan, OrderAdoptionResult, OrderItemInput,
         commit_order_adoption, plan_order_adoption,
     },
+    agent_setup::{AgentSetupPlan, commit_agent_setup, plan_agent_setup},
     alignment::{
         OrderAlignmentPlan, OrderAlignmentResult, commit_order_alignment, plan_order_alignment,
     },
@@ -176,6 +177,9 @@ pub enum Change {
     RebuildIndex {
         root: PathBuf,
     },
+    ProvisionAgentSetup {
+        root: PathBuf,
+    },
     /// `items`, where an editor's new Order has any, is its complete ordered Item list,
     /// and every rule its facts and rows break is refused together as
     /// [`Failure::InvalidDraft`].
@@ -246,6 +250,7 @@ impl Change {
         match self {
             Self::InitializePackage { root, .. }
             | Self::RebuildIndex { root }
+            | Self::ProvisionAgentSetup { root }
             | Self::CreateOrder { root, .. }
             | Self::AdoptOrder { root, .. }
             | Self::CreateVendor { root, .. }
@@ -268,6 +273,7 @@ pub struct Plan(PlanKind);
 #[derive(Clone, Debug, PartialEq)]
 enum PlanKind {
     InitializePackage(PackageInitializationPlan),
+    ProvisionAgentSetup(Box<AgentSetupPlan>),
     RebuildIndex(Box<PackageIndexRebuildPlan>),
     CreateOrder(Box<OrderCreationPlan>),
     AdoptOrder(Box<OrderAdoptionPlan>),
@@ -283,6 +289,7 @@ enum PlanKind {
 #[derive(Clone, Debug, PartialEq)]
 pub enum ChangeResult {
     InitializePackage,
+    ProvisionAgentSetup,
     RebuildIndex,
     CreateOrder(Box<OrderCreationResult>),
     AdoptOrder(Box<OrderAdoptionResult>),
@@ -361,6 +368,7 @@ impl Plan {
     pub(crate) fn operations(&self) -> Vec<(String, &Location)> {
         match &self.0 {
             PlanKind::InitializePackage(plan) => plan
+                .batch
                 .operations
                 .iter()
                 .map(|operation| {
@@ -375,6 +383,21 @@ impl Plan {
                 })
                 .collect(),
             PlanKind::RebuildIndex(plan) => planned(&plan.operations),
+            PlanKind::ProvisionAgentSetup(plan) => plan
+                .batch
+                .operations
+                .iter()
+                .map(|operation| {
+                    (
+                        format!(
+                            "{}_{}",
+                            operation.kind.code(),
+                            operation.destination_kind.code()
+                        ),
+                        &operation.location,
+                    )
+                })
+                .collect(),
             PlanKind::CreateOrder(plan) => planned(&plan.operations),
             PlanKind::AdoptOrder(plan) => planned(&plan.operations),
             PlanKind::EditOrder(plan) => planned(&plan.operations),
@@ -422,6 +445,7 @@ impl Plan {
 }
 
 variants!(PlanKind, PlanKind {
+    ProvisionAgentSetup(AgentSetupPlan),
     RebuildIndex(PackageIndexRebuildPlan),
     CreateOrder(OrderCreationPlan),
     AdoptOrder(OrderAdoptionPlan),
@@ -474,6 +498,7 @@ pub fn plan<E: Effects>(change: &Change, effects: &E) -> Answer<Plan> {
             plan_package_initialization(root, &options, filesystem).map(Plan::of)
         }
         Change::RebuildIndex { root } => plan_package_index_rebuild(root, filesystem).map(Plan::of),
+        Change::ProvisionAgentSetup { root } => plan_agent_setup(root, filesystem).map(Plan::of),
         Change::CreateOrder {
             root,
             assignments,
@@ -595,6 +620,8 @@ pub fn commit<E: Effects>(plan: Plan, effects: &E) -> Answer<Report> {
             .map(|report| Report::with(report, |()| ChangeResult::InitializePackage)),
         PlanKind::RebuildIndex(plan) => commit_package_index_rebuild(*plan, filesystem)
             .map(|report| Report::with(report, |()| ChangeResult::RebuildIndex)),
+        PlanKind::ProvisionAgentSetup(plan) => commit_agent_setup(*plan, filesystem)
+            .map(|report| Report::with(report, |()| ChangeResult::ProvisionAgentSetup)),
         PlanKind::CreateOrder(plan) => {
             commit_order_creation(*plan, &new_uuid, filesystem).map(Report::of)
         }
