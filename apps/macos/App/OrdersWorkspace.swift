@@ -93,6 +93,8 @@ private struct OrderInspector: View {
                             .accessibleValue("Directory Name", value: row.directoryName, identifier: "order.inspector.directory")
                         Text(messages.joined(separator: "\n"))
                             .accessibleValue("Diagnosis", value: messages.joined(separator: "\n"), identifier: "order.inspector.diagnosis")
+                        Button("Open Diagnostics") { model.showDiagnosis(directory: row.directory) }
+                            .disabled(model.busy).accessibilityIdentifier("order.inspector.diagnose")
                     case nil:
                         if model.busy { ProgressView("Reading Order…") }
                         else { Text("Order details are unavailable. Reopen the Package to refresh.") }

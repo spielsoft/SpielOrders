@@ -1,8 +1,7 @@
 # M10 — Agent Ready
 
-Not started: work begins only after the [roadmap](../roadmaps/spielorders-implementation-roadmap.md#m10--agent-ready)
-accepts the GUI milestones before it. Do not start delivery probes or packaging during
-GUI development.
+The [roadmap](../roadmaps/spielorders-implementation-roadmap.md#m10--agent-ready)
+accepts the prerequisite GUI milestones.
 
 ## Outcome
 

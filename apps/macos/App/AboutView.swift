@@ -2,7 +2,6 @@ import AppKit
 import SwiftUI
 
 struct AboutView: View {
-    @Environment(\.colorScheme) private var colorScheme
     static let windowID = "about"
     static let sourceCodeURL = URL(string: "https://github.com/spielsoft/SpielOrders")!
 
@@ -13,15 +12,11 @@ struct AboutView: View {
         return "Version \(version) (\(build))"
     }
 
-    private var secondaryText: Color {
-        colorScheme == .dark ? .white.opacity(0.70) : .black.opacity(0.62)
-    }
-
     var body: some View {
         VStack(spacing: 4) {
             Text("A SpielSoft product")
                 .font(.callout)
-                .foregroundStyle(secondaryText)
+                .foregroundStyle(.secondary)
                 .padding(.bottom, 12)
             Image(nsImage: NSApp.applicationIconImage)
                 .resizable()
@@ -33,12 +28,12 @@ struct AboutView: View {
                 .padding(.top, 4)
             Text(versionText)
                 .font(.callout)
-                .foregroundStyle(secondaryText)
+                .foregroundStyle(.secondary)
                 .textSelection(.enabled)
 
             Text("© 2026 SpielSoft")
                 .font(.footnote)
-                .foregroundStyle(secondaryText)
+                .foregroundStyle(.secondary)
                 .padding(.top, 16)
             Link("Source code", destination: Self.sourceCodeURL)
                 .font(.footnote)

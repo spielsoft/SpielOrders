@@ -17,6 +17,15 @@ struct OrderEditorView: View {
                     .accessibilityIdentifier("order.editor.back")
                 Text(editor.isNew ? "New Order" : editor.field(SPIELORDERS_ORDER_FIELD_TITLE)).font(.title2)
                     .accessibilityIdentifier("order.editor.heading")
+                if !editor.isNew {
+                    Spacer()
+                    Text(model.currentOrder?.directoryName ?? "")
+                        .accessibleValue("Directory Name", value: model.currentOrder?.directoryName ?? "",
+                                         identifier: "order.editor.directory")
+                    Button("Align Directory Name…") { model.changeOrderDirectory(.align) }
+                        .disabled(!model.canChangeDirectory)
+                        .accessibilityIdentifier("order.editor.align")
+                }
             }
             if editor.refused { ProblemSummary(editor: editor, prefix: "order.editor") }
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 8) {
@@ -33,13 +42,10 @@ struct OrderEditorView: View {
                 GridRow {
                     label(SPIELORDERS_ORDER_FIELD_VENDOR)
                     checked(SPIELORDERS_ORDER_FIELD_VENDOR) {
-                        SuggestingField(label: "Vendor", identifier: "order.editor.vendor",
-                                        text: binding(SPIELORDERS_ORDER_FIELD_VENDOR),
-                                        actions: ["New Vendor…"], choices: model.vendorChoices, restricted: true,
-                                        focusSerial: serial(SPIELORDERS_ORDER_FIELD_VENDOR),
-                                        problem: FieldProblem.blank(editor, SPIELORDERS_ORDER_FIELD_VENDOR),
-                                        onAction: { _ in model.beginVendorSheet() })
+                        VendorPicker(text: binding(SPIELORDERS_ORDER_FIELD_VENDOR), choices: model.vendorChoices,
+                                     newVendor: model.beginVendorSheet)
                         .frame(minWidth: 200, maxWidth: .infinity)
+                        .focused($focus, equals: SPIELORDERS_ORDER_FIELD_VENDOR)
                     }
                     label(SPIELORDERS_ORDER_FIELD_CURRENCY)
                     textField(SPIELORDERS_ORDER_FIELD_CURRENCY)
@@ -84,13 +90,6 @@ struct OrderEditorView: View {
         .onChange(of: editor.focusRequest?.serial) { _, _ in
             if let request = editor.focusRequest, request.row < 0 { focus = request.field }
         }
-        .sheet(isPresented: Binding(get: { model.vendorSheet != nil }, set: { if !$0 { model.cancelVendorSheet() } })) {
-            if let sheet = model.vendorSheet {
-                VendorEditorView(model: model, editor: sheet, inSheet: true)
-                    .padding(20)
-                    .frame(minWidth: 720, minHeight: 520)
-            }
-        }
     }
 
     private func label(_ field: Int32) -> some View {
@@ -129,6 +128,7 @@ struct OrderEditorView: View {
                 ForEach(OrderStatus.all, id: \.name) { status in Text(status.label).tag(status.name) }
             }
             .labelsHidden()
+            .pickerStyle(.menu)
             .fixedSize()
             .focused($focus, equals: SPIELORDERS_ORDER_FIELD_STATUS)
             .accessibilityLabel("Status")
@@ -161,15 +161,6 @@ struct VendorEditorView: View {
             HStack {
                 if inSheet {
                     Text("New Vendor").font(.title2).accessibilityIdentifier("\(prefix).heading")
-                    Spacer()
-                    Button("Cancel") { model.cancelVendorSheet() }
-                        .keyboardShortcut(.cancelAction)
-                        .accessibilityIdentifier("\(prefix).cancel")
-                    Button("Save") { model.saveVendorSheet() }
-                        .keyboardShortcut("s", modifiers: .command)
-                        .buttonStyle(.borderedProminent)
-                        .disabled(model.busy)
-                        .accessibilityIdentifier("\(prefix).save")
                 } else {
                     Button("Back to Vendors", systemImage: "chevron.left") { model.closeRecordEditor() }
                         .keyboardShortcut(.cancelAction).disabled(model.busy)
@@ -204,6 +195,20 @@ struct VendorEditorView: View {
             ], label: "Vendor Contacts", identifier: "\(prefix).contacts")
             .frame(minHeight: 120, maxHeight: .infinity)
             RowButtons(editor: editor, noun: "Contact", prefix: "\(prefix).contacts", disabled: model.busy)
+            if inSheet {
+                HStack {
+                    Spacer()
+                    Button("Cancel") { model.cancelVendorSheet() }
+                        .keyboardShortcut(.cancelAction)
+                        .accessibilityIdentifier("\(prefix).cancel")
+                    Button("Save") { model.saveVendorSheet() }
+                        .keyboardShortcut(.defaultAction)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(model.busy)
+                        .accessibilityIdentifier("\(prefix).save")
+
+                }
+            }
         }
         .disabled(model.busy)
         .onAppear { editor.undoManager = undoManager }

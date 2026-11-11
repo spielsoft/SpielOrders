@@ -13,12 +13,14 @@ extension DesktopModel {
     }
 
     func openOrder(_ id: String?) {
-        guard !busy, let row = orders.first(where: { $0.id == id }), row.damage == nil, confirmDiscard(retry: { [self] in openOrder(id) }) else { return }
+        guard !busy, let row = orders.first(where: { $0.id == id }) else { return }
+        if row.damage != nil { showDiagnosis(directory: row.directory); return }
+        guard confirmDiscard(retry: { [self] in openOrder(id) }) else { return }
         loadEditor { session, cancellation in try await session.orderDraft(row, cancellation: cancellation) }
     }
 
     func newOrder() {
-        guard !busy, root != nil, confirmDiscard(retry: { [self] in newOrder() }) else { return }
+        guard !busy, canBrowseRecords, root != nil, confirmDiscard(retry: { [self] in newOrder() }) else { return }
         loadEditor { session, _ in try await session.newOrderDraft() }
     }
 
@@ -28,7 +30,7 @@ extension DesktopModel {
     }
 
     func newVendor() {
-        guard !busy, root != nil, confirmDiscard(retry: { [self] in newVendor() }) else { return }
+        guard !busy, canBrowseRecords, root != nil, confirmDiscard(retry: { [self] in newVendor() }) else { return }
         loadEditor { session, _ in try await session.newVendorDraft() }
     }
 
@@ -91,6 +93,12 @@ extension DesktopModel {
         orderEditor = nil
         vendorEditor = nil
         vendorSheet = nil
+        recoveryEditor = nil
+        diagnosis = nil
+        diagnosticWorkspace = false
+        expertDocument = nil
+        rawText = ""
+        rawOriginal = ""
     }
 
     func saveRecord() {
@@ -109,16 +117,26 @@ extension DesktopModel {
         busy = true
         work = OwnedOperation(kind: .read) { [self] in
             defer { busy = false }
-            do { vendorSheet = RecordEditor(try await session.newVendorDraft()) }
+            do {
+                let editor = RecordEditor(try await session.newVendorDraft())
+                vendorSheet = editor
+                if !dialogs.presentVendor(editor, model: self) { vendorSheet = nil }
+            }
             catch { message = "Couldn’t start a new Vendor.\n" + error.localizedDescription }
         }
     }
 
     func cancelVendorSheet() {
         guard !busy, let sheet = vendorSheet else { return }
-        if sheet.dirty, !confirm("Discard this new Vendor?", "The Vendor has not been saved.", identifier: "vendor.sheet.discard") { return }
-        sheet.close()
-        vendorSheet = nil
+        busy = true
+        Task {
+            let discard = sheet.dirty ? await confirm("Discard this new Vendor?", "The Vendor has not been saved.",
+                                                       identifier: "vendor.sheet.discard", destructive: true) : true
+            busy = false
+            guard discard, vendorSheet === sheet else { return }
+            sheet.close()
+            vendorSheet = nil
+        }
     }
 
     func saveVendorSheet() {
@@ -150,14 +168,14 @@ extension DesktopModel {
                     let saved = try await session.save(editor.draft, cancellation: cancellation)
                     await committed(saved)
                     if !saved.warnings.isEmpty || saved.requiresReopen {
-                        message = (["Saved with warnings."] + saved.warnings
+                        message = ([message, "Saved with warnings."].filter { !$0.isEmpty } + saved.warnings
                             + (saved.requiresReopen ? ["Reopen the Package before continuing."] : [])).joined(separator: "\n")
                     }
                     return
                 } catch let refusal as SaveRefusal {
                     let fields = refusal.unconfirmedFields
                     if !confirmed, !fields.isEmpty, refusal.problems.allSatisfy({ fields.contains($0.field) }),
-                       confirmNewValues(fields.map { ($0, editor.field($0)) }) {
+                       await confirmNewValues(fields.map { ($0, editor.field($0)) }) {
                         for field in fields { try? editor.draft.confirm(field) }
                         confirmed = true
                         continue
@@ -173,24 +191,11 @@ extension DesktopModel {
         }
     }
 
-    private func confirmNewValues(_ values: [(Int32, String)]) -> Bool {
-        confirm("Add new values?",
+    private func confirmNewValues(_ values: [(Int32, String)]) async -> Bool {
+        await confirm("Add new values?",
                 values.map { "\(RecordFieldLabel.of($0.0)): \($0.1)" }.joined(separator: "\n")
                     + "\nThe Package does not use these values yet.",
                 identifier: "order.editor.newValues", approve: "Add Values")
-    }
-
-    func confirm(_ title: String, _ detail: String, identifier: String, approve: String = "Discard Changes") -> Bool {
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = detail
-        alert.addButton(withTitle: approve)
-        alert.addButton(withTitle: "Cancel")
-        alert.window.setAccessibilityLabel(title)
-        alert.window.setAccessibilityIdentifier(identifier + ".dialog")
-        alert.buttons[0].setAccessibilityIdentifier(identifier + ".confirm")
-        alert.buttons[1].setAccessibilityIdentifier(identifier + ".cancel")
-        return alert.runModal() == .alertFirstButtonReturn
     }
 
     /// Lists Orders and Vendors again after a commit, keeping the given selections.
@@ -217,7 +222,17 @@ extension DesktopModel {
                 vendorDetails = try? await session.inspectVendor(row, cancellation: LibraryCancellation())
             }
         } catch {
-            message = "Saved. The lists could not be refreshed; reopen the Package.\n" + error.localizedDescription
+            canBrowseRecords = false
+            writable = false
+            orders = []
+            vendors = []
+            selectedOrderID = nil
+            selectedVendorID = nil
+            inspection = nil
+            vendorDetails = nil
+            searchAnswer = nil
+            message = ([message, "The change was committed, but the lists could not be refreshed; reopen the Package.",
+                        error.localizedDescription].filter { !$0.isEmpty }).joined(separator: "\n")
         }
     }
 
@@ -232,7 +247,7 @@ extension DesktopModel {
             do {
                 let warnings = try await session.setVendorHidden(id: id, hidden: hidden, cancellation: cancellation)
                 await refreshRecords(selectingOrder: selectedOrderID, vendor: id)
-                if !warnings.isEmpty { message = (["Saved with warnings."] + warnings).joined(separator: "\n") }
+                if !warnings.isEmpty { message = ([message, "Saved with warnings."].filter { !$0.isEmpty } + warnings).joined(separator: "\n") }
             } catch { message = "Couldn’t change the Vendor’s visibility.\n" + error.localizedDescription }
         }
     }

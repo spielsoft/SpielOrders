@@ -37,12 +37,30 @@ private struct ApplicationCommands: Commands {
                 .disabled(!application.canRedo)
                 .accessibilityIdentifier("edit.redo")
         }
+        CommandGroup(replacing: .newItem) {
+            Button("New Order", action: application.model.newOrder)
+                .keyboardShortcut("n", modifiers: .command)
+                .disabled(application.model.busy || application.model.vendorSheet != nil || !application.model.canBrowseRecords)
+            Button("Open Package…", action: application.model.choosePackage)
+                .keyboardShortcut("o", modifiers: .command)
+                .disabled(application.model.busy || application.model.vendorSheet != nil)
+        }
+        CommandGroup(replacing: .saveItem) {
+            Button("Save") {
+                if application.model.vendorSheet != nil { application.model.saveVendorSheet() }
+                else { application.model.save() }
+            }
+            .keyboardShortcut("s", modifiers: .command)
+            .disabled(application.model.vendorSheet == nil ? !application.model.canSave : application.model.busy)
+        }
+        OrderCommands(model: application.model)
     }
 }
 
 @MainActor final class NativeApplication: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableObject {
-    private let model = DesktopModel()
+    let model = DesktopModel()
     private var window: NSWindow?
+    private var toolbar: PackageToolbar?
     private var terminationPending = false
     @Published private(set) var canUndo = false
     @Published private(set) var canRedo = false
@@ -65,6 +83,8 @@ private struct ApplicationCommands: Commands {
         window.center()
         window.makeKeyAndOrderFront(nil)
         self.window = window
+        model.dialogs.window = window
+        toolbar = PackageToolbar(model: model, window: window)
         NSApp.activate(ignoringOtherApps: true)
         model.restore()
     }
@@ -100,14 +120,24 @@ private struct ApplicationCommands: Commands {
         let activeWork = model.busy ? 1 : 0
         lifecycle.notice("termination-request active-work=\(activeWork, privacy: .public)")
         guard !terminationPending else { return .terminateLater }
-        guard model.confirmDiscard(retry: { NSApp.terminate(nil) }) else { return .terminateCancel }
-        guard model.busy else { return .terminateNow }
-        terminationPending = true
-        Task {
-            await model.settle()
-            terminationPending = false
-            sender.reply(toApplicationShouldTerminate: true)
+        guard !model.dialogs.isPresenting, !model.navigationPending else {
+            model.dialogs.focus()
+            return .terminateCancel
         }
-        return .terminateLater
+        if model.busy {
+            terminationPending = true
+            // A not-yet-presented mutation question is cancelled while work settles.
+            model.dialogs.isTerminating = true
+            Task {
+                await model.settle()
+                model.dialogs.isTerminating = false
+                terminationPending = false
+                sender.reply(toApplicationShouldTerminate: false)
+                NSApp.terminate(nil)
+            }
+            return .terminateLater
+        }
+        guard model.confirmDiscard(retry: { NSApp.terminate(nil) }) else { return .terminateCancel }
+        return .terminateNow
     }
 }

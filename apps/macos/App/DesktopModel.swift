@@ -31,14 +31,30 @@ import SpielOrdersKit
     }
     var vendorSortField = SPIELORDERS_VENDOR_FIELD_NAME
     var vendorSortDescending = false
-    private var canBrowseRecords = false
+    var canBrowseRecords = false
+    var diagnosticWorkspace = false
+    var diagnosticDirectory: URL?
+    var diagnosis: PackageDiagnosis?
+    var recoveryEditor: RecoveryEditor?
+    var expertDocument: ExpertDocument?
+    var rawText = ""
+    var rawOriginal = ""
+    var rawDirty: Bool { expertDocument != nil && rawText != rawOriginal }
+    var recoverableDirectory: URL?
     var text = ""
     var original = ""
     var readmeDocumentID = UUID()
     var editingOrder: OrderRow?
     var root: URL?
     var message = ""
-    var busy = false
+    let dialogs = WindowDialogs()
+    private var operationBusy = false
+    var navigationPending = false
+    private var discardingForNavigation = false
+    var busy: Bool {
+        get { operationBusy || navigationPending || dialogs.isPresenting }
+        set { operationBusy = newValue }
+    }
     var writable = false
     var query = ""
     var caseSensitive = false
@@ -48,7 +64,9 @@ import SpielOrdersKit
     var searching = false
     var orderEditor: RecordEditor?
     var vendorEditor: RecordEditor?
-    var vendorSheet: RecordEditor?
+    var vendorSheet: RecordEditor? {
+        didSet { if vendorSheet == nil { dialogs.dismissVendor() } }
+    }
     var vendorChoices: [String] = []
     var reusableValues: [Int32: [String]] = [:]
     var library = PackageSession()
@@ -59,9 +77,13 @@ import SpielOrdersKit
     private var lookupRevision = 0
     var readmeDirty: Bool { text != original }
     var dirty: Bool {
-        readmeDirty || [orderEditor, vendorEditor, vendorSheet].contains { $0?.dirty == true }
+        readmeDirty || rawDirty || recoveryEditor?.dirty == true || [orderEditor, vendorEditor, vendorSheet].contains { $0?.dirty == true }
     }
-    var canSave: Bool { recordEditor != nil ? canSaveRecord : !busy && editingReadme && writable && readmeDirty }
+    var canSave: Bool {
+        if expertDocument != nil { return !busy && rawDirty }
+        if recoveryEditor != nil { return !busy }
+        return recordEditor != nil ? canSaveRecord : !busy && editingReadme && writable && readmeDirty
+    }
     var editingReadme: Bool { destination == .packageReadme || editingOrder != nil }
 
     func restore() {
@@ -80,9 +102,14 @@ import SpielOrdersKit
         picker.message = "Choose a SpielOrder Package."
         picker.setAccessibilityLabel("Open Package")
         picker.setAccessibilityIdentifier("package.open.dialog")
-        guard picker.runModal() == .OK, let url = picker.url else { return }
-        do { open(try AuthorizedFolder(url), preserveSelection: false) }
-        catch { message = error.localizedDescription }
+        busy = true
+        Task {
+            let response = await dialogs.chooseFolder(picker)
+            busy = false
+            guard response == .OK, let url = picker.url else { return }
+            do { open(try AuthorizedFolder(url), preserveSelection: false) }
+            catch { message = error.localizedDescription }
+        }
     }
 
     func reopenPackage() {
@@ -91,7 +118,8 @@ import SpielOrdersKit
     }
 
     func navigate(to destination: Destination) {
-        guard !busy, (destination != self.destination || editingOrder != nil || recordEditor != nil),
+        guard !busy, canBrowseRecords,
+              (destination != self.destination || editingOrder != nil || recordEditor != nil || diagnosticWorkspace),
               confirmDiscard(retry: { [self] in navigate(to: destination) }) else { return }
         discardEditors()
         if destination == .packageReadme {
@@ -268,39 +296,46 @@ import SpielOrdersKit
         picker.prompt = "Choose Package Folder"
         picker.setAccessibilityLabel("Choose Package Folder")
         picker.setAccessibilityIdentifier("package.initialize.dialog")
-        guard picker.runModal() == .OK, let url = picker.url else { return }
-
-        let configuration = NSAlert()
-        configuration.messageText = "Initialize Package?"
-        configuration.informativeText = url.lastPathComponent + "\nExisting user content is preserved. Directory names are relative to this folder; leave blank for the conventional defaults."
-        configuration.addButton(withTitle: "Initialize Package")
-        configuration.addButton(withTitle: "Cancel")
-        configuration.window.setAccessibilityLabel("Initialize Package")
-        configuration.window.setAccessibilityIdentifier("package.initialize.confirmation")
-        configuration.buttons[0].setAccessibilityIdentifier("package.initialize.confirm")
-        configuration.buttons[1].setAccessibilityIdentifier("package.initialize.cancel")
-        let orders = NSTextField(string: "")
-        orders.placeholderString = "Default Orders directory"
-        orders.setAccessibilityLabel("Orders directory")
-        orders.setAccessibilityIdentifier("package.initialize.ordersDirectory")
-        let removed = NSTextField(string: "")
-        removed.placeholderString = "Default Removed Orders directory"
-        removed.setAccessibilityLabel("Removed Orders directory")
-        removed.setAccessibilityIdentifier("package.initialize.removedDirectory")
-        let fields = NSStackView(views: [NSTextField(labelWithString: "Orders directory"), orders,
-                                       NSTextField(labelWithString: "Removed Orders directory"), removed])
-        fields.orientation = .vertical
-        fields.alignment = .leading
-        fields.spacing = 6
-        fields.frame = NSRect(x: 0, y: 0, width: 340, height: 104)
-        orders.widthAnchor.constraint(equalToConstant: 340).isActive = true
-        removed.widthAnchor.constraint(equalToConstant: 340).isActive = true
-        configuration.accessoryView = fields
-        configuration.window.initialFirstResponder = orders
-        guard configuration.runModal() == .alertFirstButtonReturn else { return }
-        do {
-            initialize(try AuthorizedFolder(url), ordersPath: orders.stringValue, removedPath: removed.stringValue)
-        } catch { message = error.localizedDescription }
+        busy = true
+        Task {
+            guard await dialogs.chooseFolder(picker) == .OK, let url = picker.url else {
+                busy = false
+                return
+            }
+            let configuration = NSAlert()
+            configuration.messageText = "Initialize Package?"
+            configuration.informativeText = url.lastPathComponent + "\nExisting user content is preserved. Directory names are relative to this folder; leave blank for the conventional defaults."
+            configuration.addButton(withTitle: "Initialize Package")
+            configuration.addButton(withTitle: "Cancel")
+            configuration.window.setAccessibilityLabel("Initialize Package")
+            configuration.window.setAccessibilityIdentifier("package.initialize.confirmation")
+            configuration.buttons[0].setAccessibilityIdentifier("package.initialize.confirm")
+            configuration.buttons[1].setAccessibilityIdentifier("package.initialize.cancel")
+            let orders = NSTextField(string: "")
+            orders.placeholderString = "Default Orders directory"
+            orders.setAccessibilityLabel("Orders directory")
+            orders.setAccessibilityIdentifier("package.initialize.ordersDirectory")
+            let removed = NSTextField(string: "")
+            removed.placeholderString = "Default Removed Orders directory"
+            removed.setAccessibilityLabel("Removed Orders directory")
+            removed.setAccessibilityIdentifier("package.initialize.removedDirectory")
+            let fields = NSStackView(views: [NSTextField(labelWithString: "Orders directory"), orders,
+                                           NSTextField(labelWithString: "Removed Orders directory"), removed])
+            fields.orientation = .vertical
+            fields.alignment = .leading
+            fields.spacing = 6
+            fields.frame = NSRect(x: 0, y: 0, width: 340, height: 104)
+            orders.widthAnchor.constraint(equalToConstant: 340).isActive = true
+            removed.widthAnchor.constraint(equalToConstant: 340).isActive = true
+            configuration.accessoryView = fields
+            configuration.window.initialFirstResponder = orders
+            let response = await dialogs.present(configuration)
+            busy = false
+            guard response == .alertFirstButtonReturn else { return }
+            do {
+                initialize(try AuthorizedFolder(url), ordersPath: orders.stringValue, removedPath: removed.stringValue)
+            } catch { message = error.localizedDescription }
+        }
     }
 
     private func initialize(_ selected: AuthorizedFolder, ordersPath: String, removedPath: String) {
@@ -318,6 +353,7 @@ import SpielOrdersKit
                 folder = selected
                 library = candidate
                 root = selected.url
+                recoverableDirectory = nil
                 discardEditors()
                 text = initialized.readmeText ?? ""
                 readmeDocumentID = UUID()
@@ -398,6 +434,7 @@ import SpielOrdersKit
                 folder = selected
                 library = candidate
                 root = selected.url
+                recoverableDirectory = nil
                 discardEditors()
                 text = loaded
                 readmeDocumentID = UUID()
@@ -416,6 +453,11 @@ import SpielOrdersKit
                 selectedVendorID = vendorRows.first { $0.id == priorVendorSelection }?.id
                 vendorDetails = nil
                 message = notices.joined(separator: "\n")
+                if diagnosticOnly {
+                    diagnosis = try await candidate.diagnose(directory: nil, cancellation: cancellation)
+                    diagnosticDirectory = nil
+                    diagnosticWorkspace = true
+                }
                 remember(selected)
                 if let selectedRow = rows.first(where: { $0.id == selectedOrderID }) {
                     do {
@@ -442,6 +484,8 @@ import SpielOrdersKit
     }
 
     func save() {
+        if expertDocument != nil { saveExpertDocument(); return }
+        if recoveryEditor != nil { applyRepair(); return }
         if recordEditor != nil { saveRecord(); return }
         guard !busy, editingReadme, writable, readmeDirty, let retainedFolder = folder else { return }
         busy = true
@@ -603,51 +647,91 @@ import SpielOrdersKit
         }
     }
 
-    func removeOrderToTrash() {
-        guard !busy, !dirty, recordEditor == nil, let root, let retainedFolder = folder else { return }
-        let picker = NSOpenPanel()
-        picker.canChooseDirectories = true
-        picker.canChooseFiles = false
-        picker.allowsMultipleSelection = false
-        picker.directoryURL = root
-        picker.prompt = "Select Order"
-        picker.message = "Choose the Order Directory to remove and move to Trash."
-        picker.setAccessibilityLabel("Select Order to move to Trash")
-        picker.setAccessibilityIdentifier("order.trash.dialog")
-        guard picker.runModal() == .OK, let directory = picker.url else { return }
-        let confirmation = NSAlert()
-        confirmation.messageText = "Move this Order to Trash?"
-        confirmation.informativeText = directory.lastPathComponent
-        confirmation.addButton(withTitle: "Move to Trash")
-        confirmation.addButton(withTitle: "Cancel")
-        confirmation.window.setAccessibilityLabel("Move Order to Trash")
-        confirmation.window.setAccessibilityIdentifier("order.trash.confirmation")
-        confirmation.buttons[0].setAccessibilityIdentifier("order.trash.confirm")
-        confirmation.buttons[1].setAccessibilityIdentifier("order.trash.cancel")
-        guard confirmation.runModal() == .alertFirstButtonReturn else { return }
+    var currentOrder: OrderRow? {
+        if diagnosticWorkspace {
+            guard let diagnosticDirectory else { return nil }
+            return orders.first { $0.directory == diagnosticDirectory }
+        }
+        guard destination == .orders else { return nil }
+        let id: String?
+        if let orderEditor { id = orderEditor.draft.recordID }
+        else { id = selectedOrderID }
+        return orders.first { $0.id == id }
+    }
+
+    var canChangeDirectory: Bool {
+        !busy && !dirty && destination == .orders && currentOrder?.damage == nil && currentOrder != nil
+    }
+
+    func changeOrderDirectory(_ action: DirectoryAction, id: String? = nil) {
+        guard !busy, !dirty else { return }
+        let target: OrderRow?
+        if let id { target = orders.first { $0.id == id } }
+        else { target = currentOrder }
+        guard let row = target, row.damage == nil, let retainedFolder = folder else { return }
         busy = true
         message = ""
         let cancellation = LibraryCancellation()
         work = OwnedOperation(kind: .mutation) { [self] in
             defer { busy = false; withExtendedLifetime(retainedFolder) {} }
             do {
-                let disposition = try await withTaskCancellationHandler {
-                    try await library.removeToTrash(directory, cancellation: cancellation)
+                let plan = try await withTaskCancellationHandler {
+                    try await library.planDirectoryChange(row, action: action, cancellation: cancellation)
                 } onCancel: { cancellation.request() }
+                try Task.checkCancellation()
+                let explanation = action == .trash
+                    ? "The Order is removed recoverably first, then handed to macOS Trash. A failed Trash move leaves it in the Removed Orders directory."
+                    : action == .remove ? "The whole Order stays recoverable in the Removed Orders directory."
+                    : "Only the directory name changes; the Order's facts and files are retained."
+                guard await confirm(action.title + "?", row.directoryName + "\n\n" + explanation + "\n\n"
+                              + plan.operations.joined(separator: "\n"),
+                              identifier: "order.directory.confirmation", approve: action.title) else { return }
+                let disposition = try await library.commit(plan)
+                recoverableDirectory = action == .align ? nil : disposition.finalDirectory
+                discardEditors()
                 searchAnswer = nil
+                editingOrder = nil
                 message = disposition.message
-                if disposition.requiresReopen { writable = false }
-            } catch { message = "Couldn’t complete removal.\n" + error.localizedDescription }
+                if disposition.requiresReopen {
+                    canBrowseRecords = false
+                    writable = false
+                    orders = []
+                    selectedOrderID = nil
+                    inspection = nil
+                } else {
+                    await refreshRecords(selectingOrder: action == .align ? row.id : nil, vendor: selectedVendorID)
+                }
+            } catch { message = "Couldn’t complete \(action.title.lowercased()).\n" + error.localizedDescription }
         }
     }
 
-    /// Asks before leaving a dirty draft, and answers whether to go on now. Save, the
-    /// default, saves the draft and then runs `retry`, which asks again if anything is
-    /// still unsaved; a refused save keeps the editor where it is.
+    /// Navigation returns now and resumes only after the attached sheet resolves.
+    /// Discard authorizes this synchronous retry without destroying its editor first.
     func confirmDiscard(retry: @escaping @MainActor () -> Void) -> Bool {
+        if discardingForNavigation { return true }
+        guard !navigationPending, !dialogs.isPresenting else { return false }
         guard dirty else { return true }
+        // An untouched nested draft has nothing to resolve. End its sheet before
+        // asking about the Order, whose Save is unavailable while the sheet exists.
+        if let sheet = vendorSheet, !sheet.dirty {
+            let vendorWindow = dialogs.window?.attachedSheet
+            navigationPending = true
+            sheet.close()
+            vendorSheet = nil
+            Task {
+                await dialogs.waitForDismissal(of: vendorWindow)
+                navigationPending = false
+                retry()
+            }
+            return false
+        }
         let sheet = vendorSheet?.dirty == true
-        let draft = readmeDirty ? "README" : sheet || recordEditor?.kind == .vendor ? "Vendor" : "Order"
+        let vendorWindow = sheet ? dialogs.window?.attachedSheet : nil
+        let editor = sheet ? vendorSheet : recordEditor
+        let wasReadme = readmeDirty
+        let wasRaw = rawDirty
+        let repair = recoveryEditor
+        let draft = expertDocument != nil ? "raw JSON document" : recoveryEditor != nil ? "repair" : readmeDirty ? "README" : sheet || recordEditor?.kind == .vendor ? "Vendor" : "Order"
         let prefix = readmeDirty ? "readme.unsaved" : "draft.unsaved"
         let alert = NSAlert()
         alert.messageText = "Do you want to save the changes to this \(draft)?"
@@ -655,24 +739,49 @@ import SpielOrdersKit
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Don’t Save")
         alert.addButton(withTitle: "Cancel")
+        alert.buttons[1].hasDestructiveAction = true
         alert.buttons[1].keyEquivalent = "d"
         alert.buttons[1].keyEquivalentModifierMask = .command
         alert.window.setAccessibilityIdentifier(prefix + ".dialog")
         for (button, name) in zip(alert.buttons, ["save", "discard", "cancel"]) {
             button.setAccessibilityIdentifier(prefix + "." + name)
         }
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:
-            if sheet { saveVendorSheet() } else { save() }
-            guard busy, let work else { return false }
-            Task {
+        navigationPending = true
+        Task {
+            let response = await dialogs.present(alert)
+            navigationPending = false
+            switch response {
+            case .alertFirstButtonReturn:
+                if sheet { saveVendorSheet() } else { save() }
+                guard busy, let work else { return }
                 await work.settleForExit()
+                // A refused save stays in the editor without asking again.
+                if wasReadme && readmeDirty || wasRaw && rawDirty { return }
+                if let repair, recoveryEditor === repair { return }
+                if let editor, (recordEditor === editor || vendorSheet === editor), editor.dirty { return }
+                if sheet {
+                    navigationPending = true
+                    await dialogs.waitForDismissal(of: vendorWindow)
+                    navigationPending = false
+                }
                 retry()
+            case .alertSecondButtonReturn:
+                if sheet {
+                    vendorSheet?.close()
+                    vendorSheet = nil
+                    navigationPending = true
+                    await dialogs.waitForDismissal(of: vendorWindow)
+                    navigationPending = false
+                    retry()
+                    return
+                }
+                discardingForNavigation = true
+                defer { discardingForNavigation = false }
+                retry()
+            default: break
             }
-            return false
-        case .alertSecondButtonReturn: return true
-        default: return false
         }
+        return false
     }
 
     func settle() async {

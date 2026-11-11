@@ -5,56 +5,11 @@ struct PackageWindow: View {
     @Bindable var model: DesktopModel
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Menu {
-                    Button("Open Package…") { model.choosePackage() }.disabled(model.busy)
-                        .accessibilityIdentifier("package.open")
-                    Button("Initialize Package…") { model.chooseInitialization() }.disabled(model.busy)
-                        .accessibilityIdentifier("package.initialize")
-                    Button("Reopen Package") { model.reopenPackage() }
-                        .disabled(model.busy || model.root == nil)
-                        .accessibilityIdentifier("package.reopen")
-                    Divider()
-                    Button("Reveal Package in Finder") { model.reveal() }.disabled(model.root == nil)
-                        .accessibilityIdentifier("package.reveal")
-                } label: {
-                    Label(model.root?.lastPathComponent ?? "Package", systemImage: "shippingbox")
-                }
-                .fixedSize()
-                .accessibilityLabel("Package")
-                .accessibilityIdentifier("package.menu")
-                .accessibilityValue(model.root?.lastPathComponent ?? "No Package")
-                if model.root != nil {
-                    DestinationPicker(model: model)
-                    .fixedSize()
-                    Spacer()
-                    Button("New Order", systemImage: "plus") { model.newOrder() }
-                        .disabled(model.busy)
-                        .accessibilityIdentifier("order.new")
-                    Button("Move Order to Trash…") { model.removeOrderToTrash() }
-                        .disabled(model.busy || model.dirty || model.recordEditor != nil)
-                        .accessibilityIdentifier("order.trash")
-                    Button("Save") { model.save() }
-                        .keyboardShortcut("s", modifiers: .command)
-                        .disabled(!model.canSave)
-                        .accessibilityIdentifier("toolbar.save")
-                    if !model.editingReadme, model.recordEditor == nil {
-                        Button("Inspector", systemImage: "sidebar.trailing") { model.inspectorVisible.toggle() }
-                            .labelStyle(.iconOnly).help("Show or hide the inspector")
-                            .accessibilityLabel("Inspector")
-                            .accessibilityValue(model.inspectorVisible ? "Shown" : "Hidden")
-                            .accessibilityIdentifier("inspector.toggle")
-                    }
-                }
-                if model.busy { ProgressView().controlSize(.small).accessibilityLabel("Working") }
-            }
-            if model.root != nil, !model.editingReadme, model.recordEditor == nil {
+            if model.root != nil, model.canBrowseRecords, !model.diagnosticWorkspace, !model.editingReadme, model.recordEditor == nil {
                 HStack {
-                    TextField(model.spotlightMode && model.destination == .orders ? "Search Supporting Material" : "Search records",
-                              text: Binding(get: { model.query }, set: model.updateQuery))
-                        .onKeyPress(.return) { model.refreshLookup(); return .handled }
-                        .accessibilityLabel("Search query")
-                        .accessibilityIdentifier("search.query")
+                    SearchField(placeholder: model.spotlightMode && model.destination == .orders ? "Search Supporting Material" : "Search records",
+                                text: Binding(get: { model.query }, set: model.updateQuery),
+                                identifier: "search.query", submit: { model.refreshLookup() })
                     Toggle("Aa", isOn: Binding(get: { model.caseSensitive }, set: model.setCaseSensitive))
                         .toggleStyle(.button).accessibilityLabel("Case sensitive")
                         .disabled(model.spotlightMode && model.destination == .orders)
@@ -76,7 +31,9 @@ struct PackageWindow: View {
                 }
                 .disabled(model.busy && !model.refreshingLookup)
             }
-            if model.root != nil, model.destination == .orders {
+            if model.diagnosticWorkspace {
+                RecoveryWorkspace(model: model)
+            } else if model.root != nil, model.destination == .orders {
                 if let editor = model.orderEditor {
                     OrderEditorView(model: model, editor: editor)
                         .id(ObjectIdentifier(editor))
@@ -140,7 +97,12 @@ struct PackageWindow: View {
                                        description: Text("Choose a Package to read and edit its README."))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            if model.busy { ProgressView().controlSize(.small).accessibilityLabel("Working") }
             if !model.message.isEmpty { Text(model.message).textSelection(.enabled).accessibilityIdentifier("operationMessage") }
+            if let directory = model.recoverableDirectory {
+                Button("Reveal Removed Order in Finder") { model.reveal(directory) }
+                    .accessibilityIdentifier("order.removed.reveal")
+            }
         }
         .padding(20)
         .frame(minWidth: 1000, maxWidth: .infinity, minHeight: 600, maxHeight: .infinity)

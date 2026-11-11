@@ -33,10 +33,13 @@ decisions govern compatibility. A different frontend alone needs no metadata cha
 | M6 — Native foundation and integration | Accepted | None |
 | M7 — Browse and search | Accepted | None |
 | M8 — Create and edit | Accepted | None |
-| M9 — Removal and recovery | Not started | M8 |
+| M9 — Removal and recovery | Accepted | M8 |
 | [M10 — Agent Ready](../implementation/m10-agent-ready.md) | Not started | M9 |
 | M11 — MVP acceptance | Not started | M9 and M10 |
 | M12 — App Store release | Not started | M11 |
+
+Native controls and their standard interaction behavior apply throughout the desktop;
+broader visual refinement follows core functionality.
 
 The GUI sequence runs through M9 before Agent Ready work starts in M10. The existing
 CLI supplies ordinary Package operations; M10 is not another CLI implementation or
@@ -45,15 +48,6 @@ and external-agent validation do not block GUI milestones or run alongside them.
 Existing CLI regression checks remain in [the check](../../scripts/check.sh).
 [AGENTS.md](../../AGENTS.md) governs concurrent worktrees and landing. The interface choice is settled by
 [Effect and adapter boundaries](../../docs/architecture/boundaries.md).
-
-## M9 — Removal and recovery
-
-Outcome: directory alignment, recoverable removal, native Trash, diagnostic workspaces,
-offered repairs, and expert raw-JSON correction.
-
-Gate: collisions, cancellation, refusal, and partial failures preserve evidence and user
-content; confirmed repairs return valid entities to ordinary lookup. No inferred repair
-or general Fix All is introduced.
 
 ## M10 — Agent Ready
 

@@ -73,7 +73,25 @@ import SpielOrdersKit
         selectedRows = []
     }
 
-    func moveRow(from source: Int, to destination: Int) {
+    func moveRows(_ sources: IndexSet, above row: Int) {
+        let sources = sources.filteredIndexSet { $0 < draft.rowCount }
+        guard !sources.isEmpty, (0...draft.rowCount).contains(row) else { return }
+        let destination = row - sources.count(in: 0..<row)
+        var order = Array(0..<draft.rowCount)
+        var wanted = order.filter { !sources.contains($0) }
+        wanted.insert(contentsOf: sources, at: destination)
+        guard order != wanted else { return }
+        undoManager?.beginUndoGrouping()
+        defer { undoManager?.endUndoGrouping() }
+        for (target, original) in wanted.enumerated() {
+            guard let current = order.firstIndex(of: original), current != target else { continue }
+            moveRow(from: current, to: target)
+            order.insert(order.remove(at: current), at: target)
+        }
+        selectedRows = IndexSet(integersIn: destination..<(destination + sources.count))
+    }
+
+    private func moveRow(from source: Int, to destination: Int) {
         guard source != destination else { return }
         apply(rows: true) { try draft.moveRow(from: source, to: destination) }
         undoManager?.registerUndo(withTarget: self) { $0.moveRow(from: destination, to: source) }

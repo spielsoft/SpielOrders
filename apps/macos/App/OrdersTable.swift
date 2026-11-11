@@ -44,6 +44,7 @@ struct OrdersTable: NSViewRepresentable {
         table.target = context.coordinator
         table.doubleAction = #selector(Coordinator.openClicked(_:))
         table.open = { [weak coordinator = context.coordinator] in coordinator?.openSelected() }
+        table.remove = { [weak model] in model?.changeOrderDirectory(.remove) }
         table.headerView?.menu = context.coordinator.columnsMenu
         table.menu = context.coordinator.rowMenu
         context.coordinator.table = table
@@ -61,7 +62,7 @@ struct OrdersTable: NSViewRepresentable {
         context.coordinator.update()
     }
 
-    @MainActor final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
+    @MainActor final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate, NSMenuItemValidation {
         let model: DesktopModel
         weak var table: NSTableView?
         let columnsMenu = NSMenu(title: "Columns")
@@ -206,18 +207,41 @@ struct OrdersTable: NSViewRepresentable {
                 menu.removeAllItems()
                 guard rows.indices.contains(table.clickedRow) else { return }
                 let row = rows[table.clickedRow]
-                if row.damage == nil {
-                    let open = NSMenuItem(title: "Open", action: #selector(open(_:)), keyEquivalent: "")
-                    open.representedObject = row.id
-                    open.target = self
-                    open.setAccessibilityIdentifier("\(rowIdentifier(row)).open")
-                    menu.addItem(open)
-                }
+                let open = NSMenuItem(title: row.damage == nil ? "Open" : "Open Diagnostics", action: #selector(open(_:)), keyEquivalent: "")
+                open.representedObject = row.id
+                open.target = self
+                open.setAccessibilityIdentifier("\(rowIdentifier(row)).open")
+                menu.addItem(open)
                 let item = NSMenuItem(title: "Reveal in Finder", action: #selector(reveal(_:)), keyEquivalent: "")
                 item.representedObject = row.id
                 item.target = self
                 item.setAccessibilityIdentifier("\(rowIdentifier(row)).reveal")
                 menu.addItem(item)
+                if row.damage == nil {
+                    for (title, action, selector) in [
+                        ("Align Directory Name…", "align", #selector(align(_:))),
+                        ("Remove Order…", "remove", #selector(remove(_:))),
+                        ("Move to Trash…", "trash", #selector(trash(_:))),
+                    ] {
+                        if action == "trash" { menu.addItem(.separator()) }
+                        let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
+                        item.target = self
+                        item.representedObject = row.id
+                        item.setAccessibilityIdentifier("\(rowIdentifier(row)).\(action)")
+                        menu.addItem(item)
+                    }
+                }
+            }
+        }
+
+        func validateMenuItem(_ item: NSMenuItem) -> Bool {
+            guard !model.busy, model.vendorSheet == nil,
+                  let id = item.representedObject as? String,
+                  let row = rows.first(where: { $0.id == id }) else { return false }
+            switch item.action {
+            case #selector(align(_:)), #selector(remove(_:)), #selector(trash(_:)):
+                return !model.dirty && row.damage == nil
+            default: return true
             }
         }
 
@@ -247,14 +271,31 @@ struct OrdersTable: NSViewRepresentable {
             guard let id = sender.representedObject as? String else { return }
             model.selectOrder(id, revealInFinder: true)
         }
+
+        @objc private func align(_ sender: NSMenuItem) {
+            model.changeOrderDirectory(.align, id: sender.representedObject as? String)
+        }
+        @objc private func remove(_ sender: NSMenuItem) {
+            model.changeOrderDirectory(.remove, id: sender.representedObject as? String)
+        }
+        @objc private func trash(_ sender: NSMenuItem) {
+            model.changeOrderDirectory(.trash, id: sender.representedObject as? String)
+        }
     }
 }
 
 /// Return opens the selected Order in its editor.
 final class OrdersTableView: NSTableView {
     var open: () -> Void = {}
+    var remove: () -> Void = {}
 
     override func keyDown(with event: NSEvent) {
-        if [36, 76].contains(event.keyCode) { open() } else { super.keyDown(with: event) }
+        guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else {
+            super.keyDown(with: event)
+            return
+        }
+        if [36, 76].contains(event.keyCode) { open() }
+        else if [51, 117].contains(event.keyCode) { remove() }
+        else { super.keyDown(with: event) }
     }
 }

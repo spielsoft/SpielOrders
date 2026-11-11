@@ -6,6 +6,12 @@ struct LibraryEntry: Sendable {
     let code: Int32
     let field: Int32
     let row: Int64
+    let path: String
+    let evidence: String
+    var presentation: String {
+        (["[\(String(cString: spielorders_constant_name(code)))] \(message)"]
+            + [path, evidence].filter { !$0.isEmpty }).joined(separator: "\n")
+    }
 }
 
 struct LibraryFailure: Error, LocalizedError, Sendable {
@@ -13,7 +19,7 @@ struct LibraryFailure: Error, LocalizedError, Sendable {
     let entries: [LibraryEntry]
     var errorDescription: String? {
         entries.isEmpty ? String(cString: spielorders_constant_name(result))
-            : entries.map(\.message).joined(separator: "\n")
+            : entries.map(\.presentation).joined(separator: "\n")
     }
 }
 
@@ -41,7 +47,9 @@ func consumeEntries(_ outcome: UnsafeMutablePointer<SpielordersEntries>?) -> [Li
     return (0..<spielorders_entries_count(outcome)).map { index in
         LibraryEntry(message: String(cString: spielorders_entries_message(outcome, index)),
                      code: spielorders_entries_code(outcome, index), field: spielorders_entries_field(outcome, index),
-                     row: spielorders_entries_row(outcome, index))
+                     row: spielorders_entries_row(outcome, index),
+                     path: String(cString: spielorders_entries_path(outcome, index)),
+                     evidence: String(cString: spielorders_entries_after(outcome, index)))
     }
 }
 

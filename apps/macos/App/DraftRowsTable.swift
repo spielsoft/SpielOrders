@@ -142,7 +142,6 @@ struct DraftRowsTable: NSViewRepresentable {
             let text = NSTextField(string: "")
             text.isBordered = false
             text.drawsBackground = false
-            text.focusRingType = .none
             text.lineBreakMode = .byTruncatingTail
             text.cell?.isScrollable = true
             text.delegate = self
@@ -269,10 +268,11 @@ struct DraftRowsTable: NSViewRepresentable {
 
         func tableView(_ tableView: NSTableView, acceptDrop info: any NSDraggingInfo, row: Int,
                        dropOperation: NSTableView.DropOperation) -> Bool {
-            guard isEnabled, let text = info.draggingPasteboard.pasteboardItems?.first?.string(forType: .rowIndex),
-                  let source = Int(text) else { return false }
-            let destination = source < row ? row - 1 : row
-            editor.moveRow(from: source, to: min(destination, editor.rowCount - 1))
+            guard isEnabled, info.draggingSource as? NSTableView === tableView,
+                  let items = info.draggingPasteboard.pasteboardItems else { return false }
+            let sources = IndexSet(items.compactMap { $0.string(forType: .rowIndex).flatMap(Int.init) })
+            guard sources.count == items.count else { return false }
+            editor.moveRows(sources, above: row)
             return true
         }
     }
@@ -287,6 +287,10 @@ final class RowsTableView: NSTableView {
     weak var coordinator: DraftRowsTable.Coordinator?
 
     override func keyDown(with event: NSEvent) {
+        guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else {
+            super.keyDown(with: event)
+            return
+        }
         switch event.keyCode {
         case 36, 76: coordinator?.beginEditingSelectedRow()
         case 51, 117: coordinator?.deleteSelectedRows()

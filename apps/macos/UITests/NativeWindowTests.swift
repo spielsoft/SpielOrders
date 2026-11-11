@@ -18,11 +18,72 @@ import CSpielOrders
         XCTAssertTrue(packageMenu(in: app).waitForExistence(timeout: 10))
         XCTAssertEqual(app.windows.count, 1)
         packageMenu(in: app).click()
-        app.menuItems["Open Package…"].click()
-        XCTAssertTrue(app.dialogs.firstMatch.waitForExistence(timeout: 5))
+        packageMenu(in: app).menuItems["Open Package…"].click()
+        XCTAssertTrue(app.sheets.firstMatch.waitForExistence(timeout: 5))
         app.typeKey(.escape, modifierFlags: [])
         app.typeKey("q", modifierFlags: .command)
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
+    }
+
+    func testOrderCommandsDoNotTargetThePreviousSelectionOutsideItsWorkspace() throws {
+        let root = try makeNativeTestPackage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try addNativeTestOrder(in: root, title: "Existing optics")
+        let app = XCUIApplication()
+        app.launchArguments = ["-packageBookmark", ""]
+        app.launch()
+        openNativeTestPackage(root, in: app)
+        let row = app.tables["orders.table"].staticTexts.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND identifier ENDSWITH %@ AND value == %@",
+            "orders.row.", ".title", "Existing optics")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        row.click()
+        XCTAssertTrue(app.buttons["order.readme.edit"].waitForExistence(timeout: 10))
+        app.menuBars.menuBarItems["Order"].click()
+        XCTAssertTrue(app.menuBars.menuBarItems["Order"].menuItems["Remove Order…"].isEnabled)
+        app.typeKey(.escape, modifierFlags: [])
+
+        app.toolbars.buttons["New Order"].click()
+        XCTAssertTrue(app.buttons["order.editor.back"].waitForExistence(timeout: 10))
+        assertOrderCommandsUnavailable(in: app)
+        app.buttons["order.editor.back"].click()
+
+        packageMenu(in: app).click()
+        app.menuItems["Diagnose Package"].click()
+        XCTAssertTrue(app.buttons["diagnosis.back"].waitForExistence(timeout: 10))
+        assertOrderCommandsUnavailable(in: app)
+        app.radioButtons["Orders"].click()
+        XCTAssertTrue(app.buttons["diagnosis.back"].waitForNonExistence(timeout: 10))
+
+        app.radioButtons["Vendors"].click()
+        XCTAssertTrue(app.buttons["vendor.new"].waitForExistence(timeout: 10))
+        assertOrderCommandsUnavailable(in: app)
+    }
+
+    func testADamagedPackageKeepsOrdinaryNavigationDisabled() throws {
+        let root = try makeNativeTestPackage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("{broken".utf8).write(to: root.appendingPathComponent(".spielorders/vendors.json"))
+        let app = XCUIApplication()
+        app.launchArguments = ["-packageBookmark", ""]
+        app.launch()
+        openNativeTestPackage(root, in: app)
+        XCTAssertTrue(app.buttons["diagnosis.refresh"].waitForExistence(timeout: 10))
+        let destinations = app.descendants(matching: .any).matching(identifier: "navigation.destinations").firstMatch
+        XCTAssertTrue(destinations.exists)
+        XCTAssertFalse(destinations.isEnabled)
+        XCTAssertFalse(app.toolbars.buttons["New Order"].isEnabled)
+        XCTAssertFalse(app.buttons["diagnosis.back"].isEnabled)
+    }
+
+    private func assertOrderCommandsUnavailable(in app: XCUIApplication) {
+        app.menuBars.menuBarItems["Order"].click()
+        for command in ["Open", "Reveal in Finder", "Align Directory Name…", "Diagnose Order", "Remove Order…", "Move to Trash…"] {
+            let item = app.menuBars.menuBarItems["Order"].menuItems[command]
+            XCTAssertTrue(item.exists)
+            XCTAssertFalse(item.isEnabled)
+        }
+        app.typeKey(.escape, modifierFlags: [])
     }
 
     func testOrderAccessibilityIdentitySurvivesSortingAndTargetsTheSelectedEditor() throws {
@@ -48,19 +109,19 @@ import CSpielOrders
         let dates = table.staticTexts.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND identifier ENDSWITH %@", "orders.row.", ".date"))
         let before = dates.allElementsBoundByIndex.map(\.identifier)
         XCTAssertEqual(before.count, 2)
-        app.buttons["orders.column.date"].click()
+        app.buttons["orders.column.date"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         let after = dates.allElementsBoundByIndex.map(\.identifier)
         XCTAssertEqual(after, Array(before.reversed()))
         table.staticTexts["orders.row.order:" + id + ".title"].click()
         let field = app.descendants(matching: .any).matching(identifier: "order.inspector.date").firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 10))
-        XCTAssertEqual(field.value as? String, date)
+        XCTAssertTrue(field.staticTexts.matching(NSPredicate(format: "value == %@", date)).firstMatch.exists)
         app.buttons["order.readme.edit"].click()
         let editor = app.textViews["order.readme.editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         editor.click()
         editor.typeText("Unsaved notes")
-        XCTAssertTrue(app.buttons["toolbar.save"].isEnabled)
+        XCTAssertTrue(app.toolbars.buttons["Save"].isEnabled)
         app.typeKey("q", modifierFlags: .command)
         app.buttons["readme.unsaved.cancel"].click()
         XCTAssertEqual(editor.value as? String, "Unsaved notes")
@@ -78,10 +139,10 @@ import CSpielOrders
         let about = app.windows["About SpielOrders"]
         XCTAssertTrue(about.waitForExistence(timeout: 5))
         XCTAssertTrue(about.links["Source code"].exists)
-        let version = about.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Version ")).firstMatch
+        let version = about.staticTexts.matching(NSPredicate(format: "value BEGINSWITH %@", "Version ")).firstMatch
         XCTAssertTrue(version.exists)
-        XCTAssertTrue(version.label.range(of: #"Version [0-9.]+ \([0-9]+\)"#, options: .regularExpression) != nil)
-        XCTAssertTrue(about.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "A SpielSoft product")).firstMatch.exists)
+        XCTAssertTrue((version.value as? String)?.range(of: #"Version [0-9.]+ \([0-9]+\)"#, options: .regularExpression) != nil)
+        XCTAssertTrue(about.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "A SpielSoft product")).firstMatch.exists)
         about.buttons[XCUIIdentifierCloseWindow].click()
         XCTAssertTrue(packageMenu(in: app).exists)
         app.typeKey("q", modifierFlags: .command)
@@ -134,7 +195,7 @@ import CSpielOrders
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 5))
         XCTAssertEqual(editor.value as? String, "# My unsaved text\n")
         app.typeKey("q", modifierFlags: .command)
-        app.buttons["Discard Changes"].click()
+        app.buttons["readme.unsaved.discard"].click()
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
     }
 
@@ -195,7 +256,7 @@ import CSpielOrders
         app.launch()
         let message = app.staticTexts["operationMessage"]
         XCTAssertTrue(message.waitForExistence(timeout: 10))
-        XCTAssertTrue(message.label.contains("Package access needs renewal"))
+        XCTAssertTrue((message.value as? String)?.contains("Package access needs renewal") == true)
         XCTAssertFalse(app.textViews["Package README"].exists)
         app.typeKey("q", modifierFlags: .command)
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
@@ -209,8 +270,8 @@ import CSpielOrders
         app.launchArguments = ["-packageBookmark", ""]
         app.launch()
         openNativeTestPackage(root, in: app)
-        app.textFields["Search query"].click()
-        app.textFields["Search query"].typeText("LifecycleQuote")
+        app.searchFields["search.query"].click()
+        app.searchFields["search.query"].typeText("LifecycleQuote")
         app.descendants(matching: .any).matching(identifier: "search.spotlight").firstMatch.click()
         try XCTSkipUnless(app.buttons["search.stop"].waitForExistence(timeout: 2),
                           "The query settled before the in-flight probe; this route remains unverified.")
@@ -228,7 +289,7 @@ import CSpielOrders
         app.launchArguments = ["-packageBookmark", ""]
         app.launch()
         openNativeTestPackage(root, in: app)
-        let query = app.textFields["Search query"]
+        let query = app.searchFields["search.query"]
         XCTAssertTrue(query.waitForExistence(timeout: 10))
         query.click()
         query.typeText("Lifecycle")
@@ -276,7 +337,7 @@ import CSpielOrders
         app.buttons["Back to Orders"].click()
         let savedReadme = app.descendants(matching: .any).matching(identifier: "order.inspector.readme").firstMatch
         XCTAssertTrue(savedReadme.waitForExistence(timeout: 10))
-        XCTAssertEqual(savedReadme.value as? String, "**Order notes**")
+        XCTAssertTrue(savedReadme.staticTexts.matching(NSPredicate(format: "value == %@", "**Order notes**")).firstMatch.exists)
         app.typeKey("q", modifierFlags: .command)
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
     }
@@ -290,7 +351,7 @@ import CSpielOrders
         app.launchArguments = ["-packageBookmark", "", "-orderSortColumn", "", "-orderSortDescending", "NO"]
         app.launch()
         openNativeTestPackage(root, in: app)
-        app.tables["orders.table"].buttons["orders.column.date"].click()
+        app.tables["orders.table"].buttons["orders.column.date"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         let first = app.tables["orders.table"].tableRows.firstMatch
         XCTAssertTrue(first.staticTexts.matching(NSPredicate(format: "value == %@", "Older optics")).firstMatch.waitForExistence(timeout: 10))
         app.typeKey("q", modifierFlags: .command)
@@ -310,7 +371,7 @@ import CSpielOrders
         app.launchArguments = ["-packageBookmark", ""]
         app.launch()
         openNativeTestPackage(root, in: app)
-        let query = app.textFields["Search query"]
+        let query = app.searchFields["search.query"]
         query.click()
         query.typeText("LifecycleQuote")
         app.descendants(matching: .any).matching(identifier: "search.spotlight").firstMatch.click()
@@ -334,8 +395,8 @@ import CSpielOrders
         app.launchArguments = ["-packageBookmark", ""]
         app.launch()
         openNativeTestPackage(root, in: app)
-        app.textFields["search.query"].click()
-        app.textFields["search.query"].typeText("LifecycleQuote")
+        app.searchFields["search.query"].click()
+        app.searchFields["search.query"].typeText("LifecycleQuote")
         app.descendants(matching: .any).matching(identifier: "search.spotlight").firstMatch.click()
         let match = app.descendants(matching: .any).matching(NSPredicate(
             format: "label CONTAINS %@", "LifecycleQuote.txt")).firstMatch
@@ -343,6 +404,57 @@ import CSpielOrders
                           "The real provider has not indexed the file; result actions remain unverified.")
         XCTAssertTrue(app.buttons["Open LifecycleQuote.txt"].exists)
         XCTAssertTrue(app.buttons["Reveal LifecycleQuote.txt in Finder"].exists)
+    }
+
+    func testContextRemovalCanBeCancelledWithoutChangingTheOrder() throws {
+        let root = try makeNativeTestPackage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try addNativeTestOrder(in: root)
+        let app = XCUIApplication()
+        app.launchArguments = ["-packageBookmark", ""]
+        app.launch()
+        openNativeTestPackage(root, in: app)
+        let order = app.tables["orders.table"].staticTexts.matching(
+            NSPredicate(format: "label == %@ AND value == %@", "Order Title", "Lifecycle optics")).firstMatch
+        XCTAssertTrue(order.waitForExistence(timeout: 10))
+        order.rightClick()
+        app.tables["orders.table"].menuItems["Remove Order…"].click()
+        let cancel = app.sheets.buttons["order.directory.confirmation.cancel"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 10))
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(cancel.waitForNonExistence(timeout: 5))
+        order.rightClick()
+        app.tables["orders.table"].menuItems["Move to Trash…"].click()
+        XCTAssertTrue(cancel.waitForExistence(timeout: 10))
+        cancel.click()
+        XCTAssertTrue(order.waitForExistence(timeout: 10))
+        order.click()
+        XCTAssertTrue(app.buttons["Edit README"].isEnabled)
+        let directories = try FileManager.default.contentsOfDirectory(at: root.appendingPathComponent("Orders"),
+                                                                     includingPropertiesForKeys: nil)
+        XCTAssertEqual(directories.count, 1)
+        XCTAssertEqual(try String(contentsOf: directories[0].appendingPathComponent("LifecycleQuote.txt"),
+                                  encoding: .utf8), "Disposable quote")
+        app.typeKey("q", modifierFlags: .command)
+        XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
+    }
+
+    func testClearingNativeSearchRestoresTheOrders() throws {
+        let root = try makeNativeTestPackage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try addNativeTestOrder(in: root, title: "Optics")
+        let app = XCUIApplication()
+        app.launchArguments = ["-packageBookmark", ""]
+        app.launch()
+        openNativeTestPackage(root, in: app)
+        let row = app.tables["orders.table"].staticTexts.matching(NSPredicate(format: "value == %@", "Optics")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        let search = app.searchFields["search.query"]
+        search.click()
+        search.typeText("no matching order")
+        XCTAssertTrue(row.waitForNonExistence(timeout: 10))
+        search.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
     }
 
     func testInspectorWidthSurvivesHidingAndRestart() throws {
