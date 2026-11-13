@@ -99,7 +99,7 @@ fn an_edit_reports_reuse_and_introduction_for_each_category() {
         &directory,
         &[
             // A spelling this Package already uses, written differently.
-            "ordering_institution=northwind",
+            "ordering_institution=example institute",
             // A value nothing in this Package uses yet.
             "order_group=Autumn build",
             // Cleared, so the category is absent.
@@ -113,7 +113,7 @@ fn an_edit_reports_reuse_and_introduction_for_each_category() {
     );
     assert_eq!(
         institution.map(|change| &change["after"]),
-        Some(&"Northwind".into()),
+        Some(&"Example Institute".into()),
         "a reused value names the canonical spelling it matched"
     );
     let group = change(&document, "fact", Some("order_group"));
@@ -381,6 +381,7 @@ fn an_adoption_writes_the_items_it_was_given_in_order() {
         "quantity=3",
         "unit_price=12.5",
         "catalog_number=SC-100",
+        "notes=Polished to APC\nSubstitution acceptable",
         "item",
         "description=Connector",
         "quantity=10",
@@ -415,8 +416,106 @@ fn an_adoption_writes_the_items_it_was_given_in_order() {
         "and the optional Catalog Number where one was given"
     );
     assert_eq!(
+        adopted["items"][0]["notes"], "Polished to APC\nSubstitution acceptable",
+        "and multiline Notes where they were given"
+    );
+    assert!(adopted["items"][1]["notes"].is_null());
+    assert_eq!(
         read(&candidate)["items"][1]["description"],
         "Connector",
         "an ordinary read of the adopted Order finds them"
+    );
+}
+
+/// An Item's Notes keep their lines, clear on an empty value, and are found by search.
+#[test]
+fn item_notes_keep_their_lines_clear_when_empty_and_are_searchable() {
+    let (_tree, root, directory) = package_with_three_items("item-notes");
+    let notes = "Production notes: insertion loss under 2 dB\r\nJacket 3 mm, 20 m long";
+    let added = item(
+        &directory,
+        &[
+            "add",
+            "description=Patch cable",
+            "quantity=2",
+            "unit_price=40",
+            &format!("notes=  {notes}  "),
+        ],
+    );
+    assert_eq!(added.status, Some(0), "{}", added.stdout_text());
+    let last = |order: &serde_json::Value| {
+        order["items"]
+            .as_array()
+            .expect("Items")
+            .last()
+            .cloned()
+            .expect("an Item")
+    };
+    assert_eq!(
+        last(&read(&directory))["notes"],
+        "Production notes: insertion loss under 2 dB\nJacket 3 mm, 20 m long",
+        "lines are kept, line endings and outer whitespace normalized"
+    );
+    assert_eq!(
+        last(&read(&directory))["total"],
+        "80",
+        "Notes never change a total"
+    );
+
+    let found = Invocation::new(&["search", "orders", "insertion", "--json"])
+        .rooted_at(&root)
+        .run();
+    assert_eq!(found.status, Some(0), "{}", found.stdout_text());
+    assert_eq!(
+        response(&found)["data"].as_array().expect("Orders").len(),
+        1
+    );
+
+    let position = read(&directory)["items"]
+        .as_array()
+        .expect("Items")
+        .len()
+        .to_string();
+    let edited = item(
+        &directory,
+        &["edit", &position, "notes=Lead time four weeks"],
+    );
+    assert_eq!(edited.status, Some(0), "{}", edited.stdout_text());
+    assert_eq!(last(&read(&directory))["notes"], "Lead time four weeks");
+    let cleared = item(&directory, &["edit", &position, "notes="]);
+    assert_eq!(cleared.status, Some(0), "{}", cleared.stdout_text());
+    assert!(last(&read(&directory))["notes"].is_null());
+    assert_eq!(last(&read(&directory))["description"], "Patch cable");
+}
+
+/// Moving an Order to another Project keeps an Order Group the same command names, even
+/// unchanged, and clears one it does not name that the new Project lacks.
+#[test]
+fn a_project_change_keeps_only_an_order_group_the_command_names() {
+    let (_tree, directory) = one_order("project-move-group");
+    let group = read(&directory)["order_group"].clone();
+    assert!(group.is_string(), "the populated Order has a group");
+
+    let kept = edit(
+        &directory,
+        &[
+            "project=Weather station",
+            &format!("order_group={}", group.as_str().unwrap()),
+        ],
+    );
+    assert_eq!(kept.status, Some(0), "{}", kept.stdout_text());
+    assert_eq!(read(&directory)["project"], "Weather station");
+    assert_eq!(
+        read(&directory)["order_group"],
+        group,
+        "a named group survives the move"
+    );
+
+    let cleared = edit(&directory, &["project=Shipping"]);
+    assert_eq!(cleared.status, Some(0), "{}", cleared.stdout_text());
+    assert_eq!(read(&directory)["project"], "Shipping");
+    assert!(
+        read(&directory)["order_group"].is_null(),
+        "an unnamed group the new Project lacks is cleared"
     );
 }

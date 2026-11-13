@@ -1,5 +1,6 @@
 import CSpielOrders
 import Foundation
+import SpielOrdersKit
 import Testing
 
 func initializedPackage() throws -> URL {
@@ -73,4 +74,15 @@ func createVendor(in root: URL, name: String, contactEmail: String? = nil) throw
     let vendor = try #require(spielorders_report_vendor(committedReport))
     defer { spielorders_vendor_free(vendor) }
     return String(cString: spielorders_vendor_field(vendor, SPIELORDERS_VENDOR_FIELD_VENDOR_ID))
+}
+
+func openedSession(_ root: URL) async throws -> PackageSession {
+    let session = PackageSession()
+    _ = try await session.open(root, cancellation: LibraryCancellation())
+    return session
+}
+
+func listedOrders(_ session: PackageSession) async throws -> [OrderRow] {
+    try await session.orders(query: "", caseSensitive: false, sortField: -1, descending: false,
+                             cancellation: LibraryCancellation()).rows
 }

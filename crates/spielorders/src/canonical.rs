@@ -197,6 +197,34 @@ pub struct CurrentPackageCandidate {
 }
 
 impl CurrentPackageCandidate {
+    /// The Order Groups of one Project, or of the Orders with no Project for `None`, each
+    /// with the number of healthy Orders using it.
+    ///
+    /// A group belongs to the Project of the Orders that use it, so the same name under two
+    /// Projects is two groups. Projects compare as Reusable Free-Entry Values do: trimmed
+    /// and case-insensitively.
+    pub fn order_groups_of(&self, project: Option<&str>) -> Vec<ReusableValueProjection> {
+        let project = project.map(str::trim).filter(|project| !project.is_empty());
+        reusable_values(
+            self.healthy_orders
+                .iter()
+                .filter(|order| {
+                    let own = order
+                        .document
+                        .project
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|own| !own.is_empty());
+                    match (own, project) {
+                        (None, None) => true,
+                        (Some(own), Some(project)) => focaccia::unicode_full_case_eq(own, project),
+                        _ => false,
+                    }
+                })
+                .filter_map(|order| order.document.order_group.as_deref()),
+        )
+    }
+
     /// The Vendor the healthy Order at `order_index` references, Hidden Vendors included.
     pub fn vendor_for_order(&self, order_index: usize) -> Option<&Vendor> {
         let vendor_id = self
@@ -2717,6 +2745,33 @@ fn required_artifact<F: FileSystem>(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Option<Vec<u8>>, FailedOperation> {
     let location = managed_location(path.to_path_buf(), relative_path(root, path));
+    // Observing only the leaf follows a linked .spielorders parent. Such a record is
+    // not owned by this Package, even when its bytes parse, and must never authorize a
+    // mutation through the link.
+    if artifact == ManagedArtifactKind::Order
+        && let Some(parent) = path.parent()
+    {
+        match filesystem.symlink_metadata(parent) {
+            Ok(Some(kind)) if kind != FileSystemEntryKind::Directory => {
+                diagnostics.push(Diagnostic::managed_artifact(
+                    DiagnosticCode::ManagedArtifactWrongKind,
+                    scope,
+                    managed_location(parent.to_path_buf(), relative_path(root, parent)),
+                    artifact,
+                    Some(kind),
+                ));
+                return Ok(None);
+            }
+            Err(error) => {
+                return Err(FailedOperation::filesystem(
+                    managed_location(parent.to_path_buf(), relative_path(root, parent)),
+                    &error,
+                    filesystem,
+                ));
+            }
+            _ => {}
+        }
+    }
     match filesystem.symlink_metadata(path) {
         Ok(None) => {
             diagnostics.push(Diagnostic::managed_artifact(

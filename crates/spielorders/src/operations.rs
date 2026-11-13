@@ -198,7 +198,9 @@ pub(crate) fn refuse_linked_root<F: crate::ports::FileSystem>(
     selected: &Path,
     filesystem: &F,
 ) -> Result<(), Failure> {
-    match filesystem.symlink_metadata(selected) {
+    // The OS follows a link spelled with a trailing separator; observe the entry itself.
+    let entry: std::path::PathBuf = selected.components().collect();
+    match filesystem.symlink_metadata(&entry) {
         Ok(Some(crate::ports::FileSystemEntryKind::SymbolicLink)) => Err(Failure::RootIsALink {
             root: FailedPath::Unlocated(selected.to_path_buf()),
         }),

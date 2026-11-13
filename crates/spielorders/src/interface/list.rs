@@ -15,11 +15,27 @@ use crate::interface::{
     package::query,
     records::{Facts, directory_name, order_facts, path_text, vendor_facts},
 };
+use crate::interface::{
+    SPIELORDERS_CONTACT_FIELD_EMAIL, SPIELORDERS_CONTACT_FIELD_NAME,
+    SPIELORDERS_CONTACT_FIELD_PHONE, SPIELORDERS_CONTACT_FIELD_ROLE,
+    SPIELORDERS_ITEM_FIELD_CATALOG_NUMBER, SPIELORDERS_ITEM_FIELD_DESCRIPTION,
+    SPIELORDERS_ITEM_FIELD_NOTES, SPIELORDERS_ITEM_FIELD_QUANTITY,
+    SPIELORDERS_ITEM_FIELD_UNIT_PRICE, SPIELORDERS_ORDER_FIELD_CURRENCY,
+    SPIELORDERS_ORDER_FIELD_DATE_ORDERED, SPIELORDERS_ORDER_FIELD_STATUS,
+    SPIELORDERS_ORDER_FIELD_TITLE, SPIELORDERS_ORDER_FIELD_VENDOR,
+    SPIELORDERS_VENDOR_FIELD_ADDRESS, SPIELORDERS_VENDOR_FIELD_EMAIL,
+    SPIELORDERS_VENDOR_FIELD_NAME, SPIELORDERS_VENDOR_FIELD_PHONE,
+    SPIELORDERS_VENDOR_FIELD_PURCHASING_NOTES, SPIELORDERS_VENDOR_FIELD_VENDOR_ID,
+    SPIELORDERS_VENDOR_FIELD_WEBSITE, SpielordersSearch,
+};
 use crate::{
     Coded,
-    model::{CaseSensitivity, OrderListEntry, ReusableValueKind, SearchQuery, VendorVisibility},
+    model::{
+        CaseSensitivity, OrderFact, OrderListEntry, ReusableValueKind, SearchQuery, VendorFact,
+        VendorVisibility,
+    },
 };
-use std::{cmp::Ordering, ffi::CString};
+use std::{cmp::Ordering, ffi::CString, path::PathBuf};
 
 /// The `flags` bit of a list call that matches case exactly.
 pub const SPIELORDERS_LIST_CASE_SENSITIVE: u32 = 1;
@@ -131,6 +147,170 @@ pub extern "C" fn spielorders_package_orders(
     list: &mut Option<Box<SpielordersList>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    order_list(
+        package,
+        query_text,
+        flags,
+        Scope::All,
+        sort,
+        descending,
+        token,
+        list,
+        outcome,
+    )
+}
+
+/// How many facts an Order search can be confined to.
+#[unsafe(no_mangle)]
+pub extern "C" fn spielorders_order_search_field_count() -> i64 {
+    ORDER_SEARCH_FIELDS.len() as i64
+}
+
+/// Fact `index` an Order search can be confined to, in the order a menu offers them: a
+/// `SPIELORDERS_ORDER_FIELD_*` or `SPIELORDERS_ITEM_FIELD_*` constant, or -1 out of range.
+/// SPIELORDERS_ORDER_FIELD_VENDOR matches the referenced Vendor's Name; an Item fact
+/// matches any of the Order's Items.
+#[unsafe(no_mangle)]
+pub extern "C" fn spielorders_order_search_field(index: i64) -> SpielordersConstant {
+    usize::try_from(index)
+        .ok()
+        .and_then(|index| ORDER_SEARCH_FIELDS.get(index))
+        .map_or(SpielordersConstant::NONE, |(constant, _)| *constant)
+}
+
+/// The Orders matching `query` (or NULL) in one searchable fact, `field`, from
+/// spielorders_order_search_field, or in every searchable fact for -1. Otherwise as
+/// spielorders_package_orders; SPIELORDERS_RESULT_BAD_ARGUMENT for any other `field`.
+#[unsafe(no_mangle)]
+pub extern "C" fn spielorders_package_search_orders(
+    package: &SpielordersPackage,
+    query_text: OptionalText<'_>,
+    field: SpielordersConstant,
+    flags: u32,
+    sort: SpielordersConstant,
+    descending: i32,
+    token: u64,
+    list: &mut Option<Box<SpielordersList>>,
+    outcome: Option<&mut Option<Box<SpielordersEntries>>>,
+) -> SpielordersResult {
+    let scope = if field == SpielordersConstant::NONE {
+        Some(Scope::All)
+    } else {
+        ORDER_SEARCH_FIELDS
+            .iter()
+            .find(|(constant, _)| *constant == field)
+            .map(|(_, fact)| Scope::Fact(*fact))
+    };
+    match scope {
+        Some(scope) => order_list(
+            package, query_text, flags, scope, sort, descending, token, list, outcome,
+        ),
+        None => refuse_argument(list, outcome),
+    }
+}
+
+/// Folder Contents: the Orders whose facts match `query` (or NULL) in every searchable
+/// fact, under `flags` as for spielorders_package_orders, together with every Order holding
+/// a file of `material`, a Supporting Material search of this Package (or NULL). Each
+/// appears once, sorted as spielorders_package_orders sorts; case applies only to facts.
+/// Read an Order's matched files from `material` by spielorders_search_order_directory,
+/// which spells the Order Directory as spielorders_list_path does.
+#[unsafe(no_mangle)]
+pub extern "C" fn spielorders_package_search_contents(
+    package: &SpielordersPackage,
+    query_text: OptionalText<'_>,
+    flags: u32,
+    material: Option<&SpielordersSearch>,
+    sort: SpielordersConstant,
+    descending: i32,
+    token: u64,
+    list: &mut Option<Box<SpielordersList>>,
+    outcome: Option<&mut Option<Box<SpielordersEntries>>>,
+) -> SpielordersResult {
+    order_list(
+        package,
+        query_text,
+        flags,
+        Scope::Contents(material.map(SpielordersSearch::orders).unwrap_or_default()),
+        sort,
+        descending,
+        token,
+        list,
+        outcome,
+    )
+}
+
+/// What an Order search reaches.
+enum Scope<'a> {
+    All,
+    Fact(OrderFact),
+    Contents(&'a [PathBuf]),
+}
+
+/// Each fact an Order search can be confined to, by the constant a caller names it with.
+const ORDER_SEARCH_FIELDS: [(SpielordersConstant, OrderFact); 15] = [
+    (SPIELORDERS_ORDER_FIELD_TITLE, OrderFact::Title),
+    (SPIELORDERS_ORDER_FIELD_DATE_ORDERED, OrderFact::DateOrdered),
+    (SPIELORDERS_ORDER_FIELD_STATUS, OrderFact::Status),
+    (SPIELORDERS_ORDER_FIELD_VENDOR, OrderFact::Vendor),
+    (SPIELORDERS_ORDER_FIELD_ORDERER, OrderFact::Orderer),
+    (
+        SPIELORDERS_ORDER_FIELD_ORDERING_INSTITUTION,
+        OrderFact::OrderingInstitution,
+    ),
+    (SPIELORDERS_ORDER_FIELD_PROJECT, OrderFact::Project),
+    (SPIELORDERS_ORDER_FIELD_ORDER_GROUP, OrderFact::OrderGroup),
+    (SPIELORDERS_ORDER_FIELD_CURRENCY, OrderFact::Currency),
+    (SPIELORDERS_ORDER_FIELD_ORDER_ID, OrderFact::OrderId),
+    (SPIELORDERS_ITEM_FIELD_DESCRIPTION, OrderFact::Description),
+    (
+        SPIELORDERS_ITEM_FIELD_CATALOG_NUMBER,
+        OrderFact::CatalogNumber,
+    ),
+    (SPIELORDERS_ITEM_FIELD_QUANTITY, OrderFact::Quantity),
+    (SPIELORDERS_ITEM_FIELD_UNIT_PRICE, OrderFact::UnitPrice),
+    (SPIELORDERS_ITEM_FIELD_NOTES, OrderFact::Notes),
+];
+
+/// Each fact a Vendor search can be confined to, by the constant a caller names it with.
+const VENDOR_SEARCH_FIELDS: [(SpielordersConstant, VendorFact); 11] = [
+    (SPIELORDERS_VENDOR_FIELD_NAME, VendorFact::Name),
+    (SPIELORDERS_VENDOR_FIELD_PHONE, VendorFact::Phone),
+    (SPIELORDERS_VENDOR_FIELD_EMAIL, VendorFact::Email),
+    (SPIELORDERS_VENDOR_FIELD_WEBSITE, VendorFact::Website),
+    (SPIELORDERS_VENDOR_FIELD_ADDRESS, VendorFact::Address),
+    (
+        SPIELORDERS_VENDOR_FIELD_PURCHASING_NOTES,
+        VendorFact::PurchasingNotes,
+    ),
+    (SPIELORDERS_VENDOR_FIELD_VENDOR_ID, VendorFact::VendorId),
+    (SPIELORDERS_CONTACT_FIELD_NAME, VendorFact::ContactName),
+    (SPIELORDERS_CONTACT_FIELD_ROLE, VendorFact::ContactRole),
+    (SPIELORDERS_CONTACT_FIELD_PHONE, VendorFact::ContactPhone),
+    (SPIELORDERS_CONTACT_FIELD_EMAIL, VendorFact::ContactEmail),
+];
+
+fn refuse_argument(
+    list: &mut Option<Box<SpielordersList>>,
+    outcome: Option<&mut Option<Box<SpielordersEntries>>>,
+) -> SpielordersResult {
+    fallible(outcome, |_| {
+        deliver::<SpielordersList>(Err(SPIELORDERS_RESULT_BAD_ARGUMENT), list)
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn order_list(
+    package: &SpielordersPackage,
+    query_text: OptionalText<'_>,
+    flags: u32,
+    scope: Scope<'_>,
+    sort: SpielordersConstant,
+    descending: i32,
+    token: u64,
+    list: &mut Option<Box<SpielordersList>>,
+    outcome: Option<&mut Option<Box<SpielordersEntries>>>,
+) -> SpielordersResult {
     fallible(outcome, |entries| {
         let session = Session::new(token);
         let result = (|| {
@@ -138,8 +318,15 @@ pub extern "C" fn spielorders_package_orders(
             let sort = sort_field(SPIELORDERS_FAMILY_ORDER_FIELD, sort)?;
             let opened = package.healthy(entries)?;
             let contents = &opened.contents;
+            let searched = SearchQuery::new(&text, case(flags));
             let found = settle(
-                opened.orders_matching(&SearchQuery::new(&text, case(flags))),
+                match scope {
+                    Scope::All => opened.orders_matching(&searched),
+                    Scope::Fact(fact) => opened.orders_matching(&searched.in_order_fact(fact)),
+                    Scope::Contents(holding) => {
+                        opened.orders_matching_or_holding(&searched, holding)
+                    }
+                },
                 &session,
                 Subject::Order,
                 entries,
@@ -207,6 +394,79 @@ pub extern "C" fn spielorders_package_vendors(
     list: &mut Option<Box<SpielordersList>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    vendor_list(
+        package, query_text, None, flags, sort, descending, token, list, outcome,
+    )
+}
+
+/// How many facts a Vendor search can be confined to.
+#[unsafe(no_mangle)]
+pub extern "C" fn spielorders_vendor_search_field_count() -> i64 {
+    VENDOR_SEARCH_FIELDS.len() as i64
+}
+
+/// Fact `index` a Vendor search can be confined to, in the order a menu offers them: a
+/// `SPIELORDERS_VENDOR_FIELD_*` or `SPIELORDERS_CONTACT_FIELD_*` constant, or -1 out of
+/// range. A Contact fact matches any of the Vendor's Contacts.
+#[unsafe(no_mangle)]
+pub extern "C" fn spielorders_vendor_search_field(index: i64) -> SpielordersConstant {
+    usize::try_from(index)
+        .ok()
+        .and_then(|index| VENDOR_SEARCH_FIELDS.get(index))
+        .map_or(SpielordersConstant::NONE, |(constant, _)| *constant)
+}
+
+/// The Vendors matching `query` (or NULL) in one searchable fact, `field`, from
+/// spielorders_vendor_search_field, or in every searchable fact for -1. Otherwise as
+/// spielorders_package_vendors; SPIELORDERS_RESULT_BAD_ARGUMENT for any other `field`.
+#[unsafe(no_mangle)]
+pub extern "C" fn spielorders_package_search_vendors(
+    package: &SpielordersPackage,
+    query_text: OptionalText<'_>,
+    field: SpielordersConstant,
+    flags: u32,
+    sort: SpielordersConstant,
+    descending: i32,
+    token: u64,
+    list: &mut Option<Box<SpielordersList>>,
+    outcome: Option<&mut Option<Box<SpielordersEntries>>>,
+) -> SpielordersResult {
+    if field == SpielordersConstant::NONE {
+        return vendor_list(
+            package, query_text, None, flags, sort, descending, token, list, outcome,
+        );
+    }
+    match VENDOR_SEARCH_FIELDS
+        .iter()
+        .find(|(constant, _)| *constant == field)
+    {
+        Some((_, fact)) => vendor_list(
+            package,
+            query_text,
+            Some(*fact),
+            flags,
+            sort,
+            descending,
+            token,
+            list,
+            outcome,
+        ),
+        None => refuse_argument(list, outcome),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn vendor_list(
+    package: &SpielordersPackage,
+    query_text: OptionalText<'_>,
+    fact: Option<VendorFact>,
+    flags: u32,
+    sort: SpielordersConstant,
+    descending: i32,
+    token: u64,
+    list: &mut Option<Box<SpielordersList>>,
+    outcome: Option<&mut Option<Box<SpielordersEntries>>>,
+) -> SpielordersResult {
     fallible(outcome, |entries| {
         let session = Session::new(token);
         let result = (|| {
@@ -218,9 +478,13 @@ pub extern "C" fn spielorders_package_vendors(
                 VendorVisibility::All
             };
             let found = settle(
-                package
-                    .healthy(entries)?
-                    .vendors_matching(&SearchQuery::new(&text, case(flags)), visibility),
+                package.healthy(entries)?.vendors_matching(
+                    &match fact {
+                        Some(fact) => SearchQuery::new(&text, case(flags)).in_vendor_fact(fact),
+                        None => SearchQuery::new(&text, case(flags)),
+                    },
+                    visibility,
+                ),
                 &session,
                 Subject::Vendor,
                 entries,
@@ -279,9 +543,36 @@ pub extern "C" fn spielorders_package_orders_of_vendor(
     })
 }
 
+/// The Order Groups of `project`, or of the Orders with no Project for NULL or "", each
+/// row read with `SPIELORDERS_VALUE_FIELD_*`. A group belongs to the Project of the Orders
+/// that use it, so these are the suggestions for an Order in that Project, and the same
+/// name under two Projects is two groups. `project` matches as reuse does: trimmed and
+/// case-insensitively.
+#[unsafe(no_mangle)]
+pub extern "C" fn spielorders_package_project_groups(
+    package: &SpielordersPackage,
+    project: OptionalText<'_>,
+    list: &mut Option<Box<SpielordersList>>,
+    outcome: Option<&mut Option<Box<SpielordersEntries>>>,
+) -> SpielordersResult {
+    fallible(outcome, |entries| {
+        let result = (|| {
+            let project = query(project)?;
+            let groups = package
+                .healthy(entries)?
+                .contents
+                .order_groups_of(Some(project.as_str()));
+            Ok(value_list(groups))
+        })();
+        deliver(result, list)
+    })
+}
+
 /// The current values of one reusable-value field (SPIELORDERS_ORDER_FIELD_ORDERER,
 /// _ORDERING_INSTITUTION, _PROJECT, or _ORDER_GROUP), each row read with
-/// `SPIELORDERS_VALUE_FIELD_*`.
+/// `SPIELORDERS_VALUE_FIELD_*`. Order Groups are every group name across Projects, a
+/// name used under several counted once; spielorders_package_project_groups gives one
+/// Project's groups.
 #[unsafe(no_mangle)]
 pub extern "C" fn spielorders_package_values(
     package: &SpielordersPackage,
@@ -307,22 +598,7 @@ pub extern "C" fn spielorders_package_values(
                 Subject::Order,
                 entries,
             )?;
-            Ok(SpielordersList::of(
-                values
-                    .into_iter()
-                    .map(|value| Row {
-                        damaged: false,
-                        path: CString::default(),
-                        facts: Facts::of(vec![
-                            (SPIELORDERS_VALUE_FIELD_VALUE, value.value),
-                            (
-                                SPIELORDERS_VALUE_FIELD_USAGE_COUNT,
-                                value.usage_count.to_string(),
-                            ),
-                        ]),
-                    })
-                    .collect(),
-            ))
+            Ok(value_list(values))
         })();
         deliver(result, list)
     })
@@ -371,4 +647,24 @@ pub extern "C" fn spielorders_list_path(list: &SpielordersList, index: i64) -> P
 #[unsafe(no_mangle)]
 pub extern "C" fn spielorders_list_free(list: Option<Box<SpielordersList>>) {
     quietly((), || drop(list));
+}
+
+/// One row per reusable value, with how many healthy Orders use it.
+fn value_list(values: Vec<crate::canonical::ReusableValueProjection>) -> SpielordersList {
+    SpielordersList::of(
+        values
+            .into_iter()
+            .map(|value| Row {
+                damaged: false,
+                path: CString::default(),
+                facts: Facts::of(vec![
+                    (SPIELORDERS_VALUE_FIELD_VALUE, value.value),
+                    (
+                        SPIELORDERS_VALUE_FIELD_USAGE_COUNT,
+                        value.usage_count.to_string(),
+                    ),
+                ]),
+            })
+            .collect(),
+    )
 }

@@ -11,6 +11,10 @@ if [[ "$(uname -s)" == Darwin ]]; then
   native=(xcodebuild -project apps/macos/SpielOrders.xcodeproj -scheme SpielOrders
     -destination 'platform=macOS,arch=arm64' -quiet)
 
+  # Replace generated bundles, rather than overlaying obsolete embedded resources.
+  rm -rf target/native/Build/Products/Debug/SpielOrders.app
+  rm -rf target/native-validation/Build/Products/Release/SpielOrders.app
+
   # Decision source: Desktop acceptance.
   "${native[@]}" -derivedDataPath target/native -configuration Debug build-for-testing
   "${native[@]}" -derivedDataPath target/native-validation -configuration Release build \
@@ -30,36 +34,20 @@ if [[ "$(uname -s)" == Darwin ]]; then
     exit 1
   fi
 
-  cli_bundle="$application/Contents/Helpers/SpielOrdersCLI.app"
-  cli="$cli_bundle/Contents/MacOS/spielorders"
-  test -L "$cli"
-  test "$(readlink "$cli")" = "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$cli_bundle/Contents/Info.plist")"
-  backend="$cli_bundle/Contents/Helpers/spielorders-backend"
-  test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$cli_bundle/Contents/Info.plist")" = com.spielsoft.SpielOrders.Validation.CLI
-  codesign --verify --strict "$cli_bundle"
-  codesign --verify --strict "$backend"
+  test ! -e "$application/Contents/Helpers"
+  cargo build -q -p spielorders-cli --release --locked
+  cli=target/release/spielorders
+  codesign --verify --strict "$cli"
   cli_entitlements=target/native-validation/cli-entitlements.plist
-  backend_entitlements=target/native-validation/cli-backend-entitlements.plist
-  codesign --display --entitlements - --xml "$cli_bundle" > "$cli_entitlements"
-  codesign --display --entitlements - --xml "$backend" > "$backend_entitlements"
-  test "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.app-sandbox' "$cli_entitlements")" = true
-  test "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.files.user-selected.read-write' "$cli_entitlements")" = true
-  test "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.files.bookmarks.app-scope' "$cli_entitlements")" = true
-  if /usr/libexec/PlistBuddy -c 'Print :com.apple.security.inherit' "$cli_entitlements" >/dev/null 2>&1; then
-    echo "external CLI launcher must own its sandbox" >&2
-    exit 1
+  codesign --display --entitlements - --xml "$cli" > "$cli_entitlements"
+  if [[ -s "$cli_entitlements" ]]; then
+    for key in app-sandbox inherit; do
+      if [[ "$(/usr/libexec/PlistBuddy -c "Print :com.apple.security.$key" "$cli_entitlements" 2>/dev/null || true)" == true ]]; then
+        echo "standalone CLI must run with ordinary user permissions" >&2
+        exit 1
+      fi
+    done
   fi
-  test "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.app-sandbox' "$backend_entitlements")" = true
-  test "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.inherit' "$backend_entitlements")" = true
-  diff -qr crates/spielorders/agent-guidance "$cli_bundle/Contents/Resources/agent-guidance"
-  "$cli" --version
-  "$cli" agent defaults --quiet
-  # Agents may reach the CLI through a link placed on PATH, outside its bundle.
-  path_link=target/native-validation/path-link
-  rm -rf "$path_link"
-  mkdir -p "$path_link"
-  ln -s "$PWD/$cli" "$path_link/spielorders"
-  "$path_link/spielorders" agent defaults --quiet
 
   if [[ "${SPIELORDERS_EXCLUSIVE_UI:-0}" == 1 ]]; then
     "${native[@]}" -derivedDataPath target/native -configuration Debug test-without-building

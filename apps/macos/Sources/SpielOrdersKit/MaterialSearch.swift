@@ -30,7 +30,8 @@ struct MaterialHit: Sendable {
 
 public struct MaterialBatch: Sendable {
     let provider = "spotlight"
-    let state: Int32
+    /// Whether the provider looked at everything in scope, as a `SPIELORDERS_PROVIDER_STATE_*`.
+    public let state: Int32
     let hits: [MaterialHit]
     let diagnostics: [String]
     init(state: Int32, hits: [MaterialHit] = [], diagnostics: [String] = []) {
@@ -45,15 +46,24 @@ public struct MaterialMatch: Sendable, Identifiable {
     let path: FileSystemPath
     let orderPath: FileSystemPath
     public var url: URL { path.url }
-    public var orderDirectory: URL { orderPath.url }
     public let relativePath: String
     public let filename: String
+    /// The file's kind in the provider's own words, or "".
+    public let kind: String
+    public let modified: Date?
 }
 
 public struct MaterialAnswer: Sendable {
+    /// Read only by the session, which joins it to the Orders for Folder Contents.
+    let search: LibraryHandle<SpielordersSearch>
     public let state: Int32
     public let matches: [MaterialMatch]
     public let diagnostics: [String]
+
+    /// The files found in `row`'s Order Directory, most relevant first.
+    public func matches(in row: OrderRow) -> [MaterialMatch] {
+        matches.filter { $0.orderPath == row.path }
+    }
 }
 
 extension PackageSession {
@@ -66,9 +76,9 @@ extension PackageSession {
     public func materialSearch(_ batch: MaterialBatch, cancellation: LibraryCancellation) throws -> MaterialAnswer {
         guard let package else { throw SessionAccessError.reopenRequired }
         var hits: UnsafeMutablePointer<SpielordersHits>?
-        var search: UnsafeMutablePointer<SpielordersSearch>?
+        var created: UnsafeMutablePointer<SpielordersSearch>?
         var outcome: UnsafeMutablePointer<SpielordersEntries>?
-        defer { spielorders_search_free(search); spielorders_hits_free(hits) }
+        defer { spielorders_hits_free(hits) }
         let made = try withInterfaceText(batch.provider) { spielorders_hits_new($0, &hits) }
         _ = try checked(made, nil)
         guard let hits else { throw LibraryFailure(result: SPIELORDERS_RESULT_INTERNAL, entries: []) }
@@ -87,21 +97,27 @@ extension PackageSession {
             _ = try checked(added, nil)
         }
         let result = spielorders_package_search_material(package.pointer, hits, batch.state,
-                                                         cancellation.token, &search, &outcome)
+                                                         cancellation.token, &created, &outcome)
+        let owner = created.map { LibraryHandle($0, free: spielorders_search_free) }
         _ = try checked(result, outcome)
-        guard let search else { throw LibraryFailure(result: SPIELORDERS_RESULT_INTERNAL, entries: []) }
+        guard let owner else { throw LibraryFailure(result: SPIELORDERS_RESULT_INTERNAL, entries: []) }
+        let search = owner.pointer
         let matches = (0..<spielorders_search_count(search)).map { index in
-            MaterialMatch(
+            let modified = Double(String(cString: spielorders_search_modified(search, index)))
+            return MaterialMatch(
                 id: index,
                 path: FileSystemPath(fileSystemRepresentation: spielorders_search_path(search, index)),
                 orderPath: FileSystemPath(fileSystemRepresentation: spielorders_search_order_directory(search, index)),
                 relativePath: String(cString: spielorders_search_relative_path(search, index)),
-                filename: String(cString: spielorders_search_filename(search, index)))
+                filename: String(cString: spielorders_search_filename(search, index)),
+                kind: String(cString: spielorders_search_kind(search, index)),
+                modified: modified.map(Date.init(timeIntervalSince1970:)))
         }
         let diagnostics = (0..<spielorders_search_diagnostic_count(search)).map {
             String(cString: spielorders_search_diagnostic(search, $0))
         }
-        return MaterialAnswer(state: spielorders_search_state(search), matches: matches, diagnostics: diagnostics)
+        return MaterialAnswer(search: owner, state: spielorders_search_state(search), matches: matches,
+                              diagnostics: diagnostics)
     }
 }
 

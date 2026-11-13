@@ -25,7 +25,7 @@
       "status": "in_preparation",
       "vendor": "Tarnwick",
       "orderer": "Ada Lovelace",
-      "ordering_institution": "Northwind",
+      "ordering_institution": "Example Institute",
       "currency": "USD",
       "project": "Telescope",
       "order_group": "Summer build",
@@ -42,7 +42,8 @@
           "quantity": "4",
           "unit_price": "3",
           "catalog_number": "F220APC",
-          "total": "12"
+          "total": "12",
+          "notes": null
         },
         {
           "position": 2,
@@ -50,7 +51,8 @@
           "quantity": "2",
           "unit_price": "84.5",
           "catalog_number": null,
-          "total": "169"
+          "total": "169",
+          "notes": null
         }
       ],
       "readme": {

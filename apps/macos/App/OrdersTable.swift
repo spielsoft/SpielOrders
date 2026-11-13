@@ -45,6 +45,7 @@ struct OrdersTable: NSViewRepresentable {
         table.doubleAction = #selector(Coordinator.openClicked(_:))
         table.open = { [weak coordinator = context.coordinator] in coordinator?.openSelected() }
         table.remove = { [weak model] in model?.changeOrderDirectory(.remove) }
+        table.removals = model.removals
         table.headerView?.menu = context.coordinator.columnsMenu
         table.menu = context.coordinator.rowMenu
         context.coordinator.table = table
@@ -132,26 +133,42 @@ struct OrdersTable: NSViewRepresentable {
             let value = rows[row]
             let damagedTitle = value.damage != nil && column == .title
             cell.imageView?.isHidden = !damagedTitle
-            cell.toolTip = damagedTitle ? value.damage : nil
-            let raw = value.values[column.field] ?? ""
-            if damagedTitle { cell.textField?.stringValue = value.directoryName }
-            else if column == .total { cell.textField?.stringValue = Money.display(raw) }
-            else { cell.textField?.stringValue = raw }
+            cell.toolTip = damagedTitle ? "This directory needs attention. Open Diagnostics for details." : nil
+            cell.textField?.stringValue = damagedTitle ? value.directoryName : display(column, of: value)
             cell.textField?.setAccessibilityLabel(column.label)
             cell.textField?.setAccessibilityIdentifier("\(rowIdentifier(value)).\(column.rawValue)")
             return cell
+        }
+
+        /// A Status by its label, a date in the short style, a Total as money, and every
+        /// other value as the library gives it.
+        private func display(_ column: OrderColumn, of row: OrderRow) -> String {
+            let value = row.values[column.field] ?? ""
+            switch column {
+            case .status: return OrderStatus.label(value)
+            case .date: return ShortDate.display(value)
+            case .total: return Money.display(value, currency: row.values[OrderColumn.currency.field] ?? "")
+            default: return value
+            }
         }
 
         private func rowIdentifier(_ row: OrderRow) -> String {
             "orders.row." + (row.damage == nil ? row.id : "damaged:" + row.directoryName)
         }
 
-        func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { !model.busy }
+        func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
+            if model.committing, rows.indices.contains(row) {
+                let id = rows[row].id
+                _ = model.deferNavigation { [model] in model.selectOrder(id) }
+                return false
+            }
+            return !model.busy
+        }
 
         func tableViewSelectionDidChange(_ notification: Notification) {
             guard !updating, let table else { return }
             let id = rows.indices.contains(table.selectedRow) ? rows[table.selectedRow].id : nil
-            model.selectOrder(id, revealInFinder: false)
+            model.selectOrder(id)
             updating = true
             synchronizeSelection()
             updating = false
@@ -212,7 +229,7 @@ struct OrdersTable: NSViewRepresentable {
                 open.target = self
                 open.setAccessibilityIdentifier("\(rowIdentifier(row)).open")
                 menu.addItem(open)
-                let item = NSMenuItem(title: "Reveal in Finder", action: #selector(reveal(_:)), keyEquivalent: "")
+                let item = NSMenuItem(title: "Show in Finder", action: #selector(reveal(_:)), keyEquivalent: "")
                 item.representedObject = row.id
                 item.target = self
                 item.setAccessibilityIdentifier("\(rowIdentifier(row)).reveal")
@@ -220,7 +237,7 @@ struct OrdersTable: NSViewRepresentable {
                 if row.damage == nil {
                     for (title, action, selector) in [
                         ("Align Directory Name…", "align", #selector(align(_:))),
-                        ("Remove Order…", "remove", #selector(remove(_:))),
+                        ("Remove Order", "remove", #selector(remove(_:))),
                         ("Move to Trash…", "trash", #selector(trash(_:))),
                     ] {
                         if action == "trash" { menu.addItem(.separator()) }
@@ -269,7 +286,7 @@ struct OrdersTable: NSViewRepresentable {
 
         @objc private func reveal(_ sender: NSMenuItem) {
             guard let id = sender.representedObject as? String else { return }
-            model.selectOrder(id, revealInFinder: true)
+            model.revealOrder(id)
         }
 
         @objc private func align(_ sender: NSMenuItem) {
@@ -284,10 +301,25 @@ struct OrdersTable: NSViewRepresentable {
     }
 }
 
-/// Return opens the selected Order in its editor.
+/// Return focuses the selected Order's detail; Delete removes the Order, and Undo and Redo
+/// follow Remove Order's history while it has any.
 final class OrdersTableView: NSTableView {
     var open: () -> Void = {}
     var remove: () -> Void = {}
+    var removals: UndoManager?
+
+    override var undoManager: UndoManager? {
+        guard let removals, removals.canUndo || removals.canRedo else { return super.undoManager }
+        return removals
+    }
+
+    @objc func undo(_ sender: Any?) {
+        undoManager?.undo()
+    }
+
+    @objc func redo(_ sender: Any?) {
+        undoManager?.redo()
+    }
 
     override func keyDown(with event: NSEvent) {
         guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else {

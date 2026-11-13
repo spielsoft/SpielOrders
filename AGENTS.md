@@ -17,11 +17,18 @@ owns what.
   and the CLI response contracts. A declaration the Swift app consumes changes only by
   addition; a breaking change needs the owner's approval.
 - Nothing is versioned before release. A change revises the existing contract in place.
+- Project text and examples use fictional, neutral data, not the owner's professional
+  affiliations, colleagues, research projects, or apparatus labels. The owner's name
+  and general science or physics examples are welcome. Do not import other personal
+  profile facts into the repository.
 - Production code never exists to serve tests: no target, module, visibility, parameter,
   default, branch, field, conformance, or hook that only tests reach. Tests express
   behavior through a public interface and assert outcomes, never how an action was
   performed. The `test-cleanup` skill is the standard a test is kept to.
-- A name is as short as it can be while still conveying its intent, and no shorter.
+- A name conveys its intent and disambiguates within its access context, not the whole
+  repository. Prefer one or two words; use more when meaning requires them, with no hard
+  word limit. Let the surrounding type, module, function, code, and comments supply
+  context rather than repeating it in the name.
 - The owner's data and machine come first. Never touch the real archive or the production
   app identity. Do not generate synthetic load. Take over the pointer, keyboard, or
   foreground only with the owner's agreement; driving the app in the background through

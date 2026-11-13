@@ -37,6 +37,7 @@ mod reads;
 mod removal;
 mod repair;
 mod repair_cases;
+mod restoration;
 mod search;
 mod semantic_repair;
 mod supporting_material;
@@ -81,7 +82,8 @@ pub(crate) mod model {
         readme::{Diagnostic, DiagnosticEvidence, Location, Severity},
         repair_cases::RepairAction,
         search::{
-            CaseSensitivity, OrderListEntry, ReusableValueKind, SearchQuery, VendorVisibility,
+            CaseSensitivity, OrderFact, OrderListEntry, ReusableValueKind, SearchQuery, VendorFact,
+            VendorVisibility,
         },
         supporting_material::{
             Completeness, PartialReason, ProviderAnswer, ProviderDiagnostic, ProviderHit,

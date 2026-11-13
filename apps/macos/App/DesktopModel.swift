@@ -4,15 +4,16 @@ import Observation
 import SpielOrdersKit
 
 @MainActor @Observable final class DesktopModel {
-    enum Destination: String, CaseIterable { case orders = "Orders", vendors = "Vendors", packageReadme = "Package README" }
     var destination = Destination.orders
     var ordersRevision = 0
     var orders: [OrderRow] = [] { didSet { ordersRevision &+= 1 } }
     var orderCount = 0
     var selectedOrderID: String?
+    var orderContext: OrderRow?
     var inspection: OrderInspection?
-    var inspectorVisible = UserDefaults.standard.object(forKey: "inspectorVisible") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(inspectorVisible, forKey: "inspectorVisible") }
+    /// Whether the destination sidebar shows while a Package is open.
+    var sidebarVisible = UserDefaults.standard.object(forKey: "sidebarVisible") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(sidebarVisible, forKey: "sidebarVisible") }
     }
     var orderSortField: Int32 = OrderColumn(rawValue: UserDefaults.standard.string(forKey: "orderSortColumn") ?? "")?.field ?? -1 {
         didSet {
@@ -24,7 +25,10 @@ import SpielOrdersKit
         didSet { UserDefaults.standard.set(orderSortDescending, forKey: "orderSortDescending") }
     }
     var vendors: [VendorRow] = []
+    /// How many Vendors the list holds before search, under Include Hidden Vendors.
+    var vendorCount = 0
     var selectedVendorID: String?
+    var vendorContext: VendorRow?
     var vendorDetails: VendorDetails?
     var includeHiddenVendors = UserDefaults.standard.object(forKey: "includeHiddenVendors") as? Bool ?? false {
         didSet { UserDefaults.standard.set(includeHiddenVendors, forKey: "includeHiddenVendors") }
@@ -40,13 +44,16 @@ import SpielOrdersKit
     var rawText = ""
     var rawOriginal = ""
     var rawDirty: Bool { expertDocument != nil && rawText != rawOriginal }
-    var recoverableDirectory: URL?
-    var text = ""
-    var original = ""
-    var readmeDocumentID = UUID()
-    var editingOrder: OrderRow?
+    /// The README the window shows, the Package's or the selected Order's.
+    var readme: ReadmeSession?
     var root: URL?
-    var message = ""
+    /// Package and listing warnings, by the sidebar destination they concern.
+    var warnings: [Destination: [Notice]] = [:]
+    /// Why records cannot be edited until the Package is reloaded.
+    var reloadReason: Notice?
+    var starting = true
+    var activity = "Working…"
+    private var documentPending = false
     let dialogs = WindowDialogs()
     private var operationBusy = false
     var navigationPending = false
@@ -55,140 +62,191 @@ import SpielOrdersKit
         get { operationBusy || navigationPending || dialogs.isPresenting }
         set { operationBusy = newValue }
     }
-    var writable = false
-    var query = ""
-    var caseSensitive = false
-    var spotlightMode = false
+    var search = RecordQuery()
     var refreshingLookup = false
-    var searchAnswer: MaterialAnswer?
-    var searching = false
+    let contents = FolderContents()
     var orderEditor: RecordEditor?
     var vendorEditor: RecordEditor?
+    var selectionRead: SelectionRead?
     var vendorSheet: RecordEditor? {
         didSet { if vendorSheet == nil { dialogs.dismissVendor() } }
     }
     var vendorChoices: [String] = []
-    var reusableValues: [Int32: [String]] = [:]
+    /// The current values of each reusable-value fact, offered as suggestions and listed by
+    /// the value destinations.
+    var reusableValues: [Int32: [ReusableValue]] = [:]
+    /// The Package's Projects with their Order Groups, listed by the Projects destination.
+    var projects: [ProjectGroups] = []
     var library = PackageSession()
     private let preferences = UserDefaults.standard
     var folder: AuthorizedFolder?
+    let recents = RecentPackages()
+    /// Remove Order's Undo and Redo, kept apart from the editors' history; see `RemovedOrder`.
+    let removals = UndoManager()
     var work: OwnedOperation?
-    private var activeSearch: SpotlightSearch?
+    var committing = false
+    var continuingSave = false
+    var afterCommit: (() -> Void)?
+    var continueAfterFailure = false
     private var lookupRevision = 0
-    var readmeDirty: Bool { text != original }
     var dirty: Bool {
-        readmeDirty || rawDirty || recoveryEditor?.dirty == true || [orderEditor, vendorEditor, vendorSheet].contains { $0?.dirty == true }
+        readme?.draft.unsaved == true || rawDirty || recoveryEditor?.dirty == true
+            || [orderEditor, vendorEditor, vendorSheet].contains { $0?.dirty == true }
     }
-    var canSave: Bool {
-        if expertDocument != nil { return !busy && rawDirty }
-        if recoveryEditor != nil { return !busy }
-        return recordEditor != nil ? canSaveRecord : !busy && editingReadme && writable && readmeDirty
-    }
-    var editingReadme: Bool { destination == .packageReadme || editingOrder != nil }
+    /// File → Save writes only the expert document editor's raw JSON.
+    var canSave: Bool { !busy && rawDirty }
 
     func restore() {
-        guard let bookmark = preferences.data(forKey: "packageBookmark") else { return }
+        guard let bookmark = preferences.data(forKey: "packageBookmark") else { starting = false; return }
         do { open(try AuthorizedFolder.restore(bookmark), preserveSelection: false) }
-        catch { message = "Package access needs renewal. Open the Package again.\n" + error.localizedDescription }
+        catch {
+            starting = false
+            alert("Package access needs renewal", "Open the Package again to continue.",
+                  details: error.localizedDescription, identifier: "package.access")
+        }
     }
 
     func choosePackage() {
+        if deferNavigation({ [self] in choosePackage() }) { return }
         guard !busy, confirmDiscard(retry: { [self] in choosePackage() }) else { return }
         let picker = NSOpenPanel()
         picker.canChooseDirectories = true
         picker.canChooseFiles = false
+        picker.treatsFilePackagesAsDirectories = true
         picker.allowsMultipleSelection = false
         picker.prompt = "Open Package"
         picker.message = "Choose a SpielOrder Package."
         picker.setAccessibilityLabel("Open Package")
         picker.setAccessibilityIdentifier("package.open.dialog")
+        activity = "Opening Package…"
         busy = true
         Task {
             let response = await dialogs.chooseFolder(picker)
             busy = false
             guard response == .OK, let url = picker.url else { return }
             do { open(try AuthorizedFolder(url), preserveSelection: false) }
-            catch { message = error.localizedDescription }
+            catch { refuseAccess(error) }
         }
     }
 
-    func reopenPackage() {
-        guard !busy, let folder, confirmDiscard(retry: { [self] in reopenPackage() }) else { return }
-        open(folder, preserveSelection: true)
+    /// Opens a recently opened Package through the same guarded load as Open Package. One that
+    /// is missing or no longer accessible says so and can be removed from the list.
+    func openRecent(_ recent: RecentPackage) {
+        if deferNavigation({ [self] in openRecent(recent) }) { return }
+        guard !busy, confirmDiscard(retry: { [self] in openRecent(recent) }) else { return }
+        do {
+            let selected = try AuthorizedFolder.restore(recent.bookmark)
+            guard try selected.url.checkResourceIsReachable() else { throw CocoaError(.fileNoSuchFile) }
+            open(selected, preserveSelection: false)
+        } catch {
+            offerRemoval(of: recent)
+        }
+    }
+
+    private func offerRemoval(of recent: RecentPackage) {
+        busy = true
+        Task {
+            let remove = await confirm("“\(recent.name)” can’t be opened.",
+                "It may have been moved, renamed, or deleted, or SpielOrders can no longer access it. "
+                    + "Remove it from the recent Packages?",
+                identifier: "package.recent.missing", approve: "Remove from List")
+            busy = false
+            if remove { recents.remove(recent) }
+        }
+    }
+
+    /// Finder supplies a folder grant just as the open panel does. Retain it before
+    /// waiting for existing work, then use the same guarded Package load.
+    func openDocument(_ urls: [URL]) {
+        guard urls.count == 1, let url = urls.first, url.isFileURL else {
+            documentRefusal("Open one Package at a time.")
+            return
+        }
+        guard !navigationPending, !dialogs.isPresenting else {
+            documentRefusal("Finish the current dialog or navigation, then open the Package again.")
+            dialogs.focus()
+            return
+        }
+        do {
+            let selected = try AuthorizedFolder(url)
+            documentPending = true
+            navigationPending = true
+            Task {
+                if starting { await waitForWork() }
+                else { await settle() }
+                navigationPending = false
+                documentPending = false
+                openDocument(selected)
+            }
+        } catch {
+            documentRefusal("Folder access could not be authorized. Use File → Open Package to choose it again.")
+        }
+    }
+
+    private func openDocument(_ selected: AuthorizedFolder) {
+        guard !busy else {
+            starting = false
+            documentRefusal("Another operation started. Finish it, then open the Package again.")
+            return
+        }
+        guard confirmDiscard(retry: { [self] in openDocument(selected) }) else { return }
+        open(selected, preserveSelection: false)
+    }
+
+    private func documentRefusal(_ detail: String) {
+        if work == nil { starting = false }
+        Task { await dialogs.notify("Package not opened", detail, identifier: "package.openRefusal") }
+    }
+
+    func reloadPackage() {
+        if deferNavigation({ [self] in reloadPackage() }) { return }
+        guard !busy, let folder else { return }
+        guard dirty else { open(folder, preserveSelection: true); return }
+        busy = true
+        Task {
+            let reload = await confirm("Reload Package?", "Unwritten changes will be discarded. Changes already written are kept.",
+                identifier: "package.reopen", approve: "Reload", destructive: true)
+            busy = false
+            if reload { open(folder, preserveSelection: true) }
+        }
     }
 
     func navigate(to destination: Destination) {
+        if destination == self.destination, !diagnosticWorkspace { return }
+        if deferNavigation({ [self] in navigate(to: destination) }) { return }
         guard !busy, canBrowseRecords,
-              (destination != self.destination || editingOrder != nil || recordEditor != nil || diagnosticWorkspace),
+              (destination != self.destination || diagnosticWorkspace),
               confirmDiscard(retry: { [self] in navigate(to: destination) }) else { return }
-        discardEditors()
+        if destination != .orders { restartFolderContents() }
+        if destination.searchable, !search.scope.isOffered(in: destination) { search.scope = .allFields }
         if destination == .packageReadme {
-            beginReadmeEdit(order: nil)
+            openPackageReadme()
             return
         }
-        text = original
-        editingOrder = nil
+        discardEditors()
         self.destination = destination
-        if destination != .packageReadme { refreshLookup() }
+        refreshLookup()
     }
 
-    func editOrderReadme(_ row: OrderRow) {
-        guard !busy, row.damage == nil, confirmDiscard(retry: { [self] in editOrderReadme(row) }) else { return }
-        beginReadmeEdit(order: row)
-    }
-
-    private func beginReadmeEdit(order: OrderRow?) {
-        guard let retainedFolder = folder else { return }
+    /// Reveals an Order's directory once the library still finds it.
+    func revealOrder(_ id: String?) {
+        if deferNavigation({ [self] in revealOrder(id) }) { return }
+        guard !busy, let retainedFolder = folder, let row = orderRow(id) else { return }
         busy = true
         let cancellation = LibraryCancellation()
         work = OwnedOperation(kind: .read) { [self] in
             defer { busy = false; withExtendedLifetime(retainedFolder) {} }
             do {
-                let loaded = try await withTaskCancellationHandler {
-                    if let order { return try await library.editOrderReadme(order, cancellation: cancellation) }
-                    return try await library.editPackageReadme(cancellation: cancellation)
-                } onCancel: { cancellation.request() }
-                try Task.checkCancellation()
-                discardEditors()
-                editingOrder = order
-                readmeDocumentID = UUID()
-                destination = order == nil ? .packageReadme : .orders
-                text = loaded
-                original = loaded
-                writable = await library.readmeWritable
-                message = writable ? "" : "README is unreadable. Reopen the Package before editing."
-            } catch { if !Task.isCancelled { message = "Couldn’t open the README.\n" + error.localizedDescription } }
-        }
-    }
-
-    func backToOrders() {
-        guard !busy, let order = editingOrder, confirmDiscard(retry: { [self] in backToOrders() }) else { return }
-        text = original
-        editingOrder = nil
-        selectedOrderID = nil
-        selectOrder(order.id, revealInFinder: false)
-    }
-
-    func selectOrder(_ id: String?, revealInFinder: Bool) {
-        guard !busy, (id != selectedOrderID || revealInFinder), confirmDiscard(retry: { [self] in selectOrder(id, revealInFinder: revealInFinder) }) else { return }
-        selectedOrderID = id
-        inspection = nil
-        message = ""
-        guard let row = orders.first(where: { $0.id == id }), let retainedFolder = folder else { return }
-        busy = true
-        let cancellation = LibraryCancellation()
-        work = OwnedOperation(kind: .read) { [self] in
-            defer { busy = false; withExtendedLifetime(retainedFolder) {} }
-            do {
-                let details = try await withTaskCancellationHandler {
+                _ = try await withTaskCancellationHandler {
                     try await library.inspectOrder(row, cancellation: cancellation)
                 } onCancel: { cancellation.request() }
                 try Task.checkCancellation()
-                inspection = details
-                if revealInFinder { reveal(row.directory) }
+                reveal(row.directory)
             } catch {
-                selectedOrderID = nil
-                message = "Couldn’t read this Order. Reopen the Package to refresh.\n" + error.localizedDescription
+                if !Task.isCancelled {
+                    alert("The Order couldn’t be shown in Finder", "Reload the Package, then try again.",
+                          details: error.localizedDescription, identifier: "order.reveal")
+                }
             }
         }
     }
@@ -202,52 +260,33 @@ import SpielOrdersKit
             defer { busy = false; withExtendedLifetime(retainedFolder) {} }
             do {
                 let listed = try await withTaskCancellationHandler {
-                    try await library.orders(query: query, caseSensitive: caseSensitive, sortField: field, descending: descending, cancellation: cancellation)
+                    try await searchOrders(library, search, sortField: field, descending: descending,
+                                           cancellation: cancellation)
                 } onCancel: { cancellation.request() }
                 try Task.checkCancellation()
-                let row = listed.retainingSelection(orders.first { $0.id == selectedOrderID })
+                let row = listed.retainingSelection(orderContext ?? orders.first { $0.id == selectedOrderID })
+                    ?? (!search.text.isEmpty || orderEditor != nil ? orderContext : nil)
                 orderSortField = field
                 orderSortDescending = descending
                 orders = listed.rows
-                message = listed.notices.joined(separator: "\n")
+                await showListing(listed.notices, of: .orders, session: library)
                 selectedOrderID = row?.id
-                inspection = nil
-                if let row {
+                if orderEditor == nil { inspection = nil }
+                if let row, orderEditor == nil {
                     do {
                         inspection = try await withTaskCancellationHandler {
                             try await library.inspectOrder(row, cancellation: cancellation)
                         } onCancel: { cancellation.request() }
                     } catch {
                         selectedOrderID = nil
-                        message += "\nThe selection changed. Reopen the Package to refresh.\n" + error.localizedDescription
+                        warn(.orders, "The selected Order couldn’t be read. Reload the Package.", error: error)
                     }
                 }
-            } catch { if !Task.isCancelled { message = "Couldn’t sort Orders.\n" + error.localizedDescription } }
-        }
-        return true
-    }
-
-    func selectVendor(_ id: String?) {
-        guard !busy, id != selectedVendorID, confirmDiscard(retry: { [self] in selectVendor(id) }) else { return }
-        selectedVendorID = id
-        vendorDetails = nil
-        message = ""
-        guard let row = vendors.first(where: { $0.id == id }), let retainedFolder = folder else { return }
-        busy = true
-        let cancellation = LibraryCancellation()
-        work = OwnedOperation(kind: .read) { [self] in
-            defer { busy = false; withExtendedLifetime(retainedFolder) {} }
-            do {
-                let details = try await withTaskCancellationHandler {
-                    try await library.inspectVendor(row, cancellation: cancellation)
-                } onCancel: { cancellation.request() }
-                try Task.checkCancellation()
-                vendorDetails = details
             } catch {
-                selectedVendorID = nil
-                message = "Couldn’t read this Vendor. Reopen the Package to refresh.\n" + error.localizedDescription
+                if !Task.isCancelled { warn(.orders, "Couldn’t sort Orders.", error: error) }
             }
         }
+        return true
     }
 
     func changeVendorList(includeHidden: Bool, field: Int32, descending: Bool) -> Bool {
@@ -259,88 +298,78 @@ import SpielOrdersKit
             defer { busy = false; withExtendedLifetime(retainedFolder) {} }
             do {
                 let listed = try await withTaskCancellationHandler {
-                    try await library.vendors(query: query, caseSensitive: caseSensitive, includeHidden: includeHidden, sortField: field, descending: descending,
-                                              cancellation: cancellation)
+                    try await searchVendors(library, search, includeHidden: includeHidden, sortField: field,
+                                            descending: descending, cancellation: cancellation)
                 } onCancel: { cancellation.request() }
+                let total = search.text.isEmpty ? listed.rows.count
+                    : try await countVendors(library, includeHidden: includeHidden, cancellation: cancellation)
                 try Task.checkCancellation()
+                vendorCount = total
                 includeHiddenVendors = includeHidden
                 vendorSortField = field
                 vendorSortDescending = descending
                 vendors = listed.rows
-                message = listed.notices.joined(separator: "\n")
+                await showListing(listed.notices, of: .vendors, session: library)
                 let row = vendors.first { $0.id == selectedVendorID }
-                selectedVendorID = row?.id
-                vendorDetails = nil
-                if let row {
+                if vendorEditor == nil {
+                    selectedVendorID = row?.id
+                    vendorDetails = nil
+                }
+                if let row, vendorEditor == nil {
                     do {
                         vendorDetails = try await withTaskCancellationHandler {
                             try await library.inspectVendor(row, cancellation: cancellation)
                         } onCancel: { cancellation.request() }
                     } catch {
                         selectedVendorID = nil
-                        message += "\nThe Vendor is no longer available.\n" + error.localizedDescription
+                        warn(.vendors, "The selected Vendor couldn’t be read. Reload the Package.", error: error)
                     }
                 }
-            } catch { if !Task.isCancelled { message = "Couldn’t list Vendors.\n" + error.localizedDescription } }
+            } catch {
+                if !Task.isCancelled { warn(.vendors, "Couldn’t list Vendors.", error: error) }
+            }
         }
         return true
     }
 
+    func setIncludeHiddenVendors(_ value: Bool) {
+        _ = changeVendorList(includeHidden: value, field: vendorSortField, descending: vendorSortDescending)
+    }
+
     func chooseInitialization() {
+        if deferNavigation({ [self] in chooseInitialization() }) { return }
         guard !busy, confirmDiscard(retry: { [self] in chooseInitialization() }) else { return }
         let picker = NSOpenPanel()
         picker.canChooseDirectories = true
         picker.canChooseFiles = false
+        picker.treatsFilePackagesAsDirectories = true
         picker.canCreateDirectories = true
         picker.allowsMultipleSelection = false
         picker.prompt = "Choose Package Folder"
         picker.setAccessibilityLabel("Choose Package Folder")
         picker.setAccessibilityIdentifier("package.initialize.dialog")
+        activity = "Preparing Package…"
         busy = true
         Task {
             guard await dialogs.chooseFolder(picker) == .OK, let url = picker.url else {
                 busy = false
                 return
             }
-            let configuration = NSAlert()
-            configuration.messageText = "Initialize Package?"
-            configuration.informativeText = url.lastPathComponent + "\nExisting user content is preserved. Directory names are relative to this folder; leave blank for the conventional defaults."
-            configuration.addButton(withTitle: "Initialize Package")
-            configuration.addButton(withTitle: "Cancel")
-            configuration.window.setAccessibilityLabel("Initialize Package")
-            configuration.window.setAccessibilityIdentifier("package.initialize.confirmation")
-            configuration.buttons[0].setAccessibilityIdentifier("package.initialize.confirm")
-            configuration.buttons[1].setAccessibilityIdentifier("package.initialize.cancel")
-            let orders = NSTextField(string: "")
-            orders.placeholderString = "Default Orders directory"
-            orders.setAccessibilityLabel("Orders directory")
-            orders.setAccessibilityIdentifier("package.initialize.ordersDirectory")
-            let removed = NSTextField(string: "")
-            removed.placeholderString = "Default Removed Orders directory"
-            removed.setAccessibilityLabel("Removed Orders directory")
-            removed.setAccessibilityIdentifier("package.initialize.removedDirectory")
-            let fields = NSStackView(views: [NSTextField(labelWithString: "Orders directory"), orders,
-                                           NSTextField(labelWithString: "Removed Orders directory"), removed])
-            fields.orientation = .vertical
-            fields.alignment = .leading
-            fields.spacing = 6
-            fields.frame = NSRect(x: 0, y: 0, width: 340, height: 104)
-            orders.widthAnchor.constraint(equalToConstant: 340).isActive = true
-            removed.widthAnchor.constraint(equalToConstant: 340).isActive = true
-            configuration.accessoryView = fields
-            configuration.window.initialFirstResponder = orders
-            let response = await dialogs.present(configuration)
+            await dialogs.waitForDismissal(of: picker)
+            guard let options = await dialogs.configurePackage(url) else {
+                busy = false
+                return
+            }
             busy = false
-            guard response == .alertFirstButtonReturn else { return }
             do {
-                initialize(try AuthorizedFolder(url), ordersPath: orders.stringValue, removedPath: removed.stringValue)
-            } catch { message = error.localizedDescription }
+                initialize(try AuthorizedFolder(url), ordersPath: options.orders, removedPath: options.removed)
+            } catch { refuseAccess(error) }
         }
     }
 
     private func initialize(_ selected: AuthorizedFolder, ordersPath: String, removedPath: String) {
+        activity = "Creating Package…"
         busy = true
-        message = ""
         let cancellation = LibraryCancellation()
         let candidate = PackageSession()
         work = OwnedOperation(kind: .mutation) { [self] in
@@ -353,106 +382,132 @@ import SpielOrdersKit
                 folder = selected
                 library = candidate
                 root = selected.url
-                recoverableDirectory = nil
+                reloadReason = nil
+                removals.removeAllActions()
                 discardEditors()
-                text = initialized.readmeText ?? ""
-                readmeDocumentID = UUID()
-                original = text
-                editingOrder = nil
-                writable = await candidate.readmeWritable && initialized.readmeText != nil
-                searchAnswer = nil
-                message = initialized.message
+                contents.stop()
+                let findings = initialized.notices + (await candidate.findings)
+                warnings = [.orders: Notice.list(findings)]
                 orders = []
                 orderCount = 0
-                query = ""
-                spotlightMode = false
+                search = RecordQuery()
                 selectedOrderID = nil
+                orderContext = nil
                 inspection = nil
                 vendors = []
+                vendorCount = 0
                 selectedVendorID = nil
+                vendorContext = nil
                 vendorDetails = nil
                 destination = .orders
-                let canBrowse = !(await candidate.diagnosticOnly)
-                canBrowseRecords = initialized.readmeText != nil && canBrowse
-                if initialized.readmeText != nil && canBrowse {
+                canBrowseRecords = initialized.canBrowseRecords
+                if canBrowseRecords {
                     do {
-                        let listed = try await candidate.orders(query: "", caseSensitive: false, sortField: orderSortField, descending: orderSortDescending,
-                                                                cancellation: cancellation)
+                        let listed = try await candidate.orders(query: "", caseSensitive: false, sortField: orderSortField,
+                                                                descending: orderSortDescending, cancellation: cancellation)
                         orders = listed.rows
                         orderCount = orders.count
-                        vendors = try await candidate.vendors(query: "", caseSensitive: false, includeHidden: includeHiddenVendors, sortField: vendorSortField,
-                                                              descending: vendorSortDescending, cancellation: cancellation).rows
-                        if !listed.notices.isEmpty { message += "\n" + listed.notices.joined(separator: "\n") }
+                        let listedVendors = try await candidate.vendors(query: "", caseSensitive: false,
+                                                                        includeHidden: includeHiddenVendors,
+                                                                        sortField: vendorSortField,
+                                                                        descending: vendorSortDescending,
+                                                                        cancellation: cancellation)
+                        vendors = listedVendors.rows
+                        vendorCount = vendors.count
+                        showWarnings(orders: findings + listed.notices, vendors: listedVendors.notices)
                     } catch {
-                        message += "\nThe Package is initialized, but its records could not be loaded. Reopen before continuing.\n" + error.localizedDescription
+                        requireReload(Notice("The Package was created, but its records couldn’t be listed.",
+                                             details: error.localizedDescription))
                     }
+                } else {
+                    requireReload(Notice("The Package was created, but it couldn’t be read back.",
+                                         details: initialized.message))
                 }
                 remember(selected)
-            } catch { message = "Couldn’t complete initialization.\n" + error.localizedDescription }
+            } catch {
+                alert("Couldn’t create the Package", details: error.localizedDescription, identifier: "package.create")
+            }
         }
     }
 
     private func remember(_ selected: AuthorizedFolder) {
-        do { preferences.set(try selected.bookmark(), forKey: "packageBookmark") }
-        catch { message += "\nAccess cannot be remembered: " + error.localizedDescription }
+        do {
+            let bookmark = try selected.bookmark()
+            preferences.set(bookmark, forKey: "packageBookmark")
+            recents.note(selected.url, bookmark: bookmark)
+        } catch {
+            preferences.removeObject(forKey: "packageBookmark")
+            alert("SpielOrders can’t reopen this Package by itself",
+                  "It stays open now. Next time, open it with File → Open Package.",
+                  details: error.localizedDescription, identifier: "package.remember")
+        }
+    }
+
+    /// A chosen folder the sandbox would not grant access to.
+    private func refuseAccess(_ error: Error) {
+        alert("Folder access could not be authorized", "Choose the folder again.",
+              details: error.localizedDescription, identifier: "package.access")
     }
 
     private func open(_ selected: AuthorizedFolder, preserveSelection: Bool) {
         guard !busy else { return }
+        activity = "Opening Package…"
         busy = true
-        message = ""
         let cancellation = LibraryCancellation()
         let candidate = PackageSession()
         let priorSelection = preserveSelection ? selectedOrderID : nil
         let priorVendorSelection = preserveSelection ? selectedVendorID : nil
         work = OwnedOperation(kind: .read) { [self] in
-            defer { busy = false }
+            defer { busy = false; if !documentPending { starting = false } }
             do {
-                let loaded = try await withTaskCancellationHandler {
+                _ = try await withTaskCancellationHandler {
                     try await candidate.open(selected.url, cancellation: cancellation)
                 } onCancel: { cancellation.request() }
-                let canWrite = await candidate.readmeWritable
                 var rows: [OrderRow] = []
                 var vendorRows: [VendorRow] = []
-                var notices: [String]
+                var orderNotices = await candidate.findings
+                var vendorNotices: [String] = []
                 let diagnosticOnly = await candidate.diagnosticOnly
-                if diagnosticOnly {
-                    notices = await candidate.findings
-                } else {
+                if !diagnosticOnly {
                     let listed = try await withTaskCancellationHandler {
                         try await candidate.orders(query: "", caseSensitive: false, sortField: orderSortField, descending: orderSortDescending,
                                                    cancellation: cancellation)
                     } onCancel: { cancellation.request() }
                     rows = listed.rows
-                    notices = listed.notices
-                    vendorRows = try await withTaskCancellationHandler {
+                    orderNotices += listed.notices
+                    let listedVendors = try await withTaskCancellationHandler {
                         try await candidate.vendors(query: "", caseSensitive: false, includeHidden: includeHiddenVendors, sortField: vendorSortField,
-                                                     descending: vendorSortDescending, cancellation: cancellation).rows
+                                                     descending: vendorSortDescending, cancellation: cancellation)
                     } onCancel: { cancellation.request() }
+                    vendorRows = listedVendors.rows
+                    vendorNotices = listedVendors.notices
                 }
+                // Reload keeps the Package README shown, read again.
+                let packageReadme = destination == .packageReadme
+                    ? try await candidate.readme(of: nil, cancellation: cancellation) : nil
                 try Task.checkCancellation()
                 folder = selected
                 library = candidate
                 root = selected.url
-                recoverableDirectory = nil
+                reloadReason = nil
+                if !preserveSelection { removals.removeAllActions() }
                 discardEditors()
-                text = loaded
-                readmeDocumentID = UUID()
-                original = loaded
-                editingOrder = nil
-                writable = canWrite
+                if let packageReadme { showReadme(packageReadme, of: nil) }
                 canBrowseRecords = !diagnosticOnly
-                searchAnswer = nil
+                contents.stop()
                 orders = rows
                 orderCount = rows.count
-                query = ""
-                spotlightMode = false
+                search = RecordQuery()
                 selectedOrderID = rows.first(where: { $0.id == priorSelection && $0.damage == nil })?.id
+                orderContext = rows.first { $0.id == selectedOrderID }
                 inspection = nil
                 vendors = vendorRows
+                vendorCount = vendorRows.count
                 selectedVendorID = vendorRows.first { $0.id == priorVendorSelection }?.id
+                vendorContext = vendorRows.first { $0.id == selectedVendorID }
                 vendorDetails = nil
-                message = notices.joined(separator: "\n")
+                warnings = [:]
+                showWarnings(orders: orderNotices, vendors: vendorNotices)
                 if diagnosticOnly {
                     diagnosis = try await candidate.diagnose(directory: nil, cancellation: cancellation)
                     diagnosticDirectory = nil
@@ -466,7 +521,7 @@ import SpielOrdersKit
                         } onCancel: { cancellation.request() }
                     } catch {
                         selectedOrderID = nil
-                        message += "\nThe selection is no longer available.\n" + error.localizedDescription
+                        warn(.orders, "The selected Order couldn’t be read. Reload the Package.", error: error)
                     }
                 }
                 if let selectedVendor = vendorRows.first(where: { $0.id == selectedVendorID }) {
@@ -476,41 +531,34 @@ import SpielOrdersKit
                         } onCancel: { cancellation.request() }
                     } catch {
                         selectedVendorID = nil
-                        message += "\nThe Vendor selection is no longer available.\n" + error.localizedDescription
+                        warn(.vendors, "The selected Vendor couldn’t be read. Reload the Package.", error: error)
                     }
                 }
-            } catch { message = error.localizedDescription }
+                await openSelection(candidate, cancellation: cancellation)
+                if !diagnosticOnly {
+                    await listShownValues(candidate)
+                }
+            } catch {
+                if !Task.isCancelled {
+                    alert("The Package couldn’t be opened", details: error.localizedDescription, identifier: "package.open")
+                }
+            }
         }
     }
 
-    func save() {
-        if expertDocument != nil { saveExpertDocument(); return }
-        if recoveryEditor != nil { applyRepair(); return }
-        if recordEditor != nil { saveRecord(); return }
-        guard !busy, editingReadme, writable, readmeDirty, let retainedFolder = folder else { return }
-        busy = true
-        message = ""
-        let draft = text
-        let cancellation = LibraryCancellation()
-        work = OwnedOperation(kind: .mutation) { [self] in
-            defer { busy = false; withExtendedLifetime(retainedFolder) {} }
-            do {
-                let saved = try await withTaskCancellationHandler {
-                    try await library.saveReadme(draft, cancellation: cancellation)
-                } onCancel: { cancellation.request() }
-                original = saved.refreshedText ?? draft
-                text = original
-                writable = saved.canEdit
-                message = saved.canEdit && !saved.hasWarnings ? "" : saved.message
-                if let order = editingOrder {
-                    do { inspection = try await library.inspectOrder(order, cancellation: cancellation) }
-                    catch {
-                        inspection = nil
-                        writable = false
-                        message = saved.message + "\nReopen the Package to refresh this Order.\n" + error.localizedDescription
-                    }
-                }
-            } catch { message = "Couldn’t save. Your draft is retained.\n" + error.localizedDescription }
+    /// Lists what the shown destination presents when it lists values rather than records.
+    private func listShownValues(_ session: PackageSession) async {
+        do {
+            switch destination {
+            case let .values(list):
+                reusableValues[list.field] = try await session.values(list.field)
+            case .projects:
+                projects = try await session.projectGroups()
+            case .orders, .vendors, .packageReadme:
+                return
+            }
+        } catch {
+            warn(destination, "Couldn’t list \(destination.title).", error: error)
         }
     }
 
@@ -524,126 +572,156 @@ import SpielOrdersKit
             guard try location.checkResourceIsReachable() else { throw CocoaError(.fileNoSuchFile) }
             NSWorkspace.shared.activateFileViewerSelecting([location])
         } catch {
-            message = "The location is no longer available. Reopen the Package or refresh search.\n" + error.localizedDescription
+            alert("“\(location.lastPathComponent)” couldn’t be shown in Finder",
+                  "It may have been moved or deleted. Reload the Package or search again.",
+                  details: error.localizedDescription, identifier: "finder.reveal")
         }
     }
 
     func updateQuery(_ value: String) {
-        guard value != query else { return }
-        query = value
+        guard value != search.text else { return }
+        search.text = value
+        restartFolderContents()
         refreshLookup()
     }
 
-    func setCaseSensitive(_ value: Bool) {
-        guard value != caseSensitive else { return }
-        caseSensitive = value
+    func setScope(_ scope: SearchScope) {
+        guard scope != search.scope else { return }
+        search.scope = scope
+        restartFolderContents()
         refreshLookup()
     }
 
-    func setSpotlightMode(_ value: Bool) {
-        guard value != spotlightMode else { return }
-        spotlightMode = value
+    func setMatchCase(_ value: Bool) {
+        guard value != search.matchCase else { return }
+        search.matchCase = value
         refreshLookup()
+    }
+
+    /// Stops Spotlight for a query or scope that no longer applies; the next listing asks again.
+    private func restartFolderContents() {
+        contents.stop()
     }
 
     func refreshLookup() {
         guard canBrowseRecords, destination != .packageReadme, let retainedFolder = folder else { return }
         lookupRevision &+= 1
-        if refreshingLookup {
-            activeSearch?.cancel()
-            return
-        }
-        guard !busy else { return }
+        // A running lookup sees the new revision and lists again.
+        guard !refreshingLookup, !busy else { return }
         busy = true
         refreshingLookup = true
-        message = ""
-        searchAnswer = nil
         work = OwnedOperation(kind: .search) { [self] in
             defer {
                 busy = false
                 refreshingLookup = false
-                searching = false
-                activeSearch = nil
                 withExtendedLifetime(retainedFolder) {}
             }
             while !Task.isCancelled {
                 let revision = lookupRevision
-                let requestedQuery = query
-                let requestedCase = caseSensitive
-                let requestedDestination = destination
-                let useSpotlight = spotlightMode && requestedDestination == .orders
+                let requested = search
                 let cancellation = LibraryCancellation()
-                searching = useSpotlight
-                searchAnswer = nil
                 do {
-                    if useSpotlight {
-                        let nativeSearch = SpotlightSearch()
-                        activeSearch = nativeSearch
-                        let answer: MaterialAnswer? = try await withTaskCancellationHandler {
-                            let directory = try await library.materialDirectory()
-                            try Task.checkCancellation()
-                            guard revision == lookupRevision else { return nil }
-                            let hits = await nativeSearch.run(directory: directory, text: requestedQuery)
-                            try Task.checkCancellation()
-                            return try await library.materialSearch(hits, cancellation: cancellation)
-                        } onCancel: { cancellation.request() }
-                        activeSearch = nil
+                    if case let .values(list) = destination {
+                        let values = try await library.values(list.field)
                         guard !Task.isCancelled else { return }
                         if revision != lookupRevision { continue }
-                        guard let answer else { return }
-                        searchAnswer = answer
-                        message = ([searchStatus(answer.state)] + answer.diagnostics).joined(separator: "\n")
-                    } else if requestedDestination == .orders {
+                        reusableValues[list.field] = values
+                        warnings[destination] = nil
+                    } else if destination == .projects {
+                        let listed = try await library.projectGroups()
+                        guard !Task.isCancelled else { return }
+                        if revision != lookupRevision { continue }
+                        projects = listed
+                        warnings[.projects] = nil
+                    } else if destination == .orders {
                         let listed = try await withTaskCancellationHandler {
-                            try await library.orders(query: requestedQuery, caseSensitive: requestedCase, sortField: orderSortField,
-                                                     descending: orderSortDescending, cancellation: cancellation)
+                            try await searchOrders(library, requested, sortField: orderSortField,
+                                                   descending: orderSortDescending, cancellation: cancellation)
                         } onCancel: { cancellation.request() }
                         guard !Task.isCancelled else { return }
                         if revision != lookupRevision { continue }
-                        let selected = listed.retainingSelection(orders.first { $0.id == selectedOrderID })
+                        let selected = listed.retainingSelection(orderContext ?? orders.first { $0.id == selectedOrderID })
                         orders = listed.rows
-                        if requestedQuery.isEmpty { orderCount = orders.count }
-                        selectedOrderID = selected?.id
-                        if selected == nil { inspection = nil }
-                        message = listed.notices.joined(separator: "\n")
+                        if requested.text.isEmpty { orderCount = orders.count }
+                        if requested.text.isEmpty, orderEditor == nil {
+                            selectedOrderID = selected?.id
+                            if selected == nil { inspection = nil; orderContext = nil }
+                        }
+                        await showListing(listed.notices, of: .orders, session: library)
                     } else {
                         let listed = try await withTaskCancellationHandler {
-                            try await library.vendors(query: requestedQuery, caseSensitive: requestedCase, includeHidden: includeHiddenVendors,
-                                                      sortField: vendorSortField, descending: vendorSortDescending, cancellation: cancellation)
+                            try await searchVendors(library, requested, includeHidden: includeHiddenVendors,
+                                                    sortField: vendorSortField, descending: vendorSortDescending,
+                                                    cancellation: cancellation)
                         } onCancel: { cancellation.request() }
                         guard !Task.isCancelled else { return }
                         if revision != lookupRevision { continue }
                         vendors = listed.rows
-                        if !vendors.contains(where: { $0.id == selectedVendorID }) { selectedVendorID = nil; vendorDetails = nil }
-                        message = listed.notices.joined(separator: "\n")
+                        if requested.text.isEmpty { vendorCount = vendors.count }
+                        if requested.text.isEmpty, vendorEditor == nil, vendorContext?.hidden != true,
+                           !vendors.contains(where: { $0.id == selectedVendorID }) {
+                            selectedVendorID = nil; vendorContext = nil; vendorDetails = nil
+                        }
+                        await showListing(listed.notices, of: .vendors, session: library)
                     }
+                    // Navigation leaves the destination's selection without its editor.
+                    await openSelection(library, cancellation: cancellation)
+                    if revision != lookupRevision { continue }
                 } catch {
-                    activeSearch = nil
                     guard !Task.isCancelled else { return }
                     if revision != lookupRevision { continue }
-                    message = "Couldn’t search.\n" + error.localizedDescription
+                    warn(destination, "Couldn’t list \(destination.title).", error: error)
                 }
                 return
             }
         }
     }
 
-    func stopSearch() { activeSearch?.cancel() }
+    /// The Orders `query` selects. Folder Contents joins the Supporting Material Spotlight
+    /// found for its text, and asks Spotlight when it has not answered that text yet.
+    func searchOrders(_ session: PackageSession, _ query: RecordQuery, sortField: Int32, descending: Bool,
+                      cancellation: LibraryCancellation) async throws -> OrderListing {
+        guard query.scope == .folderContents else {
+            return try await session.orders(query: query.text, field: query.scope.field, caseSensitive: query.matchCase,
+                                            sortField: sortField, descending: descending, cancellation: cancellation)
+        }
+        let material = contents.answer(for: query.text)
+        if material == nil, !query.text.isEmpty { gatherMaterial(query.text, session: session) }
+        return try await session.folderContents(query: query.text, caseSensitive: query.matchCase, material: material,
+                                                sortField: sortField, descending: descending,
+                                                cancellation: cancellation)
+    }
+
+    func searchVendors(_ session: PackageSession, _ query: RecordQuery, includeHidden: Bool, sortField: Int32,
+                       descending: Bool, cancellation: LibraryCancellation) async throws -> VendorListing {
+        try await session.vendors(query: query.text, field: query.scope.field, caseSensitive: query.matchCase,
+                                  includeHidden: includeHidden, sortField: sortField, descending: descending,
+                                  cancellation: cancellation)
+    }
+
+    private func gatherMaterial(_ text: String, session: PackageSession) {
+        guard let folder else { return }
+        contents.gather(text, session: session, folder: folder) { [weak self] in
+            self?.materialArrived()
+        }
+    }
+
+    /// Spotlight's answer refines the grid once the window's current work settles.
+    private func materialArrived() {
+        Task {
+            await waitForWork()
+            refreshLookup()
+        }
+    }
 
     func openFile(_ location: URL) {
         do {
             guard try location.checkResourceIsReachable() else { throw CocoaError(.fileNoSuchFile) }
             guard NSWorkspace.shared.open(location) else { throw CocoaError(.fileReadUnknown) }
         } catch {
-            message = "The file could not be opened. Refresh search or reveal it in Finder.\n" + error.localizedDescription
-        }
-    }
-
-    private func searchStatus(_ state: Int32) -> String {
-        switch state {
-        case SPIELORDERS_PROVIDER_STATE_COMPLETE: "Search complete."
-        case SPIELORDERS_PROVIDER_STATE_CANCELLED: "Search stopped. Available results are shown."
-        default: "Search did not complete."
+            alert("“\(location.lastPathComponent)” couldn’t be opened",
+                  "It may have been moved or deleted. Search again, or show it in Finder.",
+                  details: error.localizedDescription, identifier: "finder.open")
         }
     }
 
@@ -656,11 +734,11 @@ import SpielOrdersKit
         let id: String?
         if let orderEditor { id = orderEditor.draft.recordID }
         else { id = selectedOrderID }
-        return orders.first { $0.id == id }
+        return orders.first { $0.id == id } ?? (orderContext?.id == id ? orderContext : nil)
     }
 
     var canChangeDirectory: Bool {
-        !busy && !dirty && destination == .orders && currentOrder?.damage == nil && currentOrder != nil
+        canBrowseRecords && !busy && !dirty && destination == .orders && currentOrder?.damage == nil && currentOrder != nil
     }
 
     func changeOrderDirectory(_ action: DirectoryAction, id: String? = nil) {
@@ -670,7 +748,6 @@ import SpielOrdersKit
         else { target = currentOrder }
         guard let row = target, row.damage == nil, let retainedFolder = folder else { return }
         busy = true
-        message = ""
         let cancellation = LibraryCancellation()
         work = OwnedOperation(kind: .mutation) { [self] in
             defer { busy = false; withExtendedLifetime(retainedFolder) {} }
@@ -679,34 +756,44 @@ import SpielOrdersKit
                     try await library.planDirectoryChange(row, action: action, cancellation: cancellation)
                 } onCancel: { cancellation.request() }
                 try Task.checkCancellation()
-                let explanation = action == .trash
-                    ? "The Order is removed recoverably first, then handed to macOS Trash. A failed Trash move leaves it in the Removed Orders directory."
-                    : action == .remove ? "The whole Order stays recoverable in the Removed Orders directory."
-                    : "Only the directory name changes; the Order's facts and files are retained."
-                guard await confirm(action.title + "?", row.directoryName + "\n\n" + explanation + "\n\n"
-                              + plan.operations.joined(separator: "\n"),
-                              identifier: "order.directory.confirmation", approve: action.title) else { return }
+                // Remove Order is recoverable, so it commits at once and Edit → Undo restores it.
+                if action != .remove {
+                    let explanation = action == .trash
+                        ? "The Order is removed recoverably first, then handed to macOS Trash. A failed Trash move leaves it in the Removed Orders directory."
+                        : "Only the directory name changes; the Order's facts and files are retained."
+                    guard await dialogs.review(action.title + "?", explanation: explanation,
+                        details: row.directoryName + "\n\n" + plan.operations.joined(separator: "\n"),
+                        identifier: "order.directory.confirmation", approve: action.title,
+                        destructive: action == .trash) else { return }
+                }
                 let disposition = try await library.commit(plan)
-                recoverableDirectory = action == .align ? nil : disposition.finalDirectory
                 discardEditors()
-                searchAnswer = nil
-                editingOrder = nil
-                message = disposition.message
+                contents.stop()
+                // A Trash move that failed leaves the Order recoverable where removal put it.
+                if action == .trash, let removed = disposition.finalDirectory {
+                    alert("The Order couldn’t be moved to the Trash",
+                          "It was removed, and stays recoverable in the Removed Orders directory.",
+                          details: disposition.message, identifier: "order.trash", location: removed)
+                }
+                if action == .remove, let directory = disposition.finalDirectory {
+                    offerRestore(RemovedOrder(id: row.id, directory: directory))
+                }
                 if disposition.requiresReopen {
-                    canBrowseRecords = false
-                    writable = false
-                    orders = []
-                    selectedOrderID = nil
-                    inspection = nil
+                    requireReload(Notice(disposition.summary, details: disposition.message))
+                    clearOrders()
                 } else {
                     await refreshRecords(selectingOrder: action == .align ? row.id : nil, vendor: selectedVendorID)
+                    addWarnings(disposition.notices, to: .orders)
                 }
-            } catch { message = "Couldn’t complete \(action.title.lowercased()).\n" + error.localizedDescription }
+            } catch {
+                alert("Couldn’t \(action.title)", details: error.localizedDescription, identifier: "order.directory")
+            }
         }
     }
     /// Navigation returns now; only an approved decision retries the caller.
     /// The retry bypass is synchronous so it cannot authorize unrelated navigation.
     func confirmDiscard(retry: @escaping @MainActor () -> Void) -> Bool {
+        if deferNavigation(retry) { return false }
         if discardingForNavigation { return true }
         guard !navigationPending, !dialogs.isPresenting else { return false }
         guard dirty else { return true }
@@ -722,19 +809,66 @@ import SpielOrdersKit
         return false
     }
 
-    /// The delegate reserves navigation before starting this decision, and keeps its
-    /// original AppKit termination request pending until this answer is final.
+    /// A click that ended a field waits for that field's save instead of being swallowed.
+    func deferNavigation(afterFailure: Bool = false, _ action: @escaping () -> Void) -> Bool {
+        guard committing else { return false }
+        afterCommit = action
+        continueAfterFailure = afterFailure
+        return true
+    }
+
+    /// The delegate reserves navigation while Close or Quit resolves owned work and drafts.
     func confirmExit() async -> Bool {
+        dialogs.beginExit()
         dialogs.isTerminating = true
         await settle()
         dialogs.isTerminating = false
         return await resolveDrafts()
     }
 
+    /// Release the settled active session and its active restoration bookmark.
+    func closePackage() {
+        removals.removeAllActions()
+        discardEditors()
+        library = PackageSession()
+        folder = nil
+        root = nil
+        starting = false
+        work = nil
+        destination = .orders
+        orders = []
+        orderCount = 0
+        vendors = []
+        vendorCount = 0
+        selectedOrderID = nil
+        selectedVendorID = nil
+        orderContext = nil
+        vendorContext = nil
+        inspection = nil
+        vendorDetails = nil
+        vendorChoices = []
+        reusableValues = [:]
+        projects = []
+        canBrowseRecords = false
+        warnings = [:]
+        reloadReason = nil
+        diagnosticDirectory = nil
+        search = RecordQuery()
+        contents.stop()
+        refreshingLookup = false
+        afterCommit = nil
+        continueAfterFailure = false
+        preferences.removeObject(forKey: "packageBookmark")
+    }
+
     /// Resolve the nested Vendor first, then its parent. Approval does not destroy an
     /// outer draft: a navigation that subsequently fails or is cancelled still shows it.
     private func resolveDrafts() async -> Bool {
         while dirty {
+            if readme?.draft.unsaved == true {
+                guard await settleReadme() else { return false }
+                continue
+            }
             if let sheet = vendorSheet, !sheet.dirty {
                 let vendorWindow = dialogs.window?.attachedSheet
                 sheet.close()
@@ -745,11 +879,32 @@ import SpielOrdersKit
             let sheet = vendorSheet?.dirty == true
             let vendorWindow = sheet ? dialogs.window?.attachedSheet : nil
             let editor = sheet ? vendorSheet : recordEditor
-            let wasReadme = readmeDirty
+            if let editor, !editor.isNew {
+                navigationPending = false
+                commitRecord(editor)
+                navigationPending = true
+                await settle()
+                guard !editor.dirty, !editor.refused else { return false }
+                continue
+            }
+            if let editor, editor.isNew {
+                let discard = await confirm("Discard this new \(editor.kind == .order ? "Order" : "Vendor")?",
+                    "It has not been created. Choose Create in the editor to create it.",
+                    identifier: "draft.unsaved", approve: "Discard", destructive: true)
+                guard discard else { return false }
+                if sheet {
+                    vendorSheet?.close()
+                    vendorSheet = nil
+                    await dialogs.waitForDismissal(of: vendorWindow)
+                    continue
+                }
+                return true
+            }
             let wasRaw = rawDirty
             let repair = recoveryEditor
-            let draft = expertDocument != nil ? "raw JSON document" : recoveryEditor != nil ? "repair" : readmeDirty ? "README" : sheet || recordEditor?.kind == .vendor ? "Vendor" : "Order"
-            let prefix = readmeDirty ? "readme.unsaved" : "draft.unsaved"
+            let draft = expertDocument != nil ? "raw JSON document" : recoveryEditor != nil ? "repair"
+                : sheet || recordEditor?.kind == .vendor ? "Vendor" : "Order"
+            let prefix = "draft.unsaved"
             let alert = NSAlert()
             alert.messageText = "Do you want to save the changes to this \(draft)?"
             alert.informativeText = "Your changes will be lost if you don’t save them."
@@ -769,12 +924,18 @@ import SpielOrdersKit
                 // Save's entry guards must see idle state. Restore the reservation
                 // before suspending, so it protects the whole asynchronous save.
                 navigationPending = false
-                if sheet { saveVendorSheet() } else { save() }
+                if sheet {
+                    saveVendorSheet()
+                } else if expertDocument != nil {
+                    saveExpertDocument()
+                } else {
+                    applyRepair()
+                }
                 let saving = operationBusy ? work : nil
                 navigationPending = true
                 guard let saving else { return false }
                 await saving.settleForExit()
-                if wasReadme && readmeDirty || wasRaw && rawDirty { return false }
+                if wasRaw && rawDirty { return false }
                 if let repair, recoveryEditor === repair { return false }
                 if let editor, (recordEditor === editor || vendorSheet === editor), editor.dirty { return false }
                 if sheet {
@@ -798,6 +959,29 @@ import SpielOrdersKit
     }
 
     func settle() async {
-        await work?.settleForExit()
+        contents.stop()
+        while let current = work {
+            await current.settleForExit()
+            if work === current { break }
+        }
+        await contents.settle()
+    }
+
+    /// How many Vendors the list holds without search, for the count above it.
+    func countVendors(_ session: PackageSession, includeHidden: Bool,
+                      cancellation: LibraryCancellation) async throws -> Int {
+        let listed = try await withTaskCancellationHandler {
+            try await session.vendors(query: "", caseSensitive: false, includeHidden: includeHidden,
+                                      sortField: vendorSortField, descending: vendorSortDescending,
+                                      cancellation: cancellation)
+        } onCancel: { cancellation.request() }
+        return listed.rows.count
+    }
+
+    func waitForWork() async {
+        while let current = work {
+            await current.wait()
+            if work === current { return }
+        }
     }
 }

@@ -1,110 +1,117 @@
+import AppKit
 import SwiftUI
 import SpielOrdersKit
 
+/// The window's content beside the destination sidebar. Each pane pads its own content, so
+/// tables and dividers reach the window's edges.
 struct PackageWindow: View {
     @Bindable var model: DesktopModel
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if model.root != nil, model.canBrowseRecords, !model.diagnosticWorkspace, !model.editingReadme, model.recordEditor == nil {
-                HStack {
-                    SearchField(placeholder: model.spotlightMode && model.destination == .orders ? "Search Supporting Material" : "Search records",
-                                text: Binding(get: { model.query }, set: model.updateQuery),
-                                identifier: "search.query", submit: { model.refreshLookup() })
-                    Toggle("Aa", isOn: Binding(get: { model.caseSensitive }, set: model.setCaseSensitive))
-                        .toggleStyle(.button).accessibilityLabel("Case sensitive")
-                        .disabled(model.spotlightMode && model.destination == .orders)
-                        .accessibilityIdentifier("search.caseSensitive")
-                    if model.destination == .orders {
-                        Toggle("Spotlight", isOn: Binding(get: { model.spotlightMode }, set: model.setSpotlightMode))
-                            .toggleStyle(.button)
-                            .accessibilityIdentifier("search.spotlight")
-                        if model.spotlightMode {
-                            Button("Search") { model.refreshLookup() }
-                                .accessibilityIdentifier("search.start")
-                            if model.searching {
-                                Button("Stop") { model.stopSearch() }
-                                    .accessibilityLabel("Stop search")
-                                    .accessibilityIdentifier("search.stop")
-                            }
-                        }
-                    }
-                }
-                .disabled(model.busy && !model.refreshingLookup)
-            }
-            if model.diagnosticWorkspace {
-                RecoveryWorkspace(model: model)
-            } else if model.root != nil, model.destination == .orders {
-                if let editor = model.orderEditor {
-                    OrderEditorView(model: model, editor: editor)
-                        .id(ObjectIdentifier(editor))
-                } else if let order = model.editingOrder {
-                    HStack {
-                        Button("Back to Orders", systemImage: "chevron.left") { model.backToOrders() }.disabled(model.busy)
-                            .accessibilityIdentifier("order.readme.back")
-                        Text(order.values[OrderColumn.title.field] ?? "Order README").font(.title2)
-                    }
-                    ReadmeEditor(text: $model.text, isEditable: !model.busy && model.writable,
-                                 label: "Order README", identifier: "order.readme.editor")
-                        .id(model.readmeDocumentID)
-                } else if model.spotlightMode {
-                    if let answer = model.searchAnswer {
-                        ScrollView {
-                            LazyVStack(alignment: .leading, spacing: 12) {
-                                ForEach(answer.matches) { match in
-                                    HStack {
-                                        VStack(alignment: .leading) {
-                                            Text(match.orderDirectory.lastPathComponent).font(.caption).foregroundStyle(.secondary)
-                                            Text(match.relativePath)
-                                        }
-                                        Spacer()
-                                        Button("Open") { model.openFile(match.url) }
-                                            .accessibilityLabel("Open \(match.filename)")
-                                            .accessibilityIdentifier("material.open.\(match.url.absoluteString)")
-                                        Button("Reveal") { model.reveal(match.url) }
-                                            .accessibilityLabel("Reveal \(match.filename) in Finder")
-                                            .accessibilityIdentifier("material.reveal.\(match.url.absoluteString)")
-                                    }
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                                    .accessibilityElement(children: .contain)
-                                    .accessibilityLabel("\(match.orderDirectory.lastPathComponent): \(match.relativePath)")
-                                    .accessibilityIdentifier("material.row.\(match.url.absoluteString)")
-                                }
-                            }
-                        }
-                        .accessibilityLabel("Supporting Material results")
-                        .accessibilityIdentifier("material.results")
-                    } else {
-                        ContentUnavailableView("Search Supporting Material", systemImage: "magnifyingglass")
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                } else {
-                    OrdersWorkspace(model: model)
-                }
-            } else if model.root != nil, model.destination == .vendors {
-                if let editor = model.vendorEditor {
-                    VendorEditorView(model: model, editor: editor)
-                        .id(ObjectIdentifier(editor))
-                }
-                else { VendorsWorkspace(model: model) }
-            } else if model.root != nil {
-                Text("Package README").font(.title2)
-                ReadmeEditor(text: $model.text, isEditable: !model.busy && model.writable,
-                             label: "Package README", identifier: "package.readme.editor")
-                    .id(model.readmeDocumentID)
-            } else {
-                ContentUnavailableView("Open a SpielOrder Package", systemImage: "folder",
-                                       description: Text("Choose a Package to read and edit its README."))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            if model.busy { ProgressView().controlSize(.small).accessibilityLabel("Working") }
-            if !model.message.isEmpty { Text(model.message).textSelection(.enabled).accessibilityIdentifier("operationMessage") }
-            if let directory = model.recoverableDirectory {
-                Button("Reveal Removed Order in Finder") { model.reveal(directory) }
-                    .accessibilityIdentifier("order.removed.reveal")
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(minWidth: 1024, minHeight: 600)
+    }
+
+    @ViewBuilder private var content: some View {
+        if model.starting {
+            ProgressView("Opening Package…")
+                .accessibilityIdentifier("package.starting")
+        } else if model.root == nil {
+            Welcome(model: model)
+        } else if model.diagnosticWorkspace {
+            RecoveryWorkspace(model: model)
+                .padding(12)
+        } else {
+            switch model.destination {
+            case .orders:
+                OrdersWorkspace(model: model)
+            case .vendors:
+                VendorsWorkspace(model: model)
+            case let .values(list):
+                ValuesWorkspace(model: model, list: list)
+            case .projects:
+                ProjectsWorkspace(model: model)
+            case .packageReadme:
+                PackageReadme(model: model)
             }
         }
-        .padding(20)
-        .frame(minWidth: 1000, maxWidth: .infinity, minHeight: 600, maxHeight: .infinity)
+    }
+}
+
+private struct Welcome: View {
+    @Bindable var model: DesktopModel
+
+    var body: some View {
+        if model.busy && !model.dialogs.isPresenting {
+            ProgressView(model.activity)
+                .accessibilityIdentifier("welcome.working")
+        } else {
+            VStack(spacing: 24) {
+                ContentUnavailableView {
+                    Label("SpielOrders", systemImage: "folder")
+                } description: {
+                    Text("Open a Package or create a new one to manage Orders and Vendors.")
+                } actions: {
+                    Button("Open Package…", action: model.choosePackage)
+                        .accessibilityIdentifier("welcome.open")
+                    Button("New Package…", action: model.chooseInitialization)
+                        .accessibilityIdentifier("welcome.initialize")
+                    Button("Set Up Agent Guidance…", action: model.makeAgentReady)
+                        .disabled(model.busy)
+                        .accessibilityIdentifier("welcome.agentReady")
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                if !model.recents.entries.isEmpty {
+                    RecentPackageList(model: model)
+                }
+            }
+        }
+    }
+}
+
+/// The recently opened Packages, most recent first; one opens on click.
+private struct RecentPackageList: View {
+    @Bindable var model: DesktopModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Recent Packages")
+                .font(.headline)
+                .foregroundStyle(.secondary)
+                .accessibilityAddTraits(.isHeader)
+            ForEach(model.recents.entries) { recent in
+                Button {
+                    model.openRecent(recent)
+                } label: {
+                    Label(recent.name, systemImage: "shippingbox")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .help(recent.id)
+                .contextMenu {
+                    Button("Remove from List") { model.recents.remove(recent) }
+                }
+                .accessibilityIdentifier("welcome.recent")
+            }
+        }
+        .frame(width: 320, alignment: .leading)
+        .disabled(model.busy)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Recent Packages")
+        .accessibilityIdentifier("welcome.recents")
+    }
+}
+
+private struct PackageReadme: View {
+    @Bindable var model: DesktopModel
+
+    var body: some View {
+        if let readme = model.readme {
+            ReadmeArea(model: model, readme: readme, label: "Package README", identifier: "package.readme.editor",
+                       height: nil)
+                .padding(12)
+        }
     }
 }

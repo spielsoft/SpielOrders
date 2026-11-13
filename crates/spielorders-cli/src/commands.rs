@@ -39,10 +39,10 @@ pub(crate) fn run(family: &Family) -> Shown<'_> {
                 target, execution, ..
             },
         } => {
+            let directory = c_path(&target.root);
             let answer = answered(|calls| {
-                let package = open(calls, &target.root)?;
                 let plan = calls.get(|plan, outcome| {
-                    spielorders_package_plan_provision_agent_setup(&package, 0, plan, outcome)
+                    spielorders_provision_agent(PathBytes::new(&directory), 0, plan, outcome)
                 })?;
                 mutate(calls, &plan, execution)
             });
@@ -619,6 +619,23 @@ fn vendor(command: &VendorCommand) -> Command<'_> {
             Contract::VendorUnhide,
             &target.root,
             answered(|calls| hide(calls, &target.root, name, false, execution)),
+            Human::Whole,
+        ),
+        VendorCommand::Delete {
+            name,
+            target,
+            execution,
+            ..
+        } => (
+            Contract::VendorDelete,
+            &target.root,
+            answered(|calls| {
+                let vendor = read_vendor(calls, &target.root, name)?;
+                let plan = calls.get(|plan, outcome| {
+                    spielorders_vendor_plan_delete(&vendor, 0, plan, outcome)
+                })?;
+                mutate(calls, &plan, execution)
+            }),
             Human::Whole,
         ),
         VendorCommand::Contact { command } => contact(command),

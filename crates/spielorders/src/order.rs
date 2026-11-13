@@ -119,6 +119,7 @@ fn normalize_single_line_facts(order: &mut OrderDocument) {
     for item in &mut order.items {
         item.description.normalize_single_line();
         normalize_optional_single_line(&mut item.catalog_number);
+        crate::metadata::normalize_optional_multiline(&mut item.notes);
     }
 }
 

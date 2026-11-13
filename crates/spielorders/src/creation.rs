@@ -190,14 +190,18 @@ pub(crate) fn plan_order_creation<F: FileSystem>(
             })
             .transpose()?;
         let vendor_id = vendor.map(|vendor| vendor.vendor_id.as_str());
+        let project = canonical_reusable(input.project.as_deref(), &package.projects);
         let reusable_values = ReusableValues {
             orderer: canonical_reusable(input.orderer.as_deref(), &package.orderers),
             ordering_institution: canonical_reusable(
                 input.ordering_institution.as_deref(),
                 &package.ordering_institutions,
             ),
-            project: canonical_reusable(input.project.as_deref(), &package.projects),
-            order_group: canonical_reusable(input.order_group.as_deref(), &package.order_groups),
+            order_group: canonical_reusable(
+                input.order_group.as_deref(),
+                &package.order_groups_of(reusable_text(&project)),
+            ),
+            project,
         };
         let mut candidate = json!({
             "schema_version": 1,
@@ -374,7 +378,7 @@ fn creation_evidence(
         (
             "order_group",
             document.order_group.as_deref(),
-            package.order_groups.clone(),
+            package.order_groups_of(document.project.as_deref()),
         ),
     ] {
         // The canonical spelling *and* the reuse decision are both reported to the

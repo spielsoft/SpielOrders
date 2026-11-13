@@ -24,7 +24,8 @@ use crate::support::{
     package_with_an_impossible_date, package_with_an_occupied_aligned_name,
     package_with_an_occupied_removed_name, package_with_an_order_staging_artifact,
     package_with_an_unreadable_order_readme, package_with_an_unreferenced_vendor,
-    package_with_an_unresolved_vendor_reference, package_with_duplicate_vendor_names,
+    package_with_an_unresolved_vendor_reference, package_with_an_unused_vendor,
+    package_with_an_unused_vendor_and_a_blocked_index_refresh, package_with_duplicate_vendor_names,
     package_with_three_contacts, package_with_three_contacts_and_a_blocked_index_refresh,
     package_with_three_items, package_with_three_items_and_a_blocked_index_refresh,
     package_with_unreadable_readme, populated_package, response, unmanaged_directory,
@@ -1283,6 +1284,12 @@ fn mutation_run(
 ) -> (TemporaryTree, PathBuf, Invocation) {
     let (tree, root) = match cell {
         MutationCell::Invalid => package_with_duplicate_vendor_names(label),
+        MutationCell::Warning if contract == ResponseContract::VendorDelete => {
+            package_with_an_unused_vendor_and_a_blocked_index_refresh(label)
+        }
+        MutationCell::Success if contract == ResponseContract::VendorDelete => {
+            package_with_an_unused_vendor(label)
+        }
         MutationCell::Warning => match contract {
             ResponseContract::AddVendor => initialized_package_with_a_blocked_index_refresh(label),
             contract if CONTACT_MUTATIONS.contains(&contract) => {
@@ -1339,6 +1346,11 @@ fn mutation_command(contract: ResponseContract, cell: MutationCell) -> Vec<&'sta
             vec!["vendor", "hide", "Copperwick"]
         }
         (ResponseContract::VendorHide, _) => vec!["vendor", "hide", "Tarnwick"],
+        // A Vendor its Orders still reference: the refusal that lists them.
+        (ResponseContract::VendorDelete, MutationCell::Rejected) => {
+            vec!["vendor", "delete", "Tarnwick"]
+        }
+        (ResponseContract::VendorDelete, _) => vec!["vendor", "delete", "Elderglass Optics"],
         (ResponseContract::VendorUnhide, MutationCell::Rejected) => {
             vec!["vendor", "unhide", "Copperwick"]
         }
@@ -1427,11 +1439,12 @@ fn mutation_command(contract: ResponseContract, cell: MutationCell) -> Vec<&'sta
     }
 }
 
-const VENDOR_MUTATIONS: [ResponseContract; 4] = [
+const VENDOR_MUTATIONS: [ResponseContract; 5] = [
     ResponseContract::AddVendor,
     ResponseContract::VendorEdit,
     ResponseContract::VendorHide,
     ResponseContract::VendorUnhide,
+    ResponseContract::VendorDelete,
 ];
 
 /// Each mutation of a Vendor record, in each of its cells, against its recorded bytes.
@@ -1523,6 +1536,7 @@ fn every_usage_error_a_vendor_mutation_reaches_carries_the_shared_identity() {
         vec!["vendor", "edit", "--json"],
         vec!["vendor", "hide", "--json"],
         vec!["vendor", "unhide", "--json"],
+        vec!["vendor", "delete", "--json"],
         // An assignment where the command takes none.
         vec!["vendor", "hide", "Tarnwick", "phone=none", "--json"],
         // A misspelling of the command itself.
@@ -1822,7 +1836,7 @@ fn new_order_assignments(contract: ResponseContract, cell: MutationCell) -> Vec<
             "status=ordered",
             "vendor=Tarnwick",
             "orderer=Ada Lovelace",
-            "ordering_institution=northwind",
+            "ordering_institution=example institute",
             "currency=USD",
             "project=Telescope",
             "order_group=Autumn build",
@@ -1839,7 +1853,7 @@ fn new_order_assignments(contract: ResponseContract, cell: MutationCell) -> Vec<
             "status=complete",
             "vendor=Tarnwick",
             "orderer=Ada Lovelace",
-            "ordering_institution=Northwind",
+            "ordering_institution=Example Institute",
             "project=Telescope",
         ],
         (_, _) => vec![
@@ -2123,7 +2137,7 @@ fn record_mutation_command(contract: ResponseContract, cell: MutationCell) -> Ve
             "order",
             "edit",
             "status=ordered",
-            "ordering_institution=northwind",
+            "ordering_institution=example institute",
             "order_group=Autumn build",
             "orderer=",
         ],

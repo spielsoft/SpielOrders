@@ -644,7 +644,7 @@ fn fully_populated_order(label: &str) -> (TemporaryTree, PathBuf, String) {
                     .assign("status", "hold")
                     .assign("vendor", "Tarnwick")
                     .assign("orderer", "Ada Lovelace")
-                    .assign("ordering_institution", "Northwind")
+                    .assign("ordering_institution", "Example Institute")
                     .assign("currency", "USD")
                     .assign("project", "Telescope")
                     .assign("order_group", "Summer build"),
@@ -705,6 +705,14 @@ fn every_optional_scalar_clears_explicitly_without_disturbing_the_rest() {
         assert_eq!(facts["title"], "Laser components");
         assert_eq!(facts["date_ordered"], "2026-08-22");
         assert_eq!(facts["status"], json(&OrderStatus::Hold));
+        // An Order Group belongs to its Project, so leaving the Project leaves the group.
+        let follows = |other: &str| field == "project" && other == "order_group";
+        if field == "project" {
+            assert!(
+                facts["order_group"].is_null(),
+                "clearing project clears its group"
+            );
+        }
         for other in [
             "vendor_id",
             "orderer",
@@ -713,7 +721,7 @@ fn every_optional_scalar_clears_explicitly_without_disturbing_the_rest() {
             "project",
             "order_group",
         ] {
-            if other != cleared {
+            if other != cleared && !follows(other) {
                 assert!(
                     !facts[other].is_null(),
                     "clearing {field} must not also clear {other}"
@@ -753,10 +761,24 @@ fn every_optional_scalar_clears_explicitly_without_disturbing_the_rest() {
 
 const REUSABLE: [(&str, &str, &str); 4] = [
     ("orderer", "Ada Lovelace", "  ada LOVELACE  "),
-    ("ordering_institution", "Northwind", " northwind "),
+    (
+        "ordering_institution",
+        "Example Institute",
+        " example institute ",
+    ),
     ("project", "Telescope", "teleSCOPE"),
     ("order_group", "Summer build", " SUMMER build "),
 ];
+
+/// An Order Group is reused only within its Project, so a group edit names the Project
+/// the populated Order uses.
+fn in_its_project(field: &str, assignments: Assignments) -> Assignments {
+    if field == "order_group" {
+        assignments.assign("project", "Telescope")
+    } else {
+        assignments
+    }
+}
 
 /// A second Order in the Package whose reusable values are all absent, alongside a
 /// first Order that already contributes each category's canonical spelling.
@@ -776,7 +798,10 @@ fn a_case_variant_reusable_value_reuses_the_existing_canonical_spelling() {
 
     for (field, canonical, variant) in REUSABLE {
         let plan = crate::plan(
-            &edit_order(directory.clone(), Assignments::new().assign(field, variant)),
+            &edit_order(
+                directory.clone(),
+                in_its_project(field, Assignments::new().assign(field, variant)),
+            ),
             &effects(&PlatformFileSystem).on(2026, 9, 1),
         )
         .result
@@ -856,7 +881,7 @@ fn introduction_intent_still_reuses_an_existing_canonical_spelling() {
         let plan = crate::plan(
             &edit_order(
                 directory.clone(),
-                Assignments::new().introduce(field, variant),
+                in_its_project(field, Assignments::new().introduce(field, variant)),
             ),
             &effects(&PlatformFileSystem).on(2026, 9, 1),
         )

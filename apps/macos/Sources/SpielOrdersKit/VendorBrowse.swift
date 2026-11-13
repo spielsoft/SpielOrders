@@ -31,34 +31,31 @@ public struct VendorListing: Sendable {
     public let notices: [String]
 }
 
-public struct VendorContact: Sendable, Identifiable {
-    public let id: Int64
-    public let name: String
-    public let role: String
-    public let phone: String
-    public let email: String
-}
-
 public struct VendorDetails: Sendable {
     public let values: [Int32: String]
-    public let contacts: [VendorContact]
     public let orders: [OrderRow]
     public let notices: [String]
 }
 
 extension PackageSession {
-    public func vendors(query: String, caseSensitive: Bool, includeHidden: Bool, sortField: Int32, descending: Bool,
-                        cancellation: LibraryCancellation) throws -> VendorListing {
+    /// The facts a Vendor search can be confined to, in the order a menu offers them.
+    public static let vendorSearchFields: [Int32] = (0..<spielorders_vendor_search_field_count()).map {
+        spielorders_vendor_search_field($0)
+    }
+
+    /// The Vendors matching `query` in one of `vendorSearchFields`, or in every searchable fact.
+    public func vendors(query: String, field: Int32? = nil, caseSensitive: Bool, includeHidden: Bool, sortField: Int32,
+                        descending: Bool, cancellation: LibraryCancellation) throws -> VendorListing {
         guard let package else { throw SessionAccessError.reopenRequired }
         var list: UnsafeMutablePointer<SpielordersList>?
         var outcome: UnsafeMutablePointer<SpielordersEntries>?
         let flags = (includeHidden ? UInt32(SPIELORDERS_LIST_INCLUDE_HIDDEN) : 0)
             | (caseSensitive ? UInt32(SPIELORDERS_LIST_CASE_SENSITIVE) : 0)
         let result = try withInterfaceText(query) {
-            spielorders_package_vendors(package.pointer, $0, flags, sortField, descending ? 1 : 0,
-                                        cancellation.token, &list, &outcome)
+            spielorders_package_search_vendors(package.pointer, $0, field ?? -1, flags, sortField, descending ? 1 : 0,
+                                               cancellation.token, &list, &outcome)
         }
-        let notices = try checked(result, outcome).map(\.message)
+        let notices = try checked(result, outcome).map(\.presentation)
         defer { spielorders_list_free(list) }
         guard let list else { throw LibraryFailure(result: SPIELORDERS_RESULT_INTERNAL, entries: []) }
         let rows = (0..<spielorders_list_count(list)).map { index in
@@ -73,21 +70,16 @@ extension PackageSession {
         let (owner, entries) = try readVendor(id: row.id, token: cancellation.token)
         defer { withExtendedLifetime(owner) {} }
         let vendor = owner.pointer
-        let notices = entries.map(\.message)
+        var notices = entries.map(\.presentation)
         var outcome: UnsafeMutablePointer<SpielordersEntries>?
         let values = Dictionary(uniqueKeysWithValues: vendorFields.map { ($0, String(cString: spielorders_vendor_field(vendor, $0))) })
-        let contacts = (0..<spielorders_vendor_contact_count(vendor)).map { index in
-            func field(_ key: Int32) -> String { String(cString: spielorders_vendor_contact_field(vendor, index, key)) }
-            return VendorContact(id: index, name: field(SPIELORDERS_CONTACT_FIELD_NAME), role: field(SPIELORDERS_CONTACT_FIELD_ROLE),
-                                 phone: field(SPIELORDERS_CONTACT_FIELD_PHONE), email: field(SPIELORDERS_CONTACT_FIELD_EMAIL))
-        }
         var associated: UnsafeMutablePointer<SpielordersList>?
         defer { spielorders_list_free(associated) }
         let related = row.id.withCString {
             spielorders_package_orders_of_vendor(package.pointer, $0, cancellation.token, &associated, &outcome)
         }
-        _ = try checked(related, outcome)
+        notices += try checked(related, outcome).map(\.presentation)
         guard let associated else { throw LibraryFailure(result: SPIELORDERS_RESULT_INTERNAL, entries: []) }
-        return VendorDetails(values: values, contacts: contacts, orders: orderRows(associated), notices: notices)
+        return VendorDetails(values: values, orders: orderRows(associated), notices: notices)
     }
 }

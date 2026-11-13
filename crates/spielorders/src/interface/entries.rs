@@ -138,6 +138,7 @@ fn subject_of(failure: &Failure) -> (Option<&str>, Option<CString>) {
         Failure::DestinationCollision { location, .. }
         | Failure::StagingCollision { location }
         | Failure::NotDirectChild { location }
+        | Failure::OrderIdentityInUse { location, .. }
         | Failure::NameUnusableCandidate { location }
         | Failure::AlreadyAnOrder { location }
         | Failure::ConflictingReservedState { location }
@@ -361,6 +362,13 @@ impl Entry {
                         .flat_map(|group| &group.diagnostics)
                         .map(Self::finding),
                 );
+            }
+            Failure::VendorReferenced { orders, .. } => {
+                entries.extend(orders.iter().map(|order| {
+                    let mut entry = Self::coded(SPIELORDERS_FAMILY_FAILURE, code, None);
+                    entry.path = relative(order);
+                    entry
+                }));
             }
             Failure::DamagedOrder {
                 paths, diagnostics, ..

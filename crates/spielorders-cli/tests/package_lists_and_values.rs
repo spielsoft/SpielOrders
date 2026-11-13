@@ -120,7 +120,7 @@ fn each_value_kind_reports_its_own_list_under_its_own_contract() {
     for (kind, expected) in [
         ("project", vec![("Telescope", 2)]),
         ("orderer", vec![("Ada Lovelace", 2)]),
-        ("ordering_institution", vec![("Northwind", 1)]),
+        ("ordering_institution", vec![("Example Institute", 1)]),
         ("order_group", vec![("Summer build", 1)]),
     ] {
         let outcome = Invocation::new(&["package", "values", kind, "--json"])

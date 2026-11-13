@@ -162,7 +162,7 @@ fn successful_commit_creates_a_healthy_current_package_and_preserves_other_conte
     );
 
     let Ok(package) = opened(root, &PlatformFileSystem).result else {
-        panic!("the existing M2 loader accepts initialized canonical state")
+        panic!("the loader accepts initialized canonical state")
     };
     assert_eq!(package.contents.metadata_version, 1);
     assert_eq!(package.contents.index.state, PackageIndexState::Current);

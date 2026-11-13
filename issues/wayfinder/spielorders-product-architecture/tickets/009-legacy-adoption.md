@@ -10,26 +10,24 @@ Legacy adoption is an exceptional, agent-orchestrated workflow, not a general im
 
 The workflow supports both whole-Package and individual-Order adoption, but only compositionally. Package-wide adoption means an agent initializes the Package, creates or reuses Vendors, and invokes the same per-Order primitive repeatedly. There is no separate batch importer or package-wide adoption transaction. Individual adoption remains useful for incremental work, resumption, and deliberately assigning a new identity after duplicate-Order evidence has been resolved.
 
-### Selected archive topology and eligibility
+### Archive topology and eligibility
 
-For the contemplated `/Users/example/Documents/Administration/Orders` adoption:
+Select the SpielOrders Root and its configured Orders and Removed Orders directories explicitly for each archive, within the CLI and schema constraints. For example, an archive may keep its physical collection under `Purchases` and removed content under `Removed`.
 
-- that directory is the selected **SpielOrders Root**;
-- `orders_path` is `All Orders` and `removed_path` is `Removed`;
-- only non-hidden, physical ordinary direct-child directories of `All Orders` are candidate Order Directories;
-- the `Northwind`, `Uplands`, and `Cedarbrook` directories are institution-grouped symbolic-alias views and are excluded; links are never followed or adopted;
-- `scripts`, `outputs`, `tmp`, ZIP files, `Order_Summary.xlsx`, root `README.md`, and all other root material are outside the Orders Directory and remain ordinary user space;
-- hidden entries and non-directory entries under `All Orders` are excluded under the established discovery rules.
+- Only non-hidden, physical ordinary direct-child directories of the configured Orders Directory are candidates.
+- Symbolic-alias views are not additional collections; links are never followed or adopted.
+- Summary documents, resources, scripts, archives, and other root material outside the Orders Directory remain ordinary user space.
+- Hidden entries and non-directory entries are excluded under the established discovery rules.
 
-This is a selection for this archive, not a new topology mandate. Another Package may select any valid SpielOrders Root, `orders_path`, and `removed_path` allowed by the CLI and schema decisions.
+No existing archive layout becomes a product-wide topology mandate.
 
 ### Evidence, parsing, and proposed facts
 
-SpielOrders performs no legacy filename-to-domain parser. The aligned naming convention is a useful hint, but underscores do not reliably delimit Vendor, Order Title, or Orderer. Concrete archive names demonstrate the problem: `2005_06_01_316_Stainless_Vacuum_Chamber` has no Vendor component; `2018_02_20_Francisco_KurtJLesker` can place a person before a Vendor; `2009_04_31_Lcom_Fiber` contains an impossible calendar date; and `2019_08_22_15_12_36_Quote0161172_8_22_2019` does not expose trustworthy field boundaries. The agent may recognize a valid leading `YYYY_MM_DD` as evidence, but every adopted required fact is supplied explicitly rather than accepted from an automatic parse.
+SpielOrders performs no legacy filename-to-domain parser. The aligned naming convention is a useful hint, but underscores do not reliably delimit Vendor, Order Title, or Orderer. Synthetic examples illustrate the ambiguity: `2030_01_15_Steel_Mount` has no explicit Vendor component; `2030_03_12_Alex_Example_Supplies` can place a person before a Vendor; `2030_02_30_Example_Cable` contains an impossible calendar date; and `2030_06_18_10_20_30_Quote_EXAMPLE` does not expose trustworthy field boundaries. The agent may recognize a valid leading `YYYY_MM_DD` as evidence, but every adopted required fact is supplied explicitly rather than accepted from an automatic parse.
 
-For this archive, `Order_Summary.xlsx`, the physical directory, the institution alias that points to it, retained migration audit material, and the directory's documents are separate evidence sources. The agent may inspect them read-only and should prefer direct transaction or structured-record evidence over a projected basename. It reports provenance and contradictions rather than silently selecting whichever source is easiest. Missing optional facts remain absent. Missing or contradictory required Date Ordered or Order Title blocks that candidate until the human accepts a defensible value. Status is also explicit for adoption and may be any established Order Status; it is never inferred from document presence.
+Summary records, the physical directory, aliases that point to it, retained audit material, and its documents are separate evidence sources. The agent may inspect them read-only and should prefer direct transaction or structured-record evidence over a projected basename. It reports provenance and contradictions rather than silently selecting whichever source is easiest. Missing optional facts remain absent. Missing or contradictory required Date Ordered or Order Title blocks that candidate until the human accepts a defensible value. Status is also explicit for adoption and may be any established Order Status; it is never inferred from document presence.
 
-The workbook's `Northwind`, `Uplands`, and `Cedarbrook` values are proposed Ordering Institution values, not directories to adopt. Reusable Free-Entry Values follow their established trimmed, case-insensitive reuse rule. An agent first queries the Package's current canonical values and recommends reuse or an explicitly confirmed new value; SpielOrders does not retain a separate legacy-alias table.
+Institution labels in summary records are proposed Ordering Institution values, not directories to adopt. Reusable Free-Entry Values follow their established trimmed, case-insensitive reuse rule. An agent first queries the Package's current canonical values and recommends reuse or an explicitly confirmed new value; SpielOrders does not retain a separate legacy-alias table.
 
 ### Vendor reconciliation without Vendor Merge
 
@@ -73,10 +71,10 @@ Every newly generated Order and Vendor ID is checked against the Package before 
 
 All mutating primitives inherit the CLI contract's complete-plan validation, beside-destination staging, atomic managed-file replacement, and rollback reporting. Initialization validates its complete root-artifact plan before writing and rolls back already-created managed artifacts where possible on failure. Each Order or Vendor commit is atomic at that entity scope. A long sequence of adoptions is deliberately not one transaction and receives no package-wide rollback: completed entities remain valid, and the agent resumes by re-reading Package state and skipping already adopted directories. A failed derived-index refresh does not undo committed canonical metadata and is recovered with `index rebuild`.
 
-The agent must present a consolidated dry-run review before any future write. For each candidate it shows the physical relative path, proposed facts, evidence and contradictions, proposed existing/new/absent Vendor handling, reuse or introduction of Reusable Free-Entry Values, blockers, and the exact CLI mutations it intends to run. It separately summarizes exclusions, collisions, duplicate evidence, damaged or partial candidates, and expected README creation. Explicit human confirmation authorizes only that reviewed set. The CLI itself remains noninteractive: omitting `--dry-run` authorizes each named mutation, consistent with the existing contract. State-change preconditions may still reject a command between review and commit.
+The agent must present a consolidated dry-run review before any write. For each candidate it shows the physical relative path, proposed facts, evidence and contradictions, proposed existing/new/absent Vendor handling, reuse or introduction of Reusable Free-Entry Values, blockers, and the exact CLI mutations it intends to run. It separately summarizes exclusions, collisions, duplicate evidence, damaged or partial candidates, and expected README creation. Explicit human confirmation authorizes only that reviewed set. The CLI itself remains noninteractive: omitting `--dry-run` authorizes each named mutation, consistent with the existing contract. State-change preconditions may still reject a command between review and commit.
 
-Supporting Material is preserved in place and byte-for-byte. Core adoption does not inventory, parse, normalize, rename, move, delete, rewrite, or create files within it. Agent inspection is read-only and creates no archive-side manifests or annotations. This planning resolution does not execute, modify, migrate, rename, or add metadata to the existing archive.
+Supporting Material is preserved in place and byte-for-byte. Core adoption does not inventory, parse, normalize, rename, move, delete, rewrite, or create files within it. Agent inspection is read-only and creates no archive-side manifests or annotations.
 
-### Package-local guidance
+### Agent guidance
 
 [Define the SpielOrders agent skill contract](011-agent-skill-contract.md) owns the generated guidance, readiness surface, and progressive-disclosure structure. It describes available operations and their effects without duplicating this adoption decision or prescribing an agent reasoning ritual.

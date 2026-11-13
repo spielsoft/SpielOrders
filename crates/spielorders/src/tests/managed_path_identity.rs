@@ -1,6 +1,6 @@
 //! Decision sources: Define the SpielOrders package topology; Define the Rust CLI
 //! capability contract; Define integrity, validation, and repair boundaries; Define
-//! the stable M2 diagnostic vocabulary and evidence contract.
+//! the stable diagnostic vocabulary and evidence contract.
 //!
 //! The Orders Directory and the Removed Orders Directory must be two directories.
 //! Whether they are is a question about the filesystem, not about the configured
@@ -344,7 +344,7 @@ fn initialization_refuses_two_paths_that_would_name_one_directory_once_created()
 
 #[test]
 fn the_configured_orders_directory_name_code_keeps_its_wire_spelling() {
-    // A deliberate interface lock. The closed M2 diagnostic contract makes a code's
+    // A deliberate interface lock. The closed diagnostic contract makes a code's
     // spelling a compatibility promise to every adapter and test that reads one, so
     // this spelling is public and renaming it is an incompatible change.
     assert_eq!(

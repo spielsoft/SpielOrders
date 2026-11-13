@@ -6,17 +6,6 @@ import Testing
 // Decision sources: Prototype the SpielOrders desktop experience, Order and Vendor editing;
 // Effect and adapter boundaries.
 
-private func openedSession(_ root: URL) async throws -> PackageSession {
-    let session = PackageSession()
-    _ = try await session.open(root, cancellation: LibraryCancellation())
-    return session
-}
-
-private func listedOrders(_ session: PackageSession) async throws -> [OrderRow] {
-    try await session.orders(query: "", caseSensitive: false, sortField: -1, descending: false,
-                             cancellation: LibraryCancellation()).rows
-}
-
 private func orderDirectories(_ root: URL) throws -> [String] {
     try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("Orders").path)
         .filter { !$0.hasPrefix(".") }
@@ -26,7 +15,7 @@ private func fill(_ draft: RecordDraft, row: Int, _ values: [Int32: String]) thr
     for (field, value) in values { try draft.setRow(row, field, to: value) }
 }
 
-@Test func aNewOrderIsCreatedOnlyBySavingAndIsListedWithItsTotal() async throws {
+@Test func orderCreation() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     let session = try await openedSession(root)
@@ -48,7 +37,7 @@ private func fill(_ draft: RecordDraft, row: Int, _ values: [Int32: String]) thr
     #expect(saved.draft?.contents == draft.contents)
 }
 
-@Test func aRefusedSaveLocatesEveryErrorWritesNothingAndKeepsTheDraft() async throws {
+@Test func saveRefusal() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     let session = try await openedSession(root)
@@ -65,13 +54,14 @@ private func fill(_ draft: RecordDraft, row: Int, _ values: [Int32: String]) thr
         let located = refusal.problems.map { [$0.field, Int32($0.row)] }
         #expect(located.contains([SPIELORDERS_ORDER_FIELD_TITLE, -1]))
         #expect(located.contains([SPIELORDERS_ITEM_FIELD_QUANTITY, 0]))
+        #expect(refusal.localizedDescription.contains("Row: 1"))
         #expect(!refusal.stale)
     }
     #expect(draft.contents == before)
     #expect(try orderDirectories(root).isEmpty)
 }
 
-@Test func aStaleEditRefusesAndLeavesTheOtherWritersFacts() async throws {
+@Test func staleDraft() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     _ = try createOrder(in: root, title: "Original")
@@ -94,7 +84,7 @@ private func fill(_ draft: RecordDraft, row: Int, _ values: [Int32: String]) thr
     #expect(try await listedOrders(reader).first?.values[SPIELORDERS_ORDER_FIELD_TITLE] == "Their title")
 }
 
-@Test func removedAndReorderedItemsCommitTogether() async throws {
+@Test func itemReordering() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     let session = try await openedSession(root)
@@ -112,14 +102,35 @@ private func fill(_ draft: RecordDraft, row: Int, _ values: [Int32: String]) thr
     _ = try await session.save(edit, cancellation: LibraryCancellation())
     let reader = try await openedSession(root)
     let row = try #require(try await listedOrders(reader).first)
-    guard case let .healthy(details) = try await reader.inspectOrder(row, cancellation: LibraryCancellation()) else {
-        Issue.record("The saved Order must be healthy")
-        return
-    }
-    #expect(details.items.map(\.description) == ["C", "A"])
+    let saved = try await reader.orderDraft(row, cancellation: LibraryCancellation())
+    #expect((0..<saved.rowCount).map { saved.rowField($0, SPIELORDERS_ITEM_FIELD_DESCRIPTION) } == ["C", "A"])
 }
 
-@Test func anEditIntroducingAReusableValueNeedsConfirmationAndAReusedOneDoesNot() async throws {
+@Test func itemNotes() async throws {
+    let root = try initializedPackage()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let session = try await openedSession(root)
+    let draft = try await session.newOrderDraft()
+    try draft.set(SPIELORDERS_ORDER_FIELD_TITLE, to: "Optics")
+    try draft.insertRow(at: 0)
+    try fill(draft, row: 0, [SPIELORDERS_ITEM_FIELD_DESCRIPTION: "Lens", SPIELORDERS_ITEM_FIELD_QUANTITY: "2",
+                             SPIELORDERS_ITEM_FIELD_UNIT_PRICE: "4",
+                             SPIELORDERS_ITEM_FIELD_NOTES: "  Coated for 780 nm\r\nQuote Q-17  "])
+    #expect(draft.total == "8")
+    let created = try await session.save(draft, cancellation: LibraryCancellation())
+    let saved = try #require(created.draft)
+    #expect(saved.rowField(0, SPIELORDERS_ITEM_FIELD_NOTES) == "Coated for 780 nm\nQuote Q-17")
+    #expect(saved.total == "8")
+    try saved.setRow(0, SPIELORDERS_ITEM_FIELD_NOTES, to: "")
+    _ = try await session.save(saved, cancellation: LibraryCancellation())
+    let reader = try await openedSession(root)
+    let row = try #require(try await listedOrders(reader).first)
+    let reread = try await reader.orderDraft(row, cancellation: LibraryCancellation())
+    #expect(reread.rowField(0, SPIELORDERS_ITEM_FIELD_NOTES) == "")
+    #expect(reread.rowField(0, SPIELORDERS_ITEM_FIELD_DESCRIPTION) == "Lens")
+}
+
+@Test func reusableValues() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     _ = try createOrder(in: root, title: "Existing")
@@ -140,12 +151,27 @@ private func fill(_ draft: RecordDraft, row: Int, _ values: [Int32: String]) thr
     }
     for field in [SPIELORDERS_ORDER_FIELD_PROJECT, SPIELORDERS_ORDER_FIELD_ORDERER] { try edit.confirm(field) }
     let saved = try #require(try await session.save(edit, cancellation: LibraryCancellation()).draft)
-    #expect(try await session.values(SPIELORDERS_ORDER_FIELD_PROJECT) == ["Greenhouse", "Optics"])
+    #expect(try await session.values(SPIELORDERS_ORDER_FIELD_PROJECT).map(\.name) == ["Greenhouse", "Optics"])
     try saved.set(SPIELORDERS_ORDER_FIELD_PROJECT, to: "greenhouse")
     _ = try await session.save(saved, cancellation: LibraryCancellation())
 }
 
-@Test func aVendorCreatedAndRenamedInADraftIsResolvedLiveByItsOrders() async throws {
+@Test func valueUsage() async throws {
+    let root = try initializedPackage()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let session = try await openedSession(root)
+    for (title, orderer) in [("Lenses", "Ada"), ("Mounts", "Ada"), ("Probes", "Grace")] {
+        let draft = try await session.newOrderDraft()
+        try draft.set(SPIELORDERS_ORDER_FIELD_TITLE, to: title)
+        try draft.set(SPIELORDERS_ORDER_FIELD_ORDERER, to: orderer)
+        _ = try await session.save(draft, cancellation: LibraryCancellation())
+    }
+    let orderers = try await session.values(SPIELORDERS_ORDER_FIELD_ORDERER)
+    #expect(Dictionary(uniqueKeysWithValues: orderers.map { ($0.name, $0.orderCount) }) == ["Ada": 2, "Grace": 1])
+    #expect(try await session.values(SPIELORDERS_ORDER_FIELD_ORDERING_INSTITUTION).isEmpty)
+}
+
+@Test func vendorRename() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     let session = try await openedSession(root)
@@ -166,7 +192,7 @@ private func fill(_ draft: RecordDraft, row: Int, _ values: [Int32: String]) thr
     #expect(try await listedOrders(session).first?.values[SPIELORDERS_ORDER_FIELD_VENDOR] == "Tarnwick")
 }
 
-@Test func aHiddenVendorLeavesTheOfferedListAndStillResolvesForItsOrders() async throws {
+@Test func vendorVisibility() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     let id = try createVendor(in: root, name: "Elderglass")

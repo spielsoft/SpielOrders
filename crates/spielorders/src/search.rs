@@ -34,14 +34,53 @@ pub enum CaseSensitivity {
     Sensitive,
 }
 
+/// One fact an Order search can be confined to. The Vendor is matched by its Name.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OrderFact {
+    Title,
+    DateOrdered,
+    Status,
+    Vendor,
+    Orderer,
+    OrderingInstitution,
+    Project,
+    OrderGroup,
+    Currency,
+    OrderId,
+    Description,
+    CatalogNumber,
+    Quantity,
+    UnitPrice,
+    Notes,
+}
+
+/// One fact a Vendor search can be confined to. A Contact fact matches any Contact.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VendorFact {
+    Name,
+    Phone,
+    Email,
+    Website,
+    Address,
+    PurchasingNotes,
+    VendorId,
+    ContactName,
+    ContactRole,
+    ContactPhone,
+    ContactEmail,
+}
+
 /// One parsed query.
 ///
 /// The terms are folded once here rather than at each fact they are compared with, so one
-/// query asked of a whole Package folds each term exactly once.
+/// query asked of a whole Package folds each term exactly once. A query searches every
+/// searchable fact unless it is confined to one.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SearchQuery {
     terms: Vec<String>,
     case: CaseSensitivity,
+    order_fact: Option<OrderFact>,
+    vendor_fact: Option<VendorFact>,
 }
 
 impl SearchQuery {
@@ -57,7 +96,33 @@ impl SearchQuery {
                 .map(|term| folded(term, case))
                 .collect(),
             case,
+            order_fact: None,
+            vendor_fact: None,
         }
+    }
+
+    /// This query confined to one fact of an Order.
+    pub fn in_order_fact(self, fact: OrderFact) -> Self {
+        Self {
+            order_fact: Some(fact),
+            ..self
+        }
+    }
+
+    /// This query confined to one fact of a Vendor.
+    pub fn in_vendor_fact(self, fact: VendorFact) -> Self {
+        Self {
+            vendor_fact: Some(fact),
+            ..self
+        }
+    }
+
+    fn order_wants(&self, fact: OrderFact) -> bool {
+        self.order_fact.is_none_or(|only| only == fact)
+    }
+
+    fn vendor_wants(&self, fact: VendorFact) -> bool {
+        self.vendor_fact.is_none_or(|only| only == fact)
     }
 
     /// Whether parsing found no terms, so this query applies no text restriction.
@@ -122,17 +187,30 @@ impl Package {
     /// Vendor with [`crate::canonical::CurrentPackageCandidate::vendor_for_order`]. A Damaged Order has no
     /// facts to match on, so its placeholder is listed only under an empty query.
     pub fn orders_matching(&self, query: &SearchQuery) -> Answer<Vec<OrderListEntry>> {
+        self.orders_matching_or_holding(query, &[])
+    }
+
+    /// The ordinary Order list of the healthy Orders matching `query` or whose Order
+    /// Directory is one of `holding`, where Supporting Material matched; in the Package's
+    /// own order, each once. As in [`Self::orders_matching`], Damaged Order placeholders
+    /// are listed only under an empty query.
+    pub fn orders_matching_or_holding(
+        &self,
+        query: &SearchQuery,
+        holding: &[std::path::PathBuf],
+    ) -> Answer<Vec<OrderListEntry>> {
         let package = &self.contents;
         let mut rows: Vec<_> = package
             .healthy_orders
             .iter()
             .enumerate()
             .filter(|(position, order)| {
-                query.retains(&order_facts(
-                    order,
-                    package.vendor_for_order(*position),
-                    query,
-                ))
+                holding.contains(&order.paths.directory.absolute_path)
+                    || query.retains(&order_facts(
+                        order,
+                        package.vendor_for_order(*position),
+                        query,
+                    ))
             })
             .map(|(position, order)| OrderListEntry::Healthy {
                 position,
@@ -204,6 +282,18 @@ impl Facts {
     fn add_optional(&mut self, text: Option<&str>) {
         if let Some(text) = text {
             self.add(text);
+        }
+    }
+
+    fn add_if(&mut self, wanted: bool, text: &str) {
+        if wanted {
+            self.add(text);
+        }
+    }
+
+    fn add_optional_if(&mut self, wanted: bool, text: Option<&str>) {
+        if wanted {
+            self.add_optional(text);
         }
     }
 
@@ -338,33 +428,54 @@ fn is_a_block(tag: TagEnd) -> bool {
 /// Directory and the documents around the record, and the Item Totals and Order Total
 /// calculated from the Items.
 fn order_facts(order: &HealthyOrder, vendor: Option<&Vendor>, query: &SearchQuery) -> Facts {
+    use OrderFact as Fact;
     let document = &order.document;
+    let wants = |fact| query.order_wants(fact);
+    let everything = query.order_fact.is_none();
     let mut facts = query.facts();
-    facts.add(document.order_id.as_str());
-    facts.add(document.title.as_str());
-    facts.add(document.date_ordered.as_str());
-    facts.add(document.status.code());
+    facts.add_if(wants(Fact::OrderId), document.order_id.as_str());
+    facts.add_if(wants(Fact::Title), document.title.as_str());
+    facts.add_if(wants(Fact::DateOrdered), document.date_ordered.as_str());
+    facts.add_if(wants(Fact::Status), document.status.code());
     // The Vendor Reference the record stores: a canonical Order fact like any other, and
     // named in none of the decision's exclusions, so one Vendor ID reaches the Vendor and
     // the Orders that name it alike.
-    facts.add_optional(document.vendor_id.as_ref().map(VendorId::as_str));
-    facts.add_optional(document.orderer.as_deref());
-    facts.add_optional(document.ordering_institution.as_deref());
-    facts.add_optional(document.currency.as_ref().map(Currency::as_str));
-    facts.add_optional(document.project.as_deref());
-    facts.add_optional(document.order_group.as_deref());
+    facts.add_optional_if(
+        everything,
+        document.vendor_id.as_ref().map(VendorId::as_str),
+    );
+    facts.add_optional_if(wants(Fact::Orderer), document.orderer.as_deref());
+    facts.add_optional_if(
+        wants(Fact::OrderingInstitution),
+        document.ordering_institution.as_deref(),
+    );
+    facts.add_optional_if(
+        wants(Fact::Currency),
+        document.currency.as_ref().map(Currency::as_str),
+    );
+    facts.add_optional_if(wants(Fact::Project), document.project.as_deref());
+    facts.add_optional_if(wants(Fact::OrderGroup), document.order_group.as_deref());
     for item in &document.items {
-        facts.add(item.description.as_str());
-        facts.add_optional(item.catalog_number.as_deref());
-        facts.add_stored_number(item.quantity.get());
-        facts.add_monetary_number(item.unit_price.get());
+        facts.add_if(wants(Fact::Description), item.description.as_str());
+        facts.add_optional_if(wants(Fact::CatalogNumber), item.catalog_number.as_deref());
+        if wants(Fact::Quantity) {
+            facts.add_stored_number(item.quantity.get());
+        }
+        if wants(Fact::UnitPrice) {
+            facts.add_monetary_number(item.unit_price.get());
+        }
+        facts.add_optional_if(wants(Fact::Notes), item.notes.as_deref());
     }
     // The README the load established for this Order. `None` is a document that exists and
     // could not be read, so there is no text to match on and none is invented — the load's
-    // diagnostics are what say why.
-    facts.add_markdown(order.readme_text.as_deref());
-    if let Some(vendor) = vendor {
-        add_shared_vendor_facts(&mut facts, vendor);
+    // diagnostics are what say why. It is no single fact, so only a whole search reaches it.
+    if everything {
+        facts.add_markdown(order.readme_text.as_deref());
+    }
+    match (vendor, query.order_fact) {
+        (Some(vendor), None) => add_shared_vendor_facts(&mut facts, vendor, query),
+        (Some(vendor), Some(Fact::Vendor)) => facts.add(vendor.name.as_str()),
+        _ => {}
     }
     facts
 }
@@ -372,8 +483,11 @@ fn order_facts(order: &HealthyOrder, vendor: Option<&Vendor>, query: &SearchQuer
 /// One Vendor's searchable facts: its identity and its shared facts.
 fn vendor_facts(vendor: &Vendor, query: &SearchQuery) -> Facts {
     let mut facts = query.facts();
-    facts.add(vendor.vendor_id.as_str());
-    add_shared_vendor_facts(&mut facts, vendor);
+    facts.add_if(
+        query.vendor_wants(VendorFact::VendorId),
+        vendor.vendor_id.as_str(),
+    );
+    add_shared_vendor_facts(&mut facts, vendor, query);
     facts
 }
 
@@ -382,18 +496,24 @@ fn vendor_facts(vendor: &Vendor, query: &SearchQuery) -> Facts {
 /// Visibility is not among them. **A choice, not a rule:** a Hidden Vendor is in a state
 /// rather than carrying a fact, and this core spells no text for that state, so there is
 /// nothing here for a term to be a substring of.
-fn add_shared_vendor_facts(facts: &mut Facts, vendor: &Vendor) {
-    facts.add(vendor.name.as_str());
-    facts.add_optional(vendor.phone.as_deref());
-    facts.add_optional(vendor.email.as_deref());
-    facts.add_optional(vendor.website.as_deref());
-    facts.add_optional(vendor.address.as_deref());
-    facts.add_optional(vendor.purchasing_notes.as_deref());
+/// An Order search reaches them all or, confined to its Vendor, only the Name.
+fn add_shared_vendor_facts(facts: &mut Facts, vendor: &Vendor, query: &SearchQuery) {
+    use VendorFact as Fact;
+    let wants = |fact| query.vendor_wants(fact);
+    facts.add_if(wants(Fact::Name), vendor.name.as_str());
+    facts.add_optional_if(wants(Fact::Phone), vendor.phone.as_deref());
+    facts.add_optional_if(wants(Fact::Email), vendor.email.as_deref());
+    facts.add_optional_if(wants(Fact::Website), vendor.website.as_deref());
+    facts.add_optional_if(wants(Fact::Address), vendor.address.as_deref());
+    facts.add_optional_if(
+        wants(Fact::PurchasingNotes),
+        vendor.purchasing_notes.as_deref(),
+    );
     for contact in &vendor.contacts {
-        facts.add(contact.name.as_str());
-        facts.add_optional(contact.role.as_deref());
-        facts.add_optional(contact.phone.as_deref());
-        facts.add_optional(contact.email.as_deref());
+        facts.add_if(wants(Fact::ContactName), contact.name.as_str());
+        facts.add_optional_if(wants(Fact::ContactRole), contact.role.as_deref());
+        facts.add_optional_if(wants(Fact::ContactPhone), contact.phone.as_deref());
+        facts.add_optional_if(wants(Fact::ContactEmail), contact.email.as_deref());
     }
 }
 

@@ -263,6 +263,11 @@ pub const SPIELORDERS_FAILURE_QUERY_REFUSED: SpielordersConstant = SpielordersCo
 pub const SPIELORDERS_FAILURE_UNSUPPORTED: SpielordersConstant = SpielordersConstant(1077);
 /// `panicked`. A commit stopped on an internal failure; `after` is "replaced" when it had already replaced a managed file, and "unchanged" otherwise.
 pub const SPIELORDERS_FAILURE_PANICKED: SpielordersConstant = SpielordersConstant(1078);
+/// `vendor_referenced`. Orders still reference the Vendor a deletion names; one entry per Order, located at its directory.
+pub const SPIELORDERS_FAILURE_VENDOR_REFERENCED: SpielordersConstant = SpielordersConstant(1079);
+/// `order_identity_in_use`. An Order of the Package already carries the Order ID of the Order being restored; located at that Order.
+pub const SPIELORDERS_FAILURE_ORDER_IDENTITY_IN_USE: SpielordersConstant =
+    SpielordersConstant(1080);
 
 /// What a committed change warns of beside its result: an entry code.
 /// `index_refresh_failed`. The derived Package Index could not be refreshed after the commit.
@@ -463,6 +468,8 @@ pub const SPIELORDERS_ITEM_FIELD_UNIT_PRICE: SpielordersConstant = SpielordersCo
 pub const SPIELORDERS_ITEM_FIELD_CATALOG_NUMBER: SpielordersConstant = SpielordersConstant(10003);
 /// `total`. Read-only: the row total, unrounded.
 pub const SPIELORDERS_ITEM_FIELD_TOTAL: SpielordersConstant = SpielordersConstant(10004);
+/// `notes`. Multiline remarks tied to this Item alone.
+pub const SPIELORDERS_ITEM_FIELD_NOTES: SpielordersConstant = SpielordersConstant(10005);
 
 /// A fact of a Vendor.
 /// `name`.
@@ -587,6 +594,8 @@ pub const SPIELORDERS_OPERATION_PRESERVE_DIRECTORY: SpielordersConstant =
     SpielordersConstant(19021);
 /// `preserve_file`. Initialization keeps an existing file.
 pub const SPIELORDERS_OPERATION_PRESERVE_FILE: SpielordersConstant = SpielordersConstant(19022);
+/// `replace_file`. Agent provisioning replaces a guidance file that differs from the current one.
+pub const SPIELORDERS_OPERATION_REPLACE_FILE: SpielordersConstant = SpielordersConstant(19023);
 
 /// One change a plan makes to a record.
 /// `fact`. A fact changes from `before` to `after`; a row of -1 is the record's own fact.
@@ -599,6 +608,8 @@ pub const SPIELORDERS_CHANGE_ROW_REMOVED: SpielordersConstant = SpielordersConst
 pub const SPIELORDERS_CHANGE_ROW_MOVED: SpielordersConstant = SpielordersConstant(20003);
 /// `new_identity`. The commit mints a new identity for the record.
 pub const SPIELORDERS_CHANGE_NEW_IDENTITY: SpielordersConstant = SpielordersConstant(20004);
+/// `record_removed`. The commit removes the whole record; `before` is its Name.
+pub const SPIELORDERS_CHANGE_RECORD_REMOVED: SpielordersConstant = SpielordersConstant(20005);
 
 /// Whether a reusable value already exists.
 /// `reused`. The Package already uses this value.
@@ -940,6 +951,11 @@ pub(crate) const NAMES: &[(SpielordersConstant, &CStr)] = &[
     (SPIELORDERS_FAILURE_QUERY_REFUSED, c"query_refused"),
     (SPIELORDERS_FAILURE_UNSUPPORTED, c"unsupported"),
     (SPIELORDERS_FAILURE_PANICKED, c"panicked"),
+    (SPIELORDERS_FAILURE_VENDOR_REFERENCED, c"vendor_referenced"),
+    (
+        SPIELORDERS_FAILURE_ORDER_IDENTITY_IN_USE,
+        c"order_identity_in_use",
+    ),
     (
         SPIELORDERS_WARNING_INDEX_REFRESH_FAILED,
         c"index_refresh_failed",
@@ -1126,6 +1142,7 @@ pub(crate) const NAMES: &[(SpielordersConstant, &CStr)] = &[
     (SPIELORDERS_ITEM_FIELD_UNIT_PRICE, c"unit_price"),
     (SPIELORDERS_ITEM_FIELD_CATALOG_NUMBER, c"catalog_number"),
     (SPIELORDERS_ITEM_FIELD_TOTAL, c"total"),
+    (SPIELORDERS_ITEM_FIELD_NOTES, c"notes"),
     (SPIELORDERS_VENDOR_FIELD_NAME, c"name"),
     (SPIELORDERS_VENDOR_FIELD_PHONE, c"phone"),
     (SPIELORDERS_VENDOR_FIELD_EMAIL, c"email"),
@@ -1220,11 +1237,13 @@ pub(crate) const NAMES: &[(SpielordersConstant, &CStr)] = &[
         c"preserve_directory",
     ),
     (SPIELORDERS_OPERATION_PRESERVE_FILE, c"preserve_file"),
+    (SPIELORDERS_OPERATION_REPLACE_FILE, c"replace_file"),
     (SPIELORDERS_CHANGE_FACT, c"fact"),
     (SPIELORDERS_CHANGE_ROW_ADDED, c"row_added"),
     (SPIELORDERS_CHANGE_ROW_REMOVED, c"row_removed"),
     (SPIELORDERS_CHANGE_ROW_MOVED, c"row_moved"),
     (SPIELORDERS_CHANGE_NEW_IDENTITY, c"new_identity"),
+    (SPIELORDERS_CHANGE_RECORD_REMOVED, c"record_removed"),
     (SPIELORDERS_REUSE_REUSED, c"reused"),
     (SPIELORDERS_REUSE_NEW, c"new"),
     (SPIELORDERS_REPORT_COMMITTED, c"committed"),

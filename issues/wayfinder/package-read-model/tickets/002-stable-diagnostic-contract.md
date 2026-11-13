@@ -1,5 +1,5 @@
 ---
-title: Define the stable M2 diagnostic vocabulary and evidence contract
+title: Define the stable diagnostic vocabulary and evidence contract
 status: closed
 ---
 

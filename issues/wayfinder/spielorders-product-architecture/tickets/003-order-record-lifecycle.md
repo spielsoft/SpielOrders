@@ -25,7 +25,10 @@ never duplicated into the Order record.
 ### Embedded Order Items and prices
 
 Order Items have no independent identity and exist only in their user-controlled array
-order within an Order. Quantity and Unit Price have no sign restriction.
+order within an Order. Each has a required Description, Quantity, and Unit Price, an
+optional Catalog Number, and optional multiline Notes for remarks tied to that line
+alone, such as specifications, quote references, or permitted substitutions; remarks about
+the whole Order belong in its README. Quantity and Unit Price have no sign restriction.
 
 Item Total Price is Quantity multiplied by Unit Price, and Order Total is the sum of Item
 Total Prices. Neither total is stored or manually overridden; fees, shipping, taxes, and
@@ -50,13 +53,19 @@ package topology](002-package-topology.md) owns directory projection and alignme
 
 Ordering Institution, Orderer, Project, and Order Group are optional Free-Entry Values,
 at most one from each category per Order, each suggesting values already used in the
-SpielOrder Package.
+SpielOrder Package. An Order Group belongs to the Project of the Orders that use it: it
+is suggested, reused, and introduced among that Project's groups, or among the groups of
+Orders with no Project, and the same name under two Projects is two groups with no
+uniqueness check across them. Changing an Order's Project clears its group unless the new
+Project already has a group of that name or the same change names a different group.
 
 Ordering Institution names the institution through which the Order is placed. Orderer is
 a recognition and search aid, not an application account or purchasing actor. Project
 names the principal scientific or administrative effort. Order Group is an intentionally
-user-defined grouping with no prescribed meaning; its reuse interaction is provisional
-and may be revisited if the suggestion list becomes unwieldy.
+user-defined grouping within a Project with no prescribed meaning. The groups are derived
+from the Orders that use them, so a Project or group exists while an Order uses it; adding
+unused values, replacing a used value, and merging spellings would store them as the
+Vendor records are stored.
 
 ### Lifecycle
 

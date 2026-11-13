@@ -32,6 +32,7 @@ pub(crate) struct OrderItemInput {
     quantity: f64,
     unit_price: f64,
     catalog_number: Option<String>,
+    notes: Option<String>,
 }
 
 impl OrderItemInput {
@@ -46,6 +47,7 @@ impl OrderItemInput {
             quantity: item.quantity.get(),
             unit_price: item.unit_price.get(),
             catalog_number: item.catalog_number,
+            notes: item.notes,
         })
     }
 }
@@ -256,14 +258,18 @@ pub(crate) fn plan_order_adoption<F: FileSystem>(
             })
             .transpose()?;
         let vendor_id = vendor.map(|vendor| vendor.vendor_id.as_str());
+        let project = canonical_reusable(input.project.as_deref(), &package.projects);
         let reusable_values = ReusableValues {
             orderer: canonical_reusable(input.orderer.as_deref(), &package.orderers),
             ordering_institution: canonical_reusable(
                 input.ordering_institution.as_deref(),
                 &package.ordering_institutions,
             ),
-            project: canonical_reusable(input.project.as_deref(), &package.projects),
-            order_group: canonical_reusable(input.order_group.as_deref(), &package.order_groups),
+            order_group: canonical_reusable(
+                input.order_group.as_deref(),
+                &package.order_groups_of(reusable_text(&project)),
+            ),
+            project,
         };
         let items = input
             .items
@@ -280,6 +286,16 @@ pub(crate) fn plan_order_adoption<F: FileSystem>(
                         .expect("an Order Item candidate is an object"),
                     "catalog_number",
                     item.catalog_number
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty()),
+                );
+                insert_optional(
+                    value
+                        .as_object_mut()
+                        .expect("an Order Item candidate is an object"),
+                    "notes",
+                    item.notes
                         .as_deref()
                         .map(str::trim)
                         .filter(|value| !value.is_empty()),
@@ -633,8 +649,11 @@ fn reusable_values_for_document(
             document.ordering_institution.as_deref(),
             &package.ordering_institutions,
         ),
+        order_group: canonical_reusable(
+            document.order_group.as_deref(),
+            &package.order_groups_of(document.project.as_deref()),
+        ),
         project: canonical_reusable(document.project.as_deref(), &package.projects),
-        order_group: canonical_reusable(document.order_group.as_deref(), &package.order_groups),
     }
 }
 

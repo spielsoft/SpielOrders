@@ -1,0 +1,8 @@
+INFOPLIST_FILE = Info.plist
+
+// Only the shipping identity owns Finder's default. Other builds can be opened
+// explicitly without competing with the owner's installed app.
+SPIELORDERS_DOCUMENT_RANK = $(SPIELORDERS_DOCUMENT_RANK_$(SPIELORDERS_APP_IDENTIFIER:identifier))
+SPIELORDERS_DOCUMENT_RANK_com_spielsoft_SpielOrders = Owner
+SPIELORDERS_DOCUMENT_RANK_com_spielsoft_SpielOrders_Development = None
+SPIELORDERS_DOCUMENT_RANK_com_spielsoft_SpielOrders_Validation = None

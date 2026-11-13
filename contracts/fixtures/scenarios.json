@@ -242,8 +242,8 @@
       "sources": ["Define legacy Order adoption and metadata bootstrapping", "Define the SpielOrders package topology"],
       "condition": "An eligible ordinary Order Directory has an ambiguous legacy basename, an existing README, and opaque Supporting Material but no managed metadata.",
       "tree": [
-        {"path":"Orders/2018_02_20_Francisco_KurtJLesker/README.md","kind":"file","contents":"existing user-authored notes"},
-        {"path":"Orders/2018_02_20_Francisco_KurtJLesker/quote.bin","kind":"copy","source":"fixtures/assets/supporting-b.bin"}
+        {"path":"Orders/2030_03_12_Alex_Example_Supplies/README.md","kind":"file","contents":"existing user-authored notes"},
+        {"path":"Orders/2030_03_12_Alex_Example_Supplies/quote.bin","kind":"copy","source":"fixtures/assets/supporting-b.bin"}
       ],
       "schema_validity": "not_yet_managed",
       "semantic_validity": "requires_explicit_adoption_facts",

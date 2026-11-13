@@ -14,4 +14,6 @@ import Foundation
         if kind != .mutation { task.cancel() }
         await task.value
     }
+
+    public func wait() async { await task.value }
 }

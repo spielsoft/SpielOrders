@@ -1,5 +1,5 @@
 ---
-title: Define the complete M2 Package read projection and load-state contract
+title: Define the complete Package read projection and load-state contract
 status: closed
 ---
 

@@ -7,7 +7,7 @@ use crate::interface::{
     SPIELORDERS_DRAFT_KIND_TEXT, SPIELORDERS_DRAFT_KIND_VENDOR,
     SPIELORDERS_FAILURE_INVALID_CONTACT_POSITION, SPIELORDERS_FAILURE_INVALID_ITEM_POSITION,
     SPIELORDERS_ITEM_FIELD_CATALOG_NUMBER, SPIELORDERS_ITEM_FIELD_DESCRIPTION,
-    SPIELORDERS_ITEM_FIELD_QUANTITY, SPIELORDERS_ITEM_FIELD_TOTAL,
+    SPIELORDERS_ITEM_FIELD_NOTES, SPIELORDERS_ITEM_FIELD_QUANTITY, SPIELORDERS_ITEM_FIELD_TOTAL,
     SPIELORDERS_ITEM_FIELD_UNIT_PRICE, SPIELORDERS_ORDER_FIELD_CURRENCY,
     SPIELORDERS_ORDER_FIELD_DATE_ORDERED, SPIELORDERS_ORDER_FIELD_ORDER_GROUP,
     SPIELORDERS_ORDER_FIELD_ORDERER, SPIELORDERS_ORDER_FIELD_ORDERING_INSTITUTION,
@@ -49,11 +49,12 @@ const ORDER_FIELDS: [SpielordersConstant; 9] = [
     SPIELORDERS_ORDER_FIELD_PROJECT,
     SPIELORDERS_ORDER_FIELD_ORDER_GROUP,
 ];
-const ITEM_FIELDS: [SpielordersConstant; 4] = [
+const ITEM_FIELDS: [SpielordersConstant; 5] = [
     SPIELORDERS_ITEM_FIELD_DESCRIPTION,
     SPIELORDERS_ITEM_FIELD_QUANTITY,
     SPIELORDERS_ITEM_FIELD_UNIT_PRICE,
     SPIELORDERS_ITEM_FIELD_CATALOG_NUMBER,
+    SPIELORDERS_ITEM_FIELD_NOTES,
 ];
 const VENDOR_FIELDS: [SpielordersConstant; 6] = [
     SPIELORDERS_VENDOR_FIELD_NAME,
@@ -122,6 +123,8 @@ pub(crate) struct SpielordersDraftData {
     facts: Vec<(SpielordersConstant, String)>,
     pub(crate) rows: Vec<Row>,
     confirmed: Vec<SpielordersConstant>,
+    /// The facts set since the draft was made, including to the value they had.
+    touched: Vec<SpielordersConstant>,
     initial: Initial,
     /// What the accessors read, rebuilt after every change.
     shown: Shown,
@@ -210,10 +213,22 @@ impl SpielordersDraftData {
         };
     }
 
-    /// The facts and rows as the assignments a plan takes.
+    fn touch(&mut self, field: SpielordersConstant) {
+        if !self.touched.contains(&field) {
+            self.touched.push(field);
+        }
+    }
+
+    /// The facts and rows as the assignments a plan takes. An existing Order's draft
+    /// names only the facts that were set, so an edit can tell a fact named again from one
+    /// left alone; the rest stay as the record has them.
     pub(crate) fn assignments(&self) -> (Assignments, Vec<Assignments>) {
         let mut facts = Assignments::new();
+        let existing = matches!(self.origin, Origin::EditOrder { .. });
         for (field, value) in &self.facts {
+            if existing && !self.touched.contains(field) {
+                continue;
+            }
             let field_name = name(*field).unwrap_or_default();
             facts = if self.confirmed.contains(field) {
                 facts.introduce(field_name, value.clone())
@@ -321,6 +336,7 @@ impl SpielordersDraft {
                 })
                 .collect(),
             confirmed: Vec::new(),
+            touched: Vec::new(),
             initial: Initial::default(),
             shown: Shown::default(),
         };
@@ -595,9 +611,11 @@ pub extern "C" fn spielorders_draft_set(
                 Session::uncancellable().today(),
             );
             SpielordersDraftData::put(&mut data.facts, SPIELORDERS_ORDER_FIELD_DATE_ORDERED, date);
+            data.touch(SPIELORDERS_ORDER_FIELD_DATE_ORDERED);
         }
         data.confirmed.retain(|confirmed| *confirmed != field);
         SpielordersDraftData::put(&mut data.facts, field, text.to_owned());
+        data.touch(field);
         SPIELORDERS_RESULT_OK
     })
 }

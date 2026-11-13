@@ -2,7 +2,7 @@ import Foundation
 import SpielOrdersKit
 import Testing
 
-@Test func expertCorrectionWritesLiteralTextAndRevalidatesWithoutSalvaging() async throws {
+@Test func literalCorrection() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     let directory = try createOrder(in: root)
@@ -18,14 +18,14 @@ import Testing
     #expect(document.text == "{broken")
     _ = try await document.write("still invalid")
     #expect(try String(contentsOf: metadata, encoding: .utf8) == "still invalid")
-    #expect(!(try await session.revalidateAfterExpertWrite(directory: directory)).isValid)
+    #expect(!(try await session.revalidate(directory: directory)).isValid)
     let corrected = try await session.expertDocument(directory: directory, artifact: .order)
     _ = try await corrected.write(original)
-    #expect(try await session.revalidateAfterExpertWrite(directory: directory).isValid)
+    #expect(try await session.revalidate(directory: directory).isValid)
     #expect(try Data(contentsOf: supporting) == evidence)
 }
 
-@Test func expertCorrectionRejectsExternalChangesAndLinkedMetadata() async throws {
+@Test func guardedCorrection() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     let session = PackageSession()

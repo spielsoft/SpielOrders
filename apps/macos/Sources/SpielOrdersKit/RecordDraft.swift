@@ -9,12 +9,14 @@ public struct DraftProblem: Sendable {
     /// The zero-based row, or -1 for the record's own facts.
     public let row: Int
     public let message: String
+    let detail: String
 
     init(code: Int32, field: Int32, row: Int, message: String) {
         self.code = code
         self.field = field
         self.row = row
         self.message = message
+        detail = message
     }
 
     init(_ entry: LibraryEntry) {
@@ -22,6 +24,7 @@ public struct DraftProblem: Sendable {
         field = entry.field
         row = Int(entry.row)
         message = entry.message
+        detail = entry.presentation
     }
 }
 
@@ -37,7 +40,7 @@ public struct SaveRefusal: Error, LocalizedError, Sendable {
         problems.contains { [SPIELORDERS_FAILURE_PRECONDITIONS_CHANGED, SPIELORDERS_FAILURE_PLAN_EVIDENCE_UNCONFIRMED].contains($0.code) }
     }
     public var errorDescription: String? {
-        problems.isEmpty ? String(cString: spielorders_constant_name(result)) : problems.map(\.message).joined(separator: "\n")
+        (["Result: " + String(cString: spielorders_constant_name(result))] + problems.map(\.detail)).joined(separator: "\n\n")
     }
 
     /// A save that could not be attempted, for a reason outside the draft.
@@ -71,7 +74,7 @@ public final class RecordDraft: @unchecked Sendable {
     public var isNew: Bool { recordID == nil }
 
     /// The facts this draft sets, in editor order.
-    private var fields: [Int32] {
+    public var fields: [Int32] {
         switch kind {
         case .order: [SPIELORDERS_ORDER_FIELD_TITLE, SPIELORDERS_ORDER_FIELD_DATE_ORDERED, SPIELORDERS_ORDER_FIELD_STATUS,
                       SPIELORDERS_ORDER_FIELD_VENDOR, SPIELORDERS_ORDER_FIELD_ORDERER,
@@ -87,7 +90,8 @@ public final class RecordDraft: @unchecked Sendable {
     public var rowFields: [Int32] {
         switch kind {
         case .order: [SPIELORDERS_ITEM_FIELD_CATALOG_NUMBER, SPIELORDERS_ITEM_FIELD_DESCRIPTION,
-                      SPIELORDERS_ITEM_FIELD_QUANTITY, SPIELORDERS_ITEM_FIELD_UNIT_PRICE]
+                      SPIELORDERS_ITEM_FIELD_QUANTITY, SPIELORDERS_ITEM_FIELD_UNIT_PRICE,
+                      SPIELORDERS_ITEM_FIELD_NOTES]
         case .vendor: [SPIELORDERS_CONTACT_FIELD_NAME, SPIELORDERS_CONTACT_FIELD_ROLE,
                        SPIELORDERS_CONTACT_FIELD_PHONE, SPIELORDERS_CONTACT_FIELD_EMAIL]
         }
@@ -163,6 +167,21 @@ public final class RecordDraft: @unchecked Sendable {
     }
 }
 
+/// One current value of a reusable-value fact, such as an Orderer.
+public struct ReusableValue: Sendable, Identifiable {
+    public let name: String
+    /// How many Orders use the value, as the library counts them.
+    public let orderCount: Int
+    public var id: String { name }
+}
+
+/// A Project, or the Orders with no Project, with its Order Groups.
+public struct ProjectGroups: Sendable {
+    /// The Project with the Orders using it, or nil for the Orders with no Project.
+    public let project: ReusableValue?
+    public let groups: [ReusableValue]
+}
+
 /// What a successful save committed.
 public struct SavedRecord: Sendable {
     /// The saved record's stable row identity: an Order row ID or a Vendor ID.
@@ -171,6 +190,8 @@ public struct SavedRecord: Sendable {
     public let draft: RecordDraft?
     public let warnings: [String]
     public let requiresReopen: Bool
+    /// The facts the draft held that the library's plan left empty, with the text each held.
+    public let cleared: [Int32: String]
 }
 
 extension PackageSession {
@@ -202,16 +223,48 @@ extension PackageSession {
         return try withExtendedLifetime(vendor) { try vendorDraft(vendor.pointer) }
     }
 
-    /// The Package's current values of one reusable-value fact.
-    public func values(_ field: Int32) throws -> [String] {
+    /// The Package's current values of one reusable-value fact, with the Orders using each.
+    public func values(_ field: Int32) throws -> [ReusableValue] {
         guard let package else { throw SessionAccessError.reopenRequired }
+        return try reusableValues { list, outcome in
+            spielorders_package_values(package.pointer, field, &list, &outcome)
+        }
+    }
+
+    /// The Order Groups of `project`, or of the Orders with no Project for "", with the
+    /// Orders using each. These are the groups the library reuses for an Order in it.
+    public func groups(of project: String) throws -> [ReusableValue] {
+        guard let package else { throw SessionAccessError.reopenRequired }
+        return try reusableValues { list, outcome in
+            try withInterfaceText(project) { project in
+                spielorders_package_project_groups(package.pointer, project, &list, &outcome)
+            }
+        }
+    }
+
+    /// Every Project with its Order Groups, then the groups of the Orders with no Project
+    /// when there are any.
+    public func projectGroups() throws -> [ProjectGroups] {
+        let projects = try values(SPIELORDERS_ORDER_FIELD_PROJECT).map { project in
+            ProjectGroups(project: project, groups: try groups(of: project.name))
+        }
+        let unassigned = try groups(of: "")
+        return unassigned.isEmpty ? projects : projects + [ProjectGroups(project: nil, groups: unassigned)]
+    }
+
+    private func reusableValues(
+        _ listing: (inout UnsafeMutablePointer<SpielordersList>?, inout UnsafeMutablePointer<SpielordersEntries>?)
+            throws -> SpielordersResult
+    ) throws -> [ReusableValue] {
         var list: UnsafeMutablePointer<SpielordersList>?
         var outcome: UnsafeMutablePointer<SpielordersEntries>?
-        _ = try checked(spielorders_package_values(package.pointer, field, &list, &outcome), outcome)
+        _ = try checked(try listing(&list, &outcome), outcome)
         defer { spielorders_list_free(list) }
         guard let list else { throw LibraryFailure(result: SPIELORDERS_RESULT_INTERNAL, entries: []) }
-        return (0..<spielorders_list_count(list)).map {
-            String(cString: spielorders_list_field(list, $0, SPIELORDERS_VALUE_FIELD_VALUE))
+        return (0..<spielorders_list_count(list)).map { row in
+            let name = String(cString: spielorders_list_field(list, row, SPIELORDERS_VALUE_FIELD_VALUE))
+            let count = String(cString: spielorders_list_field(list, row, SPIELORDERS_VALUE_FIELD_USAGE_COUNT))
+            return ReusableValue(name: name, orderCount: Int(count) ?? 0)
         }
     }
 
@@ -225,6 +278,7 @@ extension PackageSession {
             var warnings = try checked(result, outcome)
             guard let planned else { throw LibraryFailure(result: SPIELORDERS_RESULT_INTERNAL, entries: []) }
             let plan = LibraryHandle(planned, free: spielorders_plan_free)
+            let cleared = clearedFacts(plan.pointer, of: draft)
             try Task.checkCancellation()
             var report: UnsafeMutablePointer<SpielordersReport>?
             outcome = nil
@@ -249,10 +303,10 @@ extension PackageSession {
                 }
             }
             if spielorders_report_kind(report) == SPIELORDERS_REPORT_COMMITTED {
-                warnings += refreshPackageAfterCommit(package)
+                warnings += refreshAfterCommit(package)
             }
-            return SavedRecord(recordID: recordID, draft: refreshed, warnings: warnings.map(\.message),
-                               requiresReopen: self.package == nil || refreshed == nil)
+            return SavedRecord(recordID: recordID, draft: refreshed, warnings: warnings.map(\.presentation),
+                               requiresReopen: self.package == nil || refreshed == nil, cleared: cleared)
         } catch let failure as LibraryFailure {
             throw SaveRefusal(failure)
         }
@@ -273,9 +327,25 @@ extension PackageSession {
         outcome = nil
         warnings += try checked(spielorders_plan_commit(planned, &report, &outcome), outcome)
         if let report, spielorders_report_kind(report) == SPIELORDERS_REPORT_COMMITTED {
-            warnings += refreshPackageAfterCommit(package)
+            warnings += refreshAfterCommit(package)
         }
-        return warnings.map(\.message)
+        return warnings.map(\.presentation)
+    }
+
+    /// The record's own facts that `plan` changes to nothing while `draft` still holds text.
+    private func clearedFacts(_ plan: UnsafeMutablePointer<SpielordersPlan>, of draft: RecordDraft) -> [Int32: String] {
+        var cleared: [Int32: String] = [:]
+        for change in 0..<spielorders_plan_change_count(plan) {
+            guard spielorders_plan_change_kind(plan, change) == SPIELORDERS_CHANGE_FACT,
+                  spielorders_plan_change_row(plan, change) < 0,
+                  String(cString: spielorders_plan_change_after(plan, change)).isEmpty else { continue }
+            let field = spielorders_plan_change_field(plan, change)
+            let held = draft.field(field)
+            if !held.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                cleared[field] = held
+            }
+        }
+        return cleared
     }
 
     func readVendor(id: String, token: UInt64) throws -> (LibraryHandle<SpielordersVendor>, [LibraryEntry]) {

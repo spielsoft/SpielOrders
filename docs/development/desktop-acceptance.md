@@ -65,13 +65,14 @@ the current draft or query.
 ## Application lifecycle
 
 Test the installed application: window Close, menu and keyboard Quit, and Dock Quit.
-Dirty cancellation keeps a usable draft, approval settles owned workers, and a Close or
-Quit at startup is not swallowed. Follow
+Closing an active Package returns its window to the welcome view, and Close from the
+welcome view quits. Dirty cancellation keeps a usable draft, approval settles owned workers, and a
+Close or Quit at startup is not swallowed. Follow
 [AppKit's termination protocol](https://developer.apple.com/documentation/appkit/nsapplication/terminate(_:))
 when work or a draft defers the decision.
 
-The app logs each termination request with whether work is active. To show an exit with
-work in flight, read that receipt for the process under test; an action that merely
+The app logs each Close or Quit request with whether work is active. To show leaving
+with work in flight, read that receipt for the process under test; an action that merely
 preceded the exit does not show it. A debugger may hold the disposable app at a real call
 to reach such a moment. It never replaces code or results, and it is detached afterwards.
 

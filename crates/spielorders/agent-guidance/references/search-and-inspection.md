@@ -12,6 +12,8 @@ spielorders search supporting-material "quote" --root "$package"
 
 `package show` is the complete canonical Package inspection, not an agent-only snapshot.
 Reusable-value kinds are `orderer`, `ordering_institution`, `project`, and `order_group`.
+`package values order_group` lists every group name across Projects, a name used under
+several counted once; `search orders` with the Project's name shows its Orders' groups.
 `order show` targets an Order directory; `vendor show` takes a Vendor Name and Package.
 
 Native record search matches managed facts. Supporting Material search uses the OS

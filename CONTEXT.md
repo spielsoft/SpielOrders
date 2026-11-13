@@ -105,7 +105,7 @@ The user-assigned stage an Order has reached: `In Preparation`, `Hold`, `Ordered
 _Avoid_: State, institution status
 
 **Ordering Institution**:
-The optional Reusable Free-Entry Value naming the institution through which an Order is placed, such as Northwind, Uplands, or Cedarbrook.
+The optional Reusable Free-Entry Value naming the institution through which an Order is placed. Its values are user-defined.
 _Avoid_: Order location, status
 
 **Order Currency**:

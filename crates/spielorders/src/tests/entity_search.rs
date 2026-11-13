@@ -732,7 +732,7 @@ fn no_path_no_neighbouring_file_and_no_derived_artifact_is_searched() {
         "Vanadinit Preisliste\n",
     )
     .expect("the Supporting Material");
-    std::fs::write(root.join("README.md"), "Paketnotiz Ruby\n").expect("the Package README");
+    std::fs::write(root.join("README.md"), "Paketnotiz Mikroskop\n").expect("the Package README");
     let package = loaded(&root);
     assert!(
         std::fs::read_to_string(root.join(".spielorders/index.json"))
@@ -748,7 +748,7 @@ fn no_path_no_neighbouring_file_and_no_derived_artifact_is_searched() {
         ("Molybdaen", "the Order Directory basename"),
         ("Kobaltit", "a Supporting Material filename"),
         ("Vanadinit", "what that Supporting Material holds"),
-        ("Ruby", "the Package README"),
+        ("Mikroskop", "the Package README"),
         ("Kryolith", "the derived Package Index"),
         ("README.md", "the conventional README's filename"),
         ("order.json", "the Order record's filename"),

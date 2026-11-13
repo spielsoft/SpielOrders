@@ -4,31 +4,31 @@ import Foundation
 import Testing
 
 // Decision source: Desktop acceptance, committed mutation presentation.
-@Test func aCommittedSaveWithARefreshFailureDoesNotInviteARetry() {
+@Test func refreshFailure() {
     let result = ReadmeSaveResult(refreshedText: nil, warnings: ["The Package could not be refreshed."])
     #expect(!result.canEdit)
     #expect(result.message.contains("Saved."))
-    #expect(result.message.contains("Reopen the Package"))
+    #expect(result.message.contains("Reload the Package"))
     #expect(result.message.contains("could not be refreshed"))
 }
 
-@Test func aCommittedSaveShowsItsWarningsSeparatelyFromRejection() {
+@Test func committedWarnings() {
     let result = ReadmeSaveResult(refreshedText: "Saved draft", warnings: ["Durability is uncertain."])
     #expect(result.canEdit)
     #expect(result.message == "Saved with warnings.\nDurability is uncertain.")
 }
 
-@Test func aSessionThatCannotSearchAsksToBeReopened() async {
+@Test func missingPackage() async {
     do {
         _ = try await PackageSession().materialDirectory()
         Issue.record("A session without a Package cannot search")
     } catch {
         #expect(error is SessionAccessError)
-        #expect(error.localizedDescription.contains("reopen the Package"))
+        #expect(error.localizedDescription.contains("reload the Package"))
     }
 }
 
-@Test func anUnreadableReadmeDisablesEditingAndRequestsReopen() throws {
+@Test func unreadableReadme() throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     try Data([0xff]).write(to: root.appendingPathComponent("README.md"))
@@ -43,5 +43,5 @@ import Testing
     let result = ReadmeSaveResult(refreshedReadme: refreshed, warnings: ["Readme unavailable"])
     #expect(result.refreshedText == nil)
     #expect(!result.canEdit)
-    #expect(result.message.contains("Reopen the Package"))
+    #expect(result.message.contains("Reload the Package"))
 }

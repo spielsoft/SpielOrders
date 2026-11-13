@@ -58,7 +58,7 @@
       "status": "ordered",
       "vendor": "Tarnwick",
       "orderer": null,
-      "ordering_institution": "Northwind",
+      "ordering_institution": "Example Institute",
       "currency": "USD",
       "project": "Telescope",
       "order_group": "Autumn build",
@@ -75,7 +75,8 @@
           "quantity": "4",
           "unit_price": "3",
           "catalog_number": "F220APC",
-          "total": "12"
+          "total": "12",
+          "notes": null
         },
         {
           "position": 2,
@@ -83,7 +84,8 @@
           "quantity": "2",
           "unit_price": "84.5",
           "catalog_number": null,
-          "total": "169"
+          "total": "169",
+          "notes": null
         },
         {
           "position": 3,
@@ -91,7 +93,8 @@
           "quantity": "1",
           "unit_price": "220",
           "catalog_number": null,
-          "total": "220"
+          "total": "220",
+          "notes": null
         }
       ],
       "readme": {

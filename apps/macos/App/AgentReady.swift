@@ -3,46 +3,58 @@ import SpielOrdersKit
 
 extension DesktopModel {
     func makeAgentReady() {
-        guard !busy, let root, canBrowseRecords else { return }
+        // This is not Package navigation: do not finish, save, or discard its draft.
+        guard !busy, vendorSheet == nil else { return }
+        let picker = NSOpenPanel()
+        picker.title = "Set Up Agent Guidance"
+        picker.message = "Choose a folder for agent guidance."
+        picker.prompt = "Choose Folder"
+        picker.canChooseDirectories = true
+        picker.canChooseFiles = false
+        picker.canCreateDirectories = false
+        picker.allowsMultipleSelection = false
+        picker.resolvesAliases = false
+        picker.treatsFilePackagesAsDirectories = true
+        picker.setAccessibilityLabel("Agent guidance folder")
+        picker.setAccessibilityIdentifier("agentReady.folder")
+        activity = "Choosing a folder for agent guidance…"
         busy = true
-        message = "Authorize the bundled CLI for this Package."
-        let authorization = CLIAuthorization()
         work = OwnedOperation(kind: .read) { [self] in
+            defer { busy = false }
+            let response = await dialogs.chooseFolder(picker)
+            await dialogs.waitForDismissal(of: picker)
+            guard response == .OK, let selected = picker.url else { return }
+            let access: AuthorizedFolder
+            do { access = try AuthorizedFolder(selected) }
+            catch {
+                await agentNotice("Folder access unavailable", "Choose the folder again to allow guidance to be written.", diagnostic: error.localizedDescription)
+                return
+            }
+            defer { withExtendedLifetime(access) {} }
             do {
-                let approved = try await authorization.authorize(root)
                 try Task.checkCancellation()
-                guard approved else {
-                    busy = false
-                    message = "Agent Ready cancelled. No guidance was written."
-                    return
-                }
-                provisionAgentGuidance()
+                activity = "Setting up agent guidance…"
+                let cancellation = LibraryCancellation()
+                let notices = try await withTaskCancellationHandler {
+                    try await AgentGuidance.provision(in: access.url, cancellation: cancellation)
+                } onCancel: { cancellation.request() }
+                // A cancellation during commit cannot undo its completed writes.
+                // Present the actual report without checking cancellation again.
+                await agentNotice("“\(selected.lastPathComponent)” is ready for agents.", "",
+                                  diagnostic: notices.isEmpty ? nil : diagnosticText(notices))
             } catch {
-                busy = false
-                message = Task.isCancelled ? "Agent Ready cancelled. No guidance was written."
-                    : "Agent Ready is incomplete.\n" + error.localizedDescription
+                if error is CancellationError {
+                    await agentNotice("Agent guidance cancelled", "No guidance was written.")
+                } else {
+                    let explanation = "Guidance did not complete in “\(selected.lastPathComponent)”. "
+                        + "AGENTS.md and your other files are untouched. Read Details for what was written."
+                    await agentNotice("Agent guidance incomplete", explanation, diagnostic: error.localizedDescription)
+                }
             }
         }
     }
 
-    private func provisionAgentGuidance() {
-        let cancellation = LibraryCancellation()
-        work = OwnedOperation(kind: .mutation) { [self] in
-            defer { busy = false }
-            do {
-                let guidance = try await withTaskCancellationHandler {
-                    try await library.provisionAgentGuidance(cancellation: cancellation)
-                } onCancel: { cancellation.request() }
-                let executable = Bundle.main.bundleURL
-                    .appendingPathComponent(AgentAuthorizationContract.relativeBundle)
-                    .appendingPathComponent("Contents/MacOS/spielorders")
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(guidance.prompt, forType: .string)
-                message = guidance.message + "\nCLI folder access authorized.\nCLI: " + executable.path
-                    + "\nThe agent setup request is copied. Paste it into your agent."
-            } catch {
-                message = "Agent Ready guidance is incomplete. The CLI folder grant is saved.\n" + error.localizedDescription
-            }
-        }
+    private func agentNotice(_ title: String, _ detail: String, diagnostic: String? = nil) async {
+        await dialogs.notify(title, detail, identifier: "agentReady", diagnostic: diagnostic)
     }
 }

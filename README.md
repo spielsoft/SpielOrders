@@ -1,9 +1,8 @@
 # SpielOrders
 
 SpielOrders is a local-first order manager with a macOS-native SwiftUI desktop,
-a portable Rust core, and a human-first Rust CLI. The core and CLI are available;
-the Swift desktop foundation links the library directly. The
-[implementation roadmap](issues/roadmaps/spielorders-implementation-roadmap.md)
+a portable Rust core, and a human-first Rust CLI. The Swift desktop links the library
+directly. The [implementation roadmap](issues/roadmaps/spielorders-implementation-roadmap.md)
 defines the remaining work.
 
 The [domain glossary](CONTEXT.md) defines the product vocabulary.
@@ -13,11 +12,26 @@ define ownership across Rust and the desktop.
 
 ## Agent access
 
-The Package menu's Agent Ready action provisions missing local guidance and obtains the
-bundled CLI's separate folder grant. It shows the executable's installed path and copies
-the request to give an agent. Invoke that executable in place; no global CLI installation
-is needed. [The agent skill contract](issues/wayfinder/spielorders-product-architecture/tickets/011-agent-skill-contract.md)
-defines preservation and authorization boundaries.
+Agents use the standalone `spielorders` CLI, installed under the prefix `~/.spielorders`
+as `bin/spielorders` with its default guidance in `share/spielorders/agent-guidance`. It
+runs with the invoking user's ordinary permissions. File → Set Up Agent Guidance… provisions
+missing local guidance into any existing directory and nothing more.
+[The agent skill contract](issues/wayfinder/spielorders-product-architecture/tickets/011-agent-skill-contract.md)
+defines provisioning and refresh.
+
+From a development checkout with Rust, Python, and zsh available, install the CLI with:
+
+```sh
+python3 scripts/install-cli.py
+```
+
+The installer builds the CLI, installs its matching guidance, and registers
+`~/.spielorders/bin` in the effective zsh profile directory. It replaces only its marked
+SpielOrders block, preserves unrelated settings and profile links, and verifies lookup
+in a fresh shell before reporting success. Start a new shell afterwards. Repeating the
+command updates an unchanged installation; locally modified installation files cause a
+refusal rather than being overwritten. `--prefix <PATH>` selects a different dedicated
+installation directory. This is a development installer, not a published download.
 
 ## Development
 

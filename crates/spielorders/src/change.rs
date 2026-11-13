@@ -41,10 +41,11 @@ use crate::{
     removal::{OrderRemovalPlan, OrderRemovalResult, commit_order_removal, plan_order_removal},
     repair::{RepairPlan, RepairScope, commit_repair, plan_repair},
     repair_cases::{RepairAction, RepairResolution},
+    restoration::{OrderRestorePlan, OrderRestoreResult, commit_order_restore, plan_order_restore},
     vendor_reads::read_vendor,
     vendors::{
         VendorMutationPlan, VendorMutationResult, commit_vendor_mutation, plan_vendor_creation,
-        plan_vendor_hide, plan_vendor_save, plan_vendor_unhide,
+        plan_vendor_delete, plan_vendor_hide, plan_vendor_save, plan_vendor_unhide,
     },
 };
 use std::path::{Path, PathBuf};
@@ -177,7 +178,7 @@ pub enum Change {
     RebuildIndex {
         root: PathBuf,
     },
-    ProvisionAgentSetup {
+    ProvisionAgent {
         root: PathBuf,
     },
     /// `items`, where an editor's new Order has any, is its complete ordered Item list,
@@ -206,6 +207,12 @@ pub enum Change {
     AlignOrder {
         order: OrderRef,
     },
+    /// Restores the removed Order at `removed`, in the Removed Orders Directory of the
+    /// Package at `root`, to its Orders Directory under the same name.
+    RestoreOrder {
+        root: PathBuf,
+        removed: PathBuf,
+    },
     RemoveOrder {
         order: OrderRef,
     },
@@ -221,6 +228,11 @@ pub enum Change {
         root: PathBuf,
         vendor: VendorRef,
         hidden: bool,
+    },
+    /// Removes a Vendor no healthy Order references, with its Contacts.
+    DeleteVendor {
+        root: PathBuf,
+        vendor: VendorRef,
     },
     /// An editor's whole draft of the Vendor `original`: `assignments` over its facts, and
     /// `contacts` as its complete ordered Contact list, one row per Contact. Every rule the
@@ -250,11 +262,13 @@ impl Change {
         match self {
             Self::InitializePackage { root, .. }
             | Self::RebuildIndex { root }
-            | Self::ProvisionAgentSetup { root }
+            | Self::ProvisionAgent { root }
             | Self::CreateOrder { root, .. }
             | Self::AdoptOrder { root, .. }
             | Self::CreateVendor { root, .. }
             | Self::SetVendorHidden { root, .. }
+            | Self::DeleteVendor { root, .. }
+            | Self::RestoreOrder { root, .. }
             | Self::SaveVendor { root, .. } => root,
             Self::SaveOrder { order, .. }
             | Self::AlignOrder { order }
@@ -273,13 +287,14 @@ pub struct Plan(PlanKind);
 #[derive(Clone, Debug, PartialEq)]
 enum PlanKind {
     InitializePackage(PackageInitializationPlan),
-    ProvisionAgentSetup(Box<AgentSetupPlan>),
+    ProvisionAgent(Box<AgentSetupPlan>),
     RebuildIndex(Box<PackageIndexRebuildPlan>),
     CreateOrder(Box<OrderCreationPlan>),
     AdoptOrder(Box<OrderAdoptionPlan>),
     EditOrder(Box<OrderEditPlan>),
     AlignOrder(Box<OrderAlignmentPlan>),
     RemoveOrder(Box<OrderRemovalPlan>),
+    RestoreOrder(Box<OrderRestorePlan>),
     Vendor(Box<VendorMutationPlan>),
     WriteReadme(Box<ReadmeWritePlan>),
     Repair(Box<RepairPlan>),
@@ -289,13 +304,14 @@ enum PlanKind {
 #[derive(Clone, Debug, PartialEq)]
 pub enum ChangeResult {
     InitializePackage,
-    ProvisionAgentSetup,
+    ProvisionAgent,
     RebuildIndex,
     CreateOrder(Box<OrderCreationResult>),
     AdoptOrder(Box<OrderAdoptionResult>),
     EditOrder(Box<OrderEditResult>),
     AlignOrder(Box<OrderAlignmentResult>),
     RemoveOrder(Box<OrderRemovalResult>),
+    RestoreOrder(Box<OrderRestoreResult>),
     Vendor(Box<VendorMutationResult>),
     WriteReadme,
     Repair,
@@ -383,7 +399,7 @@ impl Plan {
                 })
                 .collect(),
             PlanKind::RebuildIndex(plan) => planned(&plan.operations),
-            PlanKind::ProvisionAgentSetup(plan) => plan
+            PlanKind::ProvisionAgent(plan) => plan
                 .batch
                 .operations
                 .iter()
@@ -403,12 +419,20 @@ impl Plan {
             PlanKind::EditOrder(plan) => planned(&plan.operations),
             PlanKind::AlignOrder(plan) => planned(&plan.operations),
             PlanKind::RemoveOrder(plan) => planned(&plan.operations),
+            PlanKind::RestoreOrder(plan) => planned(&plan.operations),
             PlanKind::Vendor(plan) => planned(&plan.operations),
             PlanKind::WriteReadme(plan) => planned(&plan.operations),
             PlanKind::Repair(plan) => match &**plan {
                 RepairPlan::Artifact(plan) => planned(&plan.operations),
                 RepairPlan::Semantic(plan) => planned(&plan.operations),
             },
+        }
+    }
+
+    pub(crate) fn restored_order_id(&self) -> Option<&str> {
+        match &self.0 {
+            PlanKind::RestoreOrder(plan) => Some(plan.order_id()),
+            _ => None,
         }
     }
 
@@ -445,13 +469,14 @@ impl Plan {
 }
 
 variants!(PlanKind, PlanKind {
-    ProvisionAgentSetup(AgentSetupPlan),
+    ProvisionAgent(AgentSetupPlan),
     RebuildIndex(PackageIndexRebuildPlan),
     CreateOrder(OrderCreationPlan),
     AdoptOrder(OrderAdoptionPlan),
     EditOrder(OrderEditPlan),
     AlignOrder(OrderAlignmentPlan),
     RemoveOrder(OrderRemovalPlan),
+    RestoreOrder(OrderRestorePlan),
     Vendor(VendorMutationPlan),
     WriteReadme(ReadmeWritePlan),
     Repair(RepairPlan),
@@ -463,6 +488,7 @@ variants!(ChangeResult, ChangeResult {
     EditOrder(OrderEditResult),
     AlignOrder(OrderAlignmentResult),
     RemoveOrder(OrderRemovalResult),
+    RestoreOrder(OrderRestoreResult),
     Vendor(VendorMutationResult),
 });
 
@@ -498,7 +524,7 @@ pub fn plan<E: Effects>(change: &Change, effects: &E) -> Answer<Plan> {
             plan_package_initialization(root, &options, filesystem).map(Plan::of)
         }
         Change::RebuildIndex { root } => plan_package_index_rebuild(root, filesystem).map(Plan::of),
-        Change::ProvisionAgentSetup { root } => plan_agent_setup(root, filesystem).map(Plan::of),
+        Change::ProvisionAgent { root } => plan_agent_setup(root, filesystem).map(Plan::of),
         Change::CreateOrder {
             root,
             assignments,
@@ -545,6 +571,9 @@ pub fn plan<E: Effects>(change: &Change, effects: &E) -> Answer<Plan> {
                 plan_order_removal(&directory, filesystem).map(Plan::of)
             })
         }
+        Change::RestoreOrder { root, removed } => {
+            plan_order_restore(root, removed, filesystem).map(Plan::of)
+        }
         Change::CreateVendor {
             root,
             assignments,
@@ -562,6 +591,11 @@ pub fn plan<E: Effects>(change: &Change, effects: &E) -> Answer<Plan> {
             }
             .map(Plan::of)
         }),
+        Change::DeleteVendor { root, vendor } => {
+            settled(vendor_id(root, vendor, filesystem), |id| {
+                plan_vendor_delete(root, &id, filesystem).map(Plan::of)
+            })
+        }
         Change::SaveVendor {
             root,
             assignments,
@@ -620,8 +654,8 @@ pub fn commit<E: Effects>(plan: Plan, effects: &E) -> Answer<Report> {
             .map(|report| Report::with(report, |()| ChangeResult::InitializePackage)),
         PlanKind::RebuildIndex(plan) => commit_package_index_rebuild(*plan, filesystem)
             .map(|report| Report::with(report, |()| ChangeResult::RebuildIndex)),
-        PlanKind::ProvisionAgentSetup(plan) => commit_agent_setup(*plan, filesystem)
-            .map(|report| Report::with(report, |()| ChangeResult::ProvisionAgentSetup)),
+        PlanKind::ProvisionAgent(plan) => commit_agent_setup(*plan, filesystem)
+            .map(|report| Report::with(report, |()| ChangeResult::ProvisionAgent)),
         PlanKind::CreateOrder(plan) => {
             commit_order_creation(*plan, &new_uuid, filesystem).map(Report::of)
         }
@@ -631,6 +665,7 @@ pub fn commit<E: Effects>(plan: Plan, effects: &E) -> Answer<Report> {
         PlanKind::EditOrder(plan) => commit_order_edit(*plan, filesystem).map(Report::of),
         PlanKind::AlignOrder(plan) => commit_order_alignment(*plan, filesystem).map(Report::of),
         PlanKind::RemoveOrder(plan) => commit_order_removal(*plan, effects).map(Report::of),
+        PlanKind::RestoreOrder(plan) => commit_order_restore(*plan, filesystem).map(Report::of),
         PlanKind::Vendor(plan) => {
             commit_vendor_mutation(*plan, &new_uuid, filesystem).map(Report::of)
         }

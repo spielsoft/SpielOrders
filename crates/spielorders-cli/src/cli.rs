@@ -119,10 +119,11 @@ impl AgentCommand {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum AgentCommand {
-    /// Create missing Package-local guidance, preserving every existing file.
+    /// Write the current agent guidance into any directory, replacing earlier copies of its
+    /// files and touching no other file.
     Provision {
         #[command(flatten)]
-        target: PackageTarget,
+        target: DirectoryTarget,
         #[command(flatten)]
         execution: Execution,
         #[command(flatten)]
@@ -195,7 +196,8 @@ impl VendorCommand {
             Self::Show { output, .. }
             | Self::Edit { output, .. }
             | Self::Hide { output, .. }
-            | Self::Unhide { output, .. } => output.mode(),
+            | Self::Unhide { output, .. }
+            | Self::Delete { output, .. } => output.mode(),
             Self::Contact { command } => command.mode(),
         }
     }
@@ -215,7 +217,7 @@ impl ContactCommand {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum Family {
-    /// Provision Package-local guidance or locate the installed defaults.
+    /// Provision agent guidance into a directory or locate the installed defaults.
     Agent {
         #[command(subcommand)]
         command: AgentCommand,
@@ -534,10 +536,9 @@ pub(crate) enum VendorCommand {
         #[command(flatten)]
         output: OutputMode,
     },
-    // A Vendor is never deleted, so there is no `vendor remove`. These two are what
-    // replaced deletion: they govern whether a Vendor is offered for new use, never
-    // whether it resolves, so neither is refused on reference grounds and either can be
-    // undone by the other.
+    // Hiding and unhiding govern whether a Vendor is offered for new use, never whether
+    // it resolves, so neither is refused on reference grounds and either can be undone by
+    // the other. Only `delete` removes a Vendor, and only one no Order references.
     /// Stop offering this Vendor for new use.
     ///
     /// Its record and its Vendor ID stay where they are, so every Order that references
@@ -557,6 +558,23 @@ pub(crate) enum VendorCommand {
     },
     /// Offer this Vendor for new use again.
     Unhide {
+        /// The Vendor Name.
+        name: String,
+
+        #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
+        execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
+    },
+    /// Delete this Vendor and its Contacts.
+    ///
+    /// Refused while any Order references the Vendor, listing those Orders; hide a Vendor
+    /// that is still in use instead. Deletion cannot be undone by another command.
+    Delete {
         /// The Vendor Name.
         name: String,
 
@@ -725,7 +743,7 @@ impl Destination {
 ///
 /// **`position` is not a fact of the member**, so it is taken out of the assignment set
 /// rather than handed to the core: a Contact has a Name, a role, a phone, and an email, an
-/// Item has a Description, a Quantity, a Unit Price, and a Catalog Number, and where either
+/// Item has a Description, a Quantity, a Unit Price, a Catalog Number, and Notes, and where either
 /// goes in its collection is not one of them. Every remaining assignment is the Package's
 /// own to adjudicate — an unknown field, a repeated one, and a blank required one are all
 /// the core's refusals, reported together.
@@ -1043,8 +1061,8 @@ pub(crate) enum ItemCommand {
     ///
     /// The Item is appended unless `position=N` says where to insert it, in which case the
     /// Items from there on shift down. An Item requires a Description, a Quantity, and a
-    /// Unit Price; its Catalog Number is optional, and its totals are calculated rather
-    /// than assigned.
+    /// Unit Price; its Catalog Number and multiline `notes` are optional, and its totals are
+    /// calculated rather than assigned.
     Add {
         /// The Item's facts as `field=value`, and optionally `position=N`.
         #[arg(value_name = "ASSIGNMENT", value_parser = FieldAssignment::parse)]
@@ -1062,8 +1080,8 @@ pub(crate) enum ItemCommand {
     /// Change the facts of the Item at this position.
     ///
     /// The assignments are one order-independent atomic mutation over that Item. An empty
-    /// value clears the optional Catalog Number; a blank Description, Quantity, or Unit
-    /// Price is refused.
+    /// value clears the optional Catalog Number or Notes; a blank Description, Quantity, or
+    /// Unit Price is refused.
     Edit {
         /// The Item's one-based position in this Order's collection.
         #[arg(value_name = "POSITION", allow_negative_numbers = true)]
@@ -1343,6 +1361,14 @@ pub(crate) struct Execution {
 #[derive(Debug, Args)]
 pub(crate) struct PackageTarget {
     /// The SpielOrders Root, named exactly. No ancestor is ever searched.
+    #[arg(long, value_name = "PATH", default_value = ".")]
+    pub root: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct DirectoryTarget {
+    /// The directory to provision, named exactly. It need not be a Package, and no
+    /// ancestor is ever searched.
     #[arg(long, value_name = "PATH", default_value = ".")]
     pub root: PathBuf,
 }

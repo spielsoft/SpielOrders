@@ -174,7 +174,7 @@ fn fully_supplied_plan_resolves_vendor_and_reusable_values_into_normalized_facts
         .assign("date_ordered", "2026-07-19")
         .assign("vendor", "Tarnwick")
         .assign("orderer", " Ada Lovelace ")
-        .assign("ordering_institution", " Northwind ")
+        .assign("ordering_institution", " Example Institute ")
         .assign("currency", "USD")
         .assign("project", " Telescope ")
         .assign("order_group", " Summer build ");
@@ -197,7 +197,7 @@ fn fully_supplied_plan_resolves_vendor_and_reusable_values_into_normalized_facts
     );
     assert_eq!(
         json(planned_order(&plan))["ordering_institution"],
-        json(&Some("Northwind")),
+        json(&Some("Example Institute")),
     );
     assert_eq!(json(planned_order(&plan))["currency"], json(&Some("USD")));
     assert_eq!(

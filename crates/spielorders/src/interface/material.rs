@@ -224,6 +224,8 @@ pub struct SpielordersSearch {
 }
 
 struct SpielordersSearchData {
+    /// The Order Directories holding a found file, as the Package spells them.
+    orders: Vec<std::path::PathBuf>,
     provider: CString,
     state: SpielordersConstant,
     files: Vec<File>,
@@ -263,6 +265,12 @@ impl SpielordersSearch {
             .collect();
         Self {
             data: Box::new(SpielordersSearchData {
+                orders: snapshot
+                    .orders
+                    .iter()
+                    .filter(|group| !group.files.is_empty())
+                    .map(|group| group.order.paths.directory.absolute_path.clone())
+                    .collect(),
                 provider: c_text(snapshot.provider.as_str()),
                 state: match snapshot.completeness {
                     Completeness::Complete => SPIELORDERS_PROVIDER_STATE_COMPLETE,
@@ -282,6 +290,11 @@ impl SpielordersSearch {
                     .collect(),
             }),
         }
+    }
+
+    /// The Order Directories holding a found file.
+    pub(crate) fn orders(&self) -> &[std::path::PathBuf] {
+        &self.data.orders
     }
 
     fn file(&self, index: i64) -> Option<&File> {

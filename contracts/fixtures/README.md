@@ -10,7 +10,7 @@ contract tests. Accepted minimal and full JSON documents live in
 Scenario recipes are declarative so tests can materialize ordinary files,
 directories, links, and unreadable/non-text entries portably. A `copy` source points
 to one canonical contract file, and `generated` names the smallest semantic overlay a
-future test harness must build.
+test must build.
 
 The two `assets/supporting-*.bin` sentinels are deliberately different. Tests that
 materialize them must compare their bytes before and after metadata work. They are

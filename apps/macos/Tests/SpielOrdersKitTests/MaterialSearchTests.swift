@@ -5,7 +5,7 @@ import Foundation
 import Testing
 
 // Decision sources: Effect and adapter boundaries; Desktop acceptance.
-@Test func stoppedProviderHitsReachRustWithoutFrontendEligibilityOrOrderingRules() async throws {
+@Test func partialMaterialResults() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     let order = try createOrder(in: root)
@@ -27,7 +27,7 @@ import Testing
     #expect(answer.diagnostics == ["Search stopped."])
 }
 
-@Test func fractionalNativeDatesAllowSearchAndProviderRankOrdersTheMatches() async throws {
+@Test func materialRanking() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     let order = try createOrder(in: root)
@@ -51,7 +51,7 @@ import Testing
 }
 
 @Test(arguments: [Array("Caf\u{e9}.txt".utf8), Array("Cafe\u{301}.txt".utf8)])
-func spotlightMetadataPreservesReportedPathBytesThroughRust(filename: [UInt8]) async throws {
+func metadataPaths(filename: [UInt8]) async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     let order = try createOrder(in: root)
@@ -72,7 +72,7 @@ func spotlightMetadataPreservesReportedPathBytesThroughRust(filename: [UInt8]) a
     #expect(answer.matches.first?.path.bytes == reported)
 }
 
-@Test func theCSearchInterfaceAcceptsNonUTF8ProviderPathBytes() async throws {
+@Test func nonUTF8Paths() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     let order = try createOrder(in: root)
@@ -102,4 +102,38 @@ private extension FileSystemPath {
             Array(UnsafeBufferPointer(start: UnsafeRawPointer($0).assumingMemoryBound(to: UInt8.self), count: strlen($0)))
         }
     }
+}
+
+@Test func folderContents() async throws {
+    let root = try initializedPackage()
+    defer { try? FileManager.default.removeItem(at: root) }
+    _ = try createOrder(in: root, title: "Laser optics")
+    let mirror = try createOrder(in: root, title: "Mirror mount")
+    _ = try createOrder(in: root, title: "Beam dump")
+    let quote = mirror.appendingPathComponent("laser quote.txt")
+    try Data("A quote".utf8).write(to: quote)
+    let session = PackageSession()
+    _ = try await session.open(root, cancellation: LibraryCancellation())
+    let batch = try MaterialBatch(state: SPIELORDERS_PROVIDER_STATE_COMPLETE, hits: [
+        MaterialHit(path: FileSystemPath(url: quote), kind: "Plain Text", modified: "1789000000", rank: ""),
+    ])
+    let material = try await session.materialSearch(batch, cancellation: LibraryCancellation())
+    func titles(_ query: String, caseSensitive: Bool, material: MaterialAnswer?) async throws -> [OrderRow] {
+        try await session.folderContents(query: query, caseSensitive: caseSensitive, material: material,
+                                         sortField: OrderColumn.title.field, descending: false,
+                                         cancellation: LibraryCancellation()).rows
+    }
+
+    let factsOnly = try await titles("laser", caseSensitive: false, material: nil)
+    #expect(factsOnly.map { $0.values[SPIELORDERS_ORDER_FIELD_TITLE] } == ["Laser optics"])
+    let refined = try await titles("laser", caseSensitive: false, material: material)
+    #expect(refined.map { $0.values[SPIELORDERS_ORDER_FIELD_TITLE] } == ["Laser optics", "Mirror mount"])
+    let caseSensitive = try await titles("laser", caseSensitive: true, material: material)
+    #expect(caseSensitive.map { $0.values[SPIELORDERS_ORDER_FIELD_TITLE] } == ["Mirror mount"])
+
+    let files = material.matches(in: refined[1])
+    #expect(files.map(\.filename) == ["laser quote.txt"])
+    #expect(files.first?.kind == "Plain Text")
+    #expect(files.first?.modified == Date(timeIntervalSince1970: 1_789_000_000))
+    #expect(material.matches(in: refined[0]).isEmpty)
 }

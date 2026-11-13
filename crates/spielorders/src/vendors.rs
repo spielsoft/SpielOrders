@@ -44,6 +44,7 @@ pub enum VendorMutationKind {
     Edit,
     Hide,
     Unhide,
+    Delete,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -293,6 +294,46 @@ pub(crate) fn plan_vendor_unhide<F: FileSystem>(
     })
 }
 
+/// Removes one Vendor and its Contacts, refused while any healthy Order references it so
+/// that no Order is left with an unresolved Vendor Reference.
+pub(crate) fn plan_vendor_delete<F: FileSystem>(
+    selected_root: &Path,
+    vendor_id: &str,
+    filesystem: &F,
+) -> Answer<VendorMutationPlan> {
+    Answer::of(|| {
+        let package = load_package(selected_root, filesystem)?;
+        let position = vendor_position(vendor_id, &package.vendors)?;
+        let orders: Vec<_> = package
+            .healthy_orders
+            .iter()
+            .filter(|order| {
+                order
+                    .document
+                    .vendor_id
+                    .as_ref()
+                    .is_some_and(|id| id.as_str() == vendor_id)
+            })
+            .map(|order| order.paths.directory.clone())
+            .collect();
+        if !orders.is_empty() {
+            return Err(Failure::VendorReferenced {
+                vendor_id: vendor_id.to_owned(),
+                orders,
+            });
+        }
+        let mut vendors = package.vendors.to_vec();
+        let subject = vendors.remove(position);
+        plan_from_candidate_aggregate_with(
+            &package,
+            VendorMutationKind::Delete,
+            vendors,
+            vendor_id,
+            Some(subject),
+        )
+    })
+}
+
 fn plan_vendor_visibility<F: FileSystem>(
     selected_root: &Path,
     vendor_id: &str,
@@ -323,15 +364,30 @@ fn plan_from_candidate_aggregate(
     vendors: Vec<Vendor>,
     subject_vendor_id: &str,
 ) -> Result<VendorMutationPlan, Failure> {
+    plan_from_candidate_aggregate_with(package, kind, vendors, subject_vendor_id, None)
+}
+
+/// As [`plan_from_candidate_aggregate`], with `removed` the subject a deletion takes out
+/// of the aggregate.
+fn plan_from_candidate_aggregate_with(
+    package: &CurrentPackageCandidate,
+    kind: VendorMutationKind,
+    vendors: Vec<Vendor>,
+    subject_vendor_id: &str,
+    removed: Option<Vendor>,
+) -> Result<VendorMutationPlan, Failure> {
     let vendors = validated_aggregate(package, vendors)?;
-    // Every Vendor mutation keeps its subject in the aggregate it is planning, so the
-    // subject's planned facts are read from that aggregate.
-    let subject_document = vendors
-        .vendors
-        .iter()
-        .find(|vendor| vendor.vendor_id.as_str() == subject_vendor_id)
-        .cloned()
-        .ok_or(Failure::InvalidAggregate)?;
+    // Every Vendor mutation but a deletion keeps its subject in the aggregate it is
+    // planning, so the subject's planned facts are read from that aggregate.
+    let subject_document = match removed {
+        Some(removed) => removed,
+        None => vendors
+            .vendors
+            .iter()
+            .find(|vendor| vendor.vendor_id.as_str() == subject_vendor_id)
+            .cloned()
+            .ok_or(Failure::InvalidAggregate)?,
+    };
     // An unchanged aggregate is committed by performing nothing, so a dry run of it
     // must not announce managed operations its commit will never reach.
     let prior_vendors = package.vendors.to_vec();
@@ -579,9 +635,10 @@ fn commit_vendor<F: FileSystem>(
             subject.vendor_id = identity;
             generated
         }
-        VendorMutationKind::Edit | VendorMutationKind::Hide | VendorMutationKind::Unhide => {
-            plan.subject_vendor_id.clone()
-        }
+        VendorMutationKind::Edit
+        | VendorMutationKind::Hide
+        | VendorMutationKind::Unhide
+        | VendorMutationKind::Delete => plan.subject_vendor_id.clone(),
     };
 
     let Ok(vendors) = validated_aggregate(&current, vendors) else {
@@ -593,16 +650,23 @@ fn commit_vendor<F: FileSystem>(
             ChangedPrecondition::VendorRecord,
         ));
     };
-    let committed = vendors
-        .vendors
-        .iter()
-        .find(|vendor| vendor.vendor_id.as_str() == subject_vendor_id)
-        .cloned()
-        .expect("the validated aggregate retains its own subject Vendor");
+    // A deletion's subject is gone from the aggregate; its identity is the one planned.
+    let committed = match plan.kind {
+        VendorMutationKind::Delete => plan.subject.document.vendor_id.clone(),
+        _ => {
+            vendors
+                .vendors
+                .iter()
+                .find(|vendor| vendor.vendor_id.as_str() == subject_vendor_id)
+                .cloned()
+                .expect("the validated aggregate retains its own subject Vendor")
+                .vendor_id
+        }
+    };
 
     if !plan.changes_canonical_vendors() {
         let result = VendorMutationResult {
-            vendor_id: committed.vendor_id,
+            vendor_id: committed,
         };
         return Ok(MutationReport::Unchanged { result });
     }
@@ -651,7 +715,7 @@ fn commit_vendor<F: FileSystem>(
 
     let refresh = IndexRefresh::after_commit(&plan.root, filesystem);
     Ok(refresh.report(VendorMutationResult {
-        vendor_id: committed.vendor_id,
+        vendor_id: committed,
     }))
 }
 

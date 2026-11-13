@@ -16,8 +16,8 @@ SpielGantt foundations are outside this roadmap.
 
 ## Compatibility before release
 
-CLI and agent tooling remain unreleased until the owner declares them released after
-Agent Ready acceptance. Before release, metadata and CLI response changes revise their
+CLI and agent tooling remain unreleased until the owner declares them released. Before
+release, metadata and CLI response changes revise their
 existing contracts in place. The [metadata](../wayfinder/spielorders-product-architecture/tickets/010-metadata-schemas.md)
 and [CLI](../wayfinder/spielorders-product-architecture/tickets/006-cli-contract.md)
 decisions govern compatibility. A different frontend alone needs no metadata change.
@@ -35,28 +35,14 @@ decisions govern compatibility. A different frontend alone needs no metadata cha
 | M8 — Create and edit | Accepted | None |
 | M9 — Removal and recovery | Accepted | M8 |
 | M10 — Agent Ready | Accepted | M9 |
-| M11 — MVP acceptance | Not started | M9 and M10 |
-| M12 — App Store release | Not started | M11 |
+| M11 — MVP acceptance | Accepted | M9 and M10 |
+| [M12 — Value management](../implementation/m12-value-management.md) | Not started | M11 |
+| M13 — App Store release | Not started | M12 |
 
 Native controls and their standard interaction behavior apply throughout the desktop;
 broader visual refinement follows core functionality.
 
-Existing CLI regression checks remain in [the check](../../scripts/check.sh).
-The interface choice is settled by
-[Effect and adapter boundaries](../../docs/architecture/boundaries.md).
-
-## M11 — MVP acceptance
-
-Outcome: an integrated native application and bundled CLI that pass partner review, one
-acceptance pass, and the owner's sign-off.
-
-Gate: decided capabilities, supported OS releases, cross-adapter results, filesystem
-failures, first launch, preferences, lifecycle, and real archive-copy responsiveness
-pass the acceptance pass on the final build.
-Test metadata stays in the copy. The owner accepts the functional MVP and resolves
-the provisional CLI identity selector before declaring its contract stable.
-
-## M12 — App Store release
+## M13 — App Store release
 
 Outcome: the accepted MVP is packaged, signed, submitted, and distributed through the
 chosen Store channel.
@@ -64,3 +50,5 @@ chosen Store channel.
 Gate: release configuration, entitlements, nested executables, Store materials, and
 submission validation are complete; Apple accepts the release. Functional MVP acceptance
 does not claim Store approval, and Store work is not deferred permission-system design.
+The independent public CLI installer and its matching release assets follow
+[Native desktop distribution](../../docs/adr/0001-native-desktop-distribution.md).

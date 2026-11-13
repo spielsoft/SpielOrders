@@ -150,6 +150,16 @@ pub enum Failure {
         vendor_id: String,
         scope: RootedLocation,
     },
+    /// Orders still reference the Vendor a deletion names; each is listed.
+    VendorReferenced {
+        vendor_id: String,
+        orders: Vec<crate::readme::Location>,
+    },
+    /// An Order of the Package already carries the Order ID of the Order being restored.
+    OrderIdentityInUse {
+        order_id: String,
+        location: crate::readme::Location,
+    },
     /// A Vendor Name is required and blank.
     MissingRequiredName {
         scope: RootedLocation,
@@ -376,6 +386,8 @@ impl Failure {
             Self::UnknownVendorId { .. } => "unknown_vendor_id",
             Self::UnresolvedVendor { .. } => "unresolved_vendor",
             Self::VendorNameInUse { .. } => "vendor_name_in_use",
+            Self::VendorReferenced { .. } => "vendor_referenced",
+            Self::OrderIdentityInUse { .. } => "order_identity_in_use",
             Self::MissingRequiredName { .. } => "missing_required_name",
             Self::InvalidAggregate => "invalid_aggregate",
             Self::InvalidAssignments(..) => "invalid_assignments",

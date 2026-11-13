@@ -17,6 +17,7 @@ struct SearchField: NSViewRepresentable {
         field.target = context.coordinator
         field.action = #selector(Coordinator.changed(_:))
         field.delegate = context.coordinator
+        field.identifier = NSUserInterfaceItemIdentifier(identifier)
         field.setAccessibilityLabel(placeholder)
         field.setAccessibilityIdentifier(identifier)
         return field
@@ -55,5 +56,20 @@ struct SearchField: NSViewRepresentable {
             parent.submit()
             return true
         }
+    }
+}
+
+extension NSView {
+    /// The search field with `identifier` in this view or beneath it.
+    func searchField(_ identifier: String) -> NSSearchField? {
+        if let field = self as? NSSearchField, field.identifier?.rawValue == identifier {
+            return field
+        }
+        for view in subviews {
+            if let field = view.searchField(identifier) {
+                return field
+            }
+        }
+        return nil
     }
 }

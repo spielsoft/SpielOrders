@@ -14,9 +14,9 @@ import XCTest
 
     private func launch(_ root: URL) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-packageBookmark", ""]
+        app.launchArguments = ["-packageBookmark", "", "-sidebarVisible", "YES"]
         app.launch()
-        openNativeTestPackage(root, in: app)
+        openPackage(root, in: app)
         return app
     }
 
@@ -35,11 +35,11 @@ import XCTest
         try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("Orders").path).filter { !$0.hasPrefix(".") }
     }
 
-    func testANewOrderIsWrittenOnlyBySaveAndARefusedSaveKeepsTheDraft() throws {
-        let root = try makeNativeTestPackage()
+    func testSaveRefusal() throws {
+        let root = try makePackage()
         defer { try? FileManager.default.removeItem(at: root) }
         let app = launch(root)
-        app.toolbars.buttons["New Order"].click()
+        newOrder(in: app)
         let title = element("order.editor.title", in: app)
         XCTAssertTrue(title.waitForExistence(timeout: 10))
         XCTAssertEqual(title.value as? String, "New Order")
@@ -48,8 +48,8 @@ import XCTest
         app.typeKey(.delete, modifierFlags: [])
         element("order.editor.items.add", in: app).click()
         app.typeText("CAT-1\tGasket\ttwo\t2.5\t")
-        app.typeKey("s", modifierFlags: .command)
-        XCTAssertTrue(element("order.editor.problems", in: app).waitForExistence(timeout: 10))
+        app.typeKey(.return, modifierFlags: .command)
+        XCTAssertTrue(element("editor.notSaved", in: app).waitForExistence(timeout: 10))
         XCTAssertTrue(element("order.editor.title.problem", in: app).exists)
         XCTAssertEqual(try ordersDirectory(root), [])
         XCTAssertEqual(element("order.editor.items.row.0.description", in: app).value as? String, "Gasket")
@@ -60,24 +60,41 @@ import XCTest
         app.typeText("3\t")
         let heading = element("order.editor.heading", in: app)
         XCTAssertEqual(heading.value as? String, "New Order")
-        app.typeKey("s", modifierFlags: .command)
+        app.typeKey(.return, modifierFlags: .command)
         let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             let names = try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("Orders").path)
             return names?.filter { !$0.hasPrefix(".") }.count == 1
         }, object: nil)
         wait(for: [saved], timeout: 10)
-        wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Vacuum parts"),
-                                             object: heading)], timeout: 10)
+        // The created Order stays in its editor, now without Create.
+        XCTAssertTrue(element("editor.create", in: app).waitForNonExistence(timeout: 10))
+        wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Vacuum parts"), object: heading)],
+             timeout: 10)
         XCTAssertEqual(title.value as? String, "Vacuum parts")
         XCTAssertEqual(try ordersDirectory(root).count, 1)
-        XCTAssertTrue(element("order.editor.total", in: app).staticTexts.matching(NSPredicate(format: "value == %@", "7.50")).firstMatch.exists)
+        // The heading summarizes the Order; its folder shows beneath, aligned when created.
+        XCTAssertTrue(element("order.editor.summary", in: app).exists)
+        XCTAssertEqual(element("order.editor.directory", in: app).value as? String, try ordersDirectory(root).first)
+        XCTAssertFalse(element("order.editor.align", in: app).exists)
+        let total = element("order.editor.total", in: app)
+        XCTAssertTrue(total.staticTexts.matching(NSPredicate(format: "value == %@", "7.50")).firstMatch.exists)
+        // Money shows two decimals, and every decimal a finer amount has.
+        let price = element("order.editor.items.row.0.unit_price", in: app)
+        XCTAssertEqual(price.value as? String, "2.50")
+        price.doubleClick()
+        app.typeKey("a", modifierFlags: .command)
+        app.typeText("0.125\t")
+        let finer = total.staticTexts.matching(NSPredicate(format: "value == %@", "0.375")).firstMatch
+        XCTAssertTrue(finer.waitForExistence(timeout: 10))
+        XCTAssertEqual(price.value as? String, "0.125")
+        XCTAssertEqual(element("order.editor.items.row.0.total", in: app).value as? String, "0.375")
     }
 
-    func testRemovedItemsComeBackWithUndoAndADirtyDraftSurvivesACancelledQuit() throws {
-        let root = try makeNativeTestPackage()
+    func testRowUndo() throws {
+        let root = try makePackage()
         defer { try? FileManager.default.removeItem(at: root) }
         let app = launch(root)
-        app.toolbars.buttons["New Order"].click()
+        newOrder(in: app)
         let title = element("order.editor.title", in: app)
         XCTAssertTrue(title.waitForExistence(timeout: 10))
         replace(title, with: "Optics", in: app)
@@ -93,7 +110,7 @@ import XCTest
         element("order.editor.items.row.0.description", in: app).click()
         element("order.editor.items.remove", in: app).click()
         XCTAssertFalse(element("order.editor.items.row.0.description", in: app).exists)
-        app.typeKey("s", modifierFlags: .command)
+        app.typeKey(.return, modifierFlags: .command)
         XCTAssertTrue(element("order.editor.title.problem", in: app).waitForExistence(timeout: 10))
         app.tables["order.editor.items"].click()
         app.typeKey("z", modifierFlags: .command)
@@ -106,60 +123,117 @@ import XCTest
         XCTAssertTrue(title.exists)
         XCTAssertEqual(try ordersDirectory(root), [])
         app.typeKey("q", modifierFlags: .command)
-        app.buttons["draft.unsaved.discard"].click()
+        app.buttons["draft.unsaved.confirm"].click()
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 10))
     }
 
-    func testLeavingADirtyDraftCanSaveItAndThenLeave() throws {
-        let root = try makeNativeTestPackage()
+    func testStagedNavigation() throws {
+        let root = try makePackage()
         defer { try? FileManager.default.removeItem(at: root) }
+        try addOrder(in: root, title: "Existing optics")
         let app = launch(root)
-        app.toolbars.buttons["New Order"].click()
+        newOrder(in: app)
         let title = element("order.editor.title", in: app)
         XCTAssertTrue(title.waitForExistence(timeout: 10))
-        replace(title, with: "Cryostat", in: app)
-        element("order.editor.back", in: app).click()
-        let save = app.buttons["draft.unsaved.save"]
-        XCTAssertTrue(save.waitForExistence(timeout: 5))
-        save.click()
-        let rowTitle = app.staticTexts.matching(NSPredicate(
-            format: "identifier BEGINSWITH %@ AND identifier ENDSWITH %@ AND value == %@",
-            "orders.row.", ".title", "Cryostat")).firstMatch
-        XCTAssertTrue(rowTitle.waitForExistence(timeout: 10))
-        XCTAssertFalse(title.exists)
+        replace(title, with: "Uncreated cryostat", in: app)
+        let row = app.tables["orders.table"].staticTexts.matching(NSPredicate(format: "value == %@", "Existing optics")).firstMatch
+        row.click()
+        let cancel = app.buttons["draft.unsaved.cancel"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["draft.unsaved.save"].exists)
+        cancel.click()
+        XCTAssertEqual(title.value as? String, "Uncreated cryostat")
+        XCTAssertEqual(try ordersDirectory(root).count, 1)
+        row.click()
+        app.buttons["draft.unsaved.confirm"].click()
+        wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Existing optics"), object: title)],
+             timeout: 10)
+        XCTAssertFalse(app.buttons["editor.create"].exists)
         XCTAssertEqual(try ordersDirectory(root).count, 1)
     }
 
-    func testANewOrderEditorDoesNotKeepThePreviousOrdersItems() throws {
-        let root = try makeNativeTestPackage()
+    func testSelectionEditing() throws {
+        let root = try makePackage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try addOrder(in: root, title: "First optics", date: "2026-01-02")
+        try addOrder(in: root, title: "Second optics", date: "2026-01-01")
+        let app = XCUIApplication()
+        app.launchArguments = ["-packageBookmark", "", "-sidebarVisible", "YES", "-orderSortColumn", "date",
+                               "-orderSortDescending", "YES"]
+        app.launch()
+        openPackage(root, in: app)
+        let table = app.tables["orders.table"]
+        table.staticTexts.matching(NSPredicate(format: "value == %@", "First optics")).firstMatch.click()
+        let title = element("order.editor.title", in: app)
+        XCTAssertTrue(title.waitForExistence(timeout: 10))
+        XCTAssertEqual(title.value as? String, "First optics")
+        XCTAssertFalse(app.buttons["editor.create"].exists)
+        // Arrow keys keep browsing the list: each selection shows its editor without taking focus.
+        app.typeKey(.downArrow, modifierFlags: [])
+        wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Second optics"), object: title)],
+             timeout: 10)
+        // Return focuses the shown Order's first field, so typing replaces its Title.
+        app.typeKey(.return, modifierFlags: [])
+        app.typeText("Renamed optics\t")
+        let renamed = table.staticTexts.matching(NSPredicate(format: "value == %@", "Renamed optics")).firstMatch
+        XCTAssertTrue(renamed.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["draft.unsaved.save"].exists)
+    }
+
+    func testFreshDraft() throws {
+        let root = try makePackage()
         defer { try? FileManager.default.removeItem(at: root) }
         let app = launch(root)
-        app.toolbars.buttons["New Order"].click()
+        newOrder(in: app)
         let title = element("order.editor.title", in: app)
         XCTAssertTrue(title.waitForExistence(timeout: 10))
         replace(title, with: "Optics", in: app)
         element("order.editor.items.add", in: app).click()
         app.typeText("CAT-1\tLens\t1\t2.5\t")
-        app.typeKey("s", modifierFlags: .command)
-        XCTAssertTrue(app.toolbars.buttons["Save"].wait(for: \.isEnabled, toEqual: false, timeout: 10))
-        element("order.editor.back", in: app).click()
+        app.typeKey(.return, modifierFlags: .command)
+        XCTAssertTrue(element("editor.create", in: app).waitForNonExistence(timeout: 10))
         let rowTitle = app.staticTexts.matching(NSPredicate(
             format: "identifier BEGINSWITH %@ AND identifier ENDSWITH %@ AND value == %@",
             "orders.row.", ".title", "Optics")).firstMatch
         XCTAssertTrue(rowTitle.waitForExistence(timeout: 10))
         rowTitle.doubleClick()
         XCTAssertTrue(element("order.editor.items.row.0.description", in: app).waitForExistence(timeout: 10))
-        app.toolbars.buttons["New Order"].click()
+        newOrder(in: app)
         let startingTitle = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "New Order"), object: title)
         wait(for: [startingTitle], timeout: 10)
         XCTAssertFalse(element("order.editor.items.row.0.description", in: app).exists)
     }
 
-    func testTheVendorFieldHoldsOnlyAListedVendorOrNone() throws {
-        let root = try makeNativeTestPackage()
+    func testProjectGroups() throws {
+        let root = try makePackage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try addOrder(in: root, title: "Coils", project: "Greenhouse", group: "Misting")
+        try addOrder(in: root, title: "Mirrors", project: "Optics", group: "Imaging")
+        let app = launch(root)
+        app.tables["orders.table"].staticTexts.matching(NSPredicate(format: "value == %@", "Coils")).firstMatch.click()
+        let group = app.comboBoxes["order.editor.order_group"]
+        XCTAssertTrue(group.waitForExistence(timeout: 10))
+        // Suggestions are the groups of the Order's own Project.
+        group.buttons.firstMatch.click()
+        XCTAssertTrue(group.textFields["Misting"].waitForExistence(timeout: 10))
+        XCTAssertFalse(group.textFields["Imaging"].exists)
+        app.typeKey(.escape, modifierFlags: [])
+        let project = app.comboBoxes["order.editor.project"]
+        replace(project, with: "Optics", in: app)
+        app.typeKey(.tab, modifierFlags: [])
+        let cleared = app.buttons["order.editor.order_group.note"]
+        XCTAssertTrue(cleared.waitForExistence(timeout: 10))
+        XCTAssertEqual(cleared.value as? String, "Order Group cleared: “Optics” has no group named “Misting”.")
+        XCTAssertEqual(group.value as? String, "")
+        group.buttons.firstMatch.click()
+        XCTAssertTrue(group.textFields["Imaging"].waitForExistence(timeout: 10))
+    }
+
+    func testVendorChoice() throws {
+        let root = try makePackage()
         defer { try? FileManager.default.removeItem(at: root) }
         let app = launch(root)
-        app.toolbars.buttons["New Order"].click()
+        newOrder(in: app)
         let vendor = app.buttons["order.editor.vendor"]
         XCTAssertTrue(vendor.waitForExistence(timeout: 10))
         vendor.click()
@@ -167,7 +241,7 @@ import XCTest
         let name = element("vendor.sheet.name", in: app)
         XCTAssertTrue(name.waitForExistence(timeout: 10))
         replace(name, with: "Optics Supplier", in: app)
-        app.typeKey("s", modifierFlags: .command)
+        app.typeKey(.return, modifierFlags: .command)
         wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Optics Supplier"), object: vendor)], timeout: 10)
         vendor.click()
         let search = app.searchFields["vendor.chooser.search"]
@@ -194,7 +268,7 @@ import XCTest
         app.buttons["vendor.chooser.new"].click()
         XCTAssertTrue(name.waitForExistence(timeout: 10))
         replace(name, with: "Vacuum Supplier", in: app)
-        app.typeKey("s", modifierFlags: .command)
+        app.typeKey(.return, modifierFlags: .command)
         wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Vacuum Supplier"), object: vendor)], timeout: 10)
         vendor.click()
         search.click()
@@ -210,13 +284,13 @@ import XCTest
         wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Vacuum Supplier"), object: vendor)], timeout: 10)
     }
 
-    func testReturnEditsTheSelectedContactWithoutSavingTheVendor() throws {
-        let root = try makeNativeTestPackage()
+    func testContactEditing() throws {
+        let root = try makePackage()
         defer { try? FileManager.default.removeItem(at: root) }
         let vendorsFile = root.appendingPathComponent(".spielorders/vendors.json")
         let originalVendors = try Data(contentsOf: vendorsFile)
         let app = launch(root)
-        app.toolbars.buttons["New Order"].click()
+        newOrder(in: app)
         app.buttons["order.editor.vendor"].click()
         app.buttons["vendor.chooser.new"].click()
         let add = app.buttons["vendor.sheet.contacts.add"]
@@ -227,16 +301,16 @@ import XCTest
         app.typeKey(.return, modifierFlags: [])
         app.typeText("Blair")
         app.typeKey(.tab, modifierFlags: [])
-        XCTAssertTrue(app.buttons["vendor.sheet.save"].exists)
+        XCTAssertTrue(app.buttons["vendor.sheet.create"].exists)
         XCTAssertEqual(element("vendor.sheet.contacts.row.0.name", in: app).value as? String, "Blair")
         XCTAssertEqual(try Data(contentsOf: vendorsFile), originalVendors)
     }
 
-    func testCancellingAVendorDiscardKeepsBothDrafts() throws {
-        let root = try makeNativeTestPackage()
+    func testNestedCancellation() throws {
+        let root = try makePackage()
         defer { try? FileManager.default.removeItem(at: root) }
         let app = launch(root)
-        app.toolbars.buttons["New Order"].click()
+        newOrder(in: app)
         let title = element("order.editor.title", in: app)
         XCTAssertTrue(title.waitForExistence(timeout: 10))
         replace(title, with: "Order draft", in: app)
@@ -257,31 +331,37 @@ import XCTest
         XCTAssertEqual(try ordersDirectory(root), [])
     }
 
-    func testARefusedSaveDuringNavigationKeepsTheEditorWithoutAnotherQuestion() throws {
-        let root = try makeNativeTestPackage()
+    func testFailedNavigation() throws {
+        let root = try makePackage()
         defer { try? FileManager.default.removeItem(at: root) }
+        try addOrder(in: root, title: "First optics")
+        try addOrder(in: root, title: "Second optics")
         let app = launch(root)
-        app.toolbars.buttons["New Order"].click()
+        let table = app.tables["orders.table"]
+        table.staticTexts.matching(NSPredicate(format: "value == %@", "First optics")).firstMatch.click()
         let title = element("order.editor.title", in: app)
         XCTAssertTrue(title.waitForExistence(timeout: 10))
         title.click()
         app.typeKey("a", modifierFlags: .command)
         app.typeKey(.delete, modifierFlags: [])
-        app.buttons["order.editor.back"].click()
-        let save = app.sheets.buttons["draft.unsaved.save"]
-        XCTAssertTrue(save.waitForExistence(timeout: 5))
-        save.click()
-        XCTAssertTrue(element("order.editor.title.problem", in: app).waitForExistence(timeout: 10))
-        XCTAssertFalse(save.exists)
-        XCTAssertTrue(title.isEnabled)
-        XCTAssertEqual(try ordersDirectory(root), [])
+        table.staticTexts.matching(NSPredicate(format: "value == %@", "Second optics")).firstMatch.click()
+        XCTAssertTrue(element("editor.notSaved", in: app).waitForExistence(timeout: 10))
+        XCTAssertEqual(title.value as? String, "")
+        XCTAssertFalse(app.buttons["draft.unsaved.save"].exists)
+        element("editor.notSaved", in: app).click()
+        app.buttons["editor.revert"].click()
+        app.buttons["editor.revert.confirm"].click()
+        wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "First optics"), object: title)], timeout: 10)
+        table.staticTexts.matching(NSPredicate(format: "value == %@", "Second optics")).firstMatch.click()
+        wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Second optics"), object: title)],
+             timeout: 10)
     }
 
-    func testQuittingResolvesTheVendorAndOrderDraftsSeparately() throws {
-        let root = try makeNativeTestPackage()
+    func testNestedQuit() throws {
+        let root = try makePackage()
         defer { try? FileManager.default.removeItem(at: root) }
         let app = launch(root)
-        app.toolbars.buttons["New Order"].click()
+        newOrder(in: app)
         let title = element("order.editor.title", in: app)
         XCTAssertTrue(title.waitForExistence(timeout: 10))
         replace(title, with: "Keep this Order", in: app)
@@ -291,7 +371,7 @@ import XCTest
         XCTAssertTrue(name.waitForExistence(timeout: 10))
         replace(name, with: "Discard this Vendor", in: app)
         app.typeKey("q", modifierFlags: .command)
-        let discard = app.buttons["draft.unsaved.discard"]
+        let discard = app.buttons["draft.unsaved.confirm"]
         XCTAssertTrue(discard.waitForExistence(timeout: 5))
         discard.click()
         XCTAssertTrue(name.waitForNonExistence(timeout: 5))
@@ -302,11 +382,11 @@ import XCTest
         XCTAssertEqual(try ordersDirectory(root), [])
     }
 
-    func testQuittingWhileHiddenStillAsksAboutAnUnsavedOrder() throws {
-        let root = try makeNativeTestPackage()
+    func testHiddenQuit() throws {
+        let root = try makePackage()
         defer { try? FileManager.default.removeItem(at: root) }
         let app = launch(root)
-        app.toolbars.buttons["New Order"].click()
+        newOrder(in: app)
         let title = element("order.editor.title", in: app)
         XCTAssertTrue(title.waitForExistence(timeout: 10))
         replace(title, with: "Hidden draft", in: app)
@@ -327,39 +407,40 @@ import XCTest
         XCTAssertEqual(try ordersDirectory(root), [])
     }
 
-    func testQuittingWithAnUntouchedVendorSheetCanCancelOrSaveTheOrder() throws {
-        let root = try makeNativeTestPackage()
+    func testUntouchedSheet() throws {
+        let root = try makePackage()
         defer { try? FileManager.default.removeItem(at: root) }
         let app = launch(root)
-        app.toolbars.buttons["New Order"].click()
+        newOrder(in: app)
         let title = element("order.editor.title", in: app)
         XCTAssertTrue(title.waitForExistence(timeout: 10))
-        replace(title, with: "Save this Order", in: app)
+        replace(title, with: "Uncreated Order", in: app)
         let vendorName = element("vendor.sheet.name", in: app)
-        for save in [false, true] {
+        for discard in [false, true] {
             app.buttons["order.editor.vendor"].click()
             app.buttons["vendor.chooser.new"].click()
             XCTAssertTrue(vendorName.waitForExistence(timeout: 10))
             app.typeKey("q", modifierFlags: .command)
             XCTAssertTrue(vendorName.waitForNonExistence(timeout: 5))
-            let answer = app.sheets.buttons[save ? "draft.unsaved.save" : "draft.unsaved.cancel"]
+            let answer = app.sheets.buttons[discard ? "draft.unsaved.confirm" : "draft.unsaved.cancel"]
             XCTAssertTrue(answer.waitForExistence(timeout: 5))
+            XCTAssertFalse(app.buttons["draft.unsaved.save"].exists)
             answer.click()
-            if !save {
-                XCTAssertEqual(title.value as? String, "Save this Order")
+            if !discard {
+                XCTAssertEqual(title.value as? String, "Uncreated Order")
                 XCTAssertTrue(title.isEnabled)
                 XCTAssertEqual(try ordersDirectory(root), [])
             }
         }
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 10))
-        XCTAssertEqual(try ordersDirectory(root).count, 1)
+        XCTAssertEqual(try ordersDirectory(root), [])
     }
 
-    func testContactsCanBeDraggedAndKeepTheirOrderAfterSaving() throws {
-        let root = try makeNativeTestPackage()
+    func testContactReorder() throws {
+        let root = try makePackage()
         defer { try? FileManager.default.removeItem(at: root) }
         let app = launch(root)
-        app.radioButtons["Vendors"].click()
+        showDestination("vendors", in: app)
         app.buttons["vendor.new"].click()
         let name = element("vendor.editor.name", in: app)
         XCTAssertTrue(name.waitForExistence(timeout: 10))
@@ -369,8 +450,8 @@ import XCTest
             element("vendor.editor.contacts.add", in: app).click()
             app.typeText("\(contact)\tQuotes\t555-0100\t\(contact.lowercased())@example.invalid\t")
         }
-        app.typeKey("s", modifierFlags: .command)
-        XCTAssertTrue(app.toolbars.buttons["Save"].wait(for: \.isEnabled, toEqual: false, timeout: 10))
+        app.typeKey(.return, modifierFlags: .command)
+        XCTAssertTrue(element("editor.create", in: app).waitForNonExistence(timeout: 10))
         let first = element("vendor.editor.contacts.row.0.name", in: app)
         element("vendor.editor.contacts.row.1.name", in: app).click()
         let last = element("vendor.editor.contacts.row.3.name", in: app)
@@ -390,9 +471,16 @@ import XCTest
         for (row, contact) in reordered.enumerated() {
             XCTAssertEqual(element("vendor.editor.contacts.row.\(row).name", in: app).value as? String, contact)
         }
-        app.typeKey("s", modifierFlags: .command)
-        XCTAssertTrue(app.toolbars.buttons["Save"].wait(for: \.isEnabled, toEqual: false, timeout: 10))
-        element("vendor.editor.back", in: app).click()
+        // Redo commits through the same automatic save as the reorder itself.
+        let path = root.appendingPathComponent(".spielorders/vendors.json")
+        let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard let bytes = try? Data(contentsOf: path),
+                  let object = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+                  let vendors = object["vendors"] as? [[String: Any]],
+                  let contacts = vendors.first?["contacts"] as? [[String: Any]] else { return false }
+            return contacts.compactMap { $0["name"] as? String } == reordered
+        }, object: nil)
+        wait(for: [saved], timeout: 10)
         app.outlines["vendors.table"].staticTexts.matching(NSPredicate(format: "value == %@", "Optics Supplier")).firstMatch.doubleClick()
         XCTAssertTrue(first.waitForExistence(timeout: 10))
         for (row, contact) in reordered.enumerated() {

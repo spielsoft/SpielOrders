@@ -427,7 +427,7 @@ pub fn populated_package(label: &str) -> (TemporaryTree, PathBuf) {
             ("date_ordered", "2026-08-22"),
             ("vendor", "Tarnwick"),
             ("orderer", "Ada Lovelace"),
-            ("ordering_institution", "Northwind"),
+            ("ordering_institution", "Example Institute"),
             ("currency", "USD"),
             ("project", "Telescope"),
             ("order_group", "Summer build"),
@@ -922,6 +922,29 @@ pub fn package_with_duplicate_vendor_names(label: &str) -> (TemporaryTree, PathB
 /// A shape rather than a permission, for the reason every other fixture here avoids one:
 /// `chmod 000` does not stop a suite running as root and this does. The staging name is
 /// the core's own; a rename there is a change this fixture is supposed to notice.
+/// A populated Package that also holds Elderglass Optics, a Vendor no Order references, which
+/// is the one kind `vendor delete` removes.
+pub fn package_with_an_unused_vendor(label: &str) -> (TemporaryTree, PathBuf) {
+    let (tree, root) = populated_package(label);
+    new_vendor(
+        &root,
+        &[
+            ("name", "Elderglass Optics"),
+            ("website", "https://example.net"),
+        ],
+    );
+    (tree, root)
+}
+
+/// The same, with the derived index refresh blocked.
+pub fn package_with_an_unused_vendor_and_a_blocked_index_refresh(
+    label: &str,
+) -> (TemporaryTree, PathBuf) {
+    let (tree, root) = package_with_an_unused_vendor(label);
+    block_index_refresh(&root);
+    (tree, root)
+}
+
 pub fn package_with_a_blocked_index_refresh(label: &str) -> (TemporaryTree, PathBuf) {
     let (tree, root) = populated_package(label);
     block_index_refresh(&root);
@@ -1421,13 +1444,13 @@ impl Invocation {
 /// The candidate holds a user-authored `README.md` and a Supporting Material subtree,
 /// which is what makes "adopted with both byte-identical and nothing else created,
 /// renamed, or removed" a claim about a real directory. Its name embeds an impossible
-/// calendar date on purpose: `2009_04_31` is the shape a legacy archive actually has, and
-/// adoption must take the supplied Date Ordered and leave the name alone.
+/// calendar date on purpose: the synthetic basename must not supply Date Ordered,
+/// and adoption must take the explicit fact while leaving the name alone.
 ///
 /// Returns the Package Root and the candidate's directory.
 pub fn package_with_an_adoption_candidate(label: &str) -> (TemporaryTree, PathBuf, PathBuf) {
     let (tree, root) = populated_package(label);
-    let candidate = unmanaged_candidate(&root, "2009_04_31_Lcom_Fiber");
+    let candidate = unmanaged_candidate(&root, "2030_02_30_Example_Cable");
     std::fs::write(
         candidate.join("README.md"),
         b"Ordered by telephone. Invoice in the quotes folder.\n",

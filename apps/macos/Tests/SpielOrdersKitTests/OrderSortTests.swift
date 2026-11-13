@@ -3,7 +3,7 @@ import Foundation
 import Testing
 @testable import SpielOrdersKit
 
-@Test func headerSortUsesLibraryNumericOrderAndKeepsDamagedRowsLast() async throws {
+@Test func numericSort() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     let expensive = try createOrder(in: root, title: "High total", itemPrice: "10")
@@ -22,7 +22,7 @@ import Testing
     #expect(descending.last?.damage != nil)
 }
 
-@Test func sortingRetainsTheSelectedDamagedDirectoryAndRefreshesItsDiagnosis() async throws {
+@Test func damagedSelection() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     let order = try createOrder(in: root, title: "Healthy")

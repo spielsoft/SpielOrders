@@ -3,7 +3,7 @@ import Foundation
 import Testing
 @testable import SpielOrdersKit
 
-@Test func browsingShowsTrustedOrdersAndDiagnosesDamagedDirectories() async throws {
+@Test func packageBrowsing() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     let healthy = try createOrder(in: root, title: "Laser optics")
@@ -23,15 +23,19 @@ import Testing
 
     let inspected = try await session.inspectOrder(recognized, cancellation: LibraryCancellation())
     if case let .healthy(details) = inspected {
-        #expect(details.values[SPIELORDERS_ORDER_FIELD_TITLE] == "Laser optics")
         #expect(details.readmeText == "# Alignment notes\n")
     } else { Issue.record("A healthy Order must have a readable inspector") }
     let diagnosis = try await session.inspectOrder(placeholder, cancellation: LibraryCancellation())
-    if case let .damaged(messages) = diagnosis { #expect(!messages.isEmpty) }
+    if case let .damaged(messages) = diagnosis {
+        let detail = messages.joined(separator: "\n")
+        #expect(detail.contains("Unadopted quote"))
+        #expect(detail.contains("managed_artifact_missing"))
+        #expect(detail.contains("error"))
+    }
     else { Issue.record("A damaged directory must have a diagnosis, not healthy facts") }
 }
 
-@Test func theInspectorReadsItemFactsAndTheLibraryCalculatedTotal() async throws {
+@Test func orderInspection() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     let directory = try createOrder(in: root, title: "Lens pair")
@@ -59,19 +63,17 @@ import Testing
     let session = PackageSession()
     _ = try await session.open(root, cancellation: LibraryCancellation())
     let row = try #require(try await session.orders(query: "", caseSensitive: false, sortField: -1, descending: false, cancellation: LibraryCancellation()).rows.first)
-    let inspected = try await session.inspectOrder(row, cancellation: LibraryCancellation())
-    if case let .healthy(details) = inspected {
-        let item = try #require(details.items.first)
-        #expect(item.catalogNumber == "L-3")
-        #expect(item.description == "Lens")
-        #expect(item.quantity == "2")
-        #expect(item.unitPrice == "17.25")
-        #expect(item.total == "34.5")
-        #expect(details.values[SPIELORDERS_ORDER_FIELD_TOTAL] == "34.5")
-    } else { Issue.record("A committed healthy Order must have an Items inspector") }
+    let editing = try await session.orderDraft(row, cancellation: LibraryCancellation())
+    #expect(editing.rowCount == 1)
+    #expect(editing.rowField(0, SPIELORDERS_ITEM_FIELD_CATALOG_NUMBER) == "L-3")
+    #expect(editing.rowField(0, SPIELORDERS_ITEM_FIELD_DESCRIPTION) == "Lens")
+    #expect(editing.rowField(0, SPIELORDERS_ITEM_FIELD_QUANTITY) == "2")
+    #expect(editing.rowField(0, SPIELORDERS_ITEM_FIELD_UNIT_PRICE) == "17.25")
+    #expect(editing.rowField(0, SPIELORDERS_ITEM_FIELD_TOTAL) == "34.5")
+    #expect(editing.total == "34.5")
 }
 
-@Test func aReplacedDirectoryCannotShowAnotherOrderUnderTheCachedSelection() async throws {
+@Test func replacedDirectory() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     let first = try createOrder(in: root, title: "First Order")
@@ -88,12 +90,11 @@ import Testing
     }
     _ = try await session.open(root, cancellation: LibraryCancellation())
     let current = try #require(try await session.orders(query: "", caseSensitive: false, sortField: -1, descending: false, cancellation: LibraryCancellation()).rows.first)
-    if case let .healthy(details) = try await session.inspectOrder(current, cancellation: LibraryCancellation()) {
-        #expect(details.values[SPIELORDERS_ORDER_FIELD_TITLE] == "Replacement Order")
-    } else { Issue.record("Reopen must allow selecting the current healthy Order") }
+    let editing = try await session.orderDraft(current, cancellation: LibraryCancellation())
+    #expect(editing.field(SPIELORDERS_ORDER_FIELD_TITLE) == "Replacement Order")
 }
 
-@Test func aNowHealthyDirectoryRequiresReopenBeforeReplacingItsDamagedInspector() async throws {
+@Test func repairedDirectory() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     let healthy = try createOrder(in: root, title: "Adopted Order")

@@ -261,7 +261,7 @@ fn the_human_summary_names_the_same_entities_as_the_machine_response() {
         "Laser components",
         "Mirror mounts",
         "Tarnwick",
-        "Northwind",
+        "Example Institute",
         "Ada Lovelace",
         "Telescope",
         "Summer build",

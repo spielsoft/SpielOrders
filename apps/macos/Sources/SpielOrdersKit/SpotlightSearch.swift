@@ -2,30 +2,12 @@ import CSpielOrders
 import Darwin
 import Foundation
 
-@MainActor public final class SpotlightSearch {
-    private var operation: Task<MaterialBatch, Never>?
-    private var stopRequested = false
-    public init() {}
-
-    public func run(directory: URL?, text: String) async -> MaterialBatch {
-        if stopRequested { return MaterialBatch(state: SPIELORDERS_PROVIDER_STATE_CANCELLED) }
-        let running = Task { await self.perform(directory: directory, text: text) }
-        operation = running
-        defer { operation = nil }
-        return await withTaskCancellationHandler {
-            await running.value
-        } onCancel: { running.cancel() }
-    }
-
-    public func cancel() {
-        stopRequested = true
-        operation?.cancel()
-    }
-
-    private func perform(directory: URL?, text: String) async -> MaterialBatch {
+/// The macOS Supporting Material provider. Cancelling the calling task stops its query.
+@MainActor public enum SpotlightSearch {
+    public static func run(directory: URL?, text: String) async -> MaterialBatch {
         guard let directory else { return MaterialBatch(state: SPIELORDERS_PROVIDER_STATE_COMPLETE) }
         if Task.isCancelled { return MaterialBatch(state: SPIELORDERS_PROVIDER_STATE_CANCELLED) }
-        guard await Self.canRead(directory) else {
+        guard await canRead(directory) else {
             return MaterialBatch(state: SPIELORDERS_PROVIDER_STATE_ACCESS_DENIED)
         }
         switch await SpotlightIndexState.read(directory) {

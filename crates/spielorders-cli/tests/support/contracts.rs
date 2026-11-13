@@ -67,6 +67,7 @@ contracts! {
     VendorEdit => "spielorders.vendor.edit" at 1,
     VendorHide => "spielorders.vendor.hide" at 1,
     VendorUnhide => "spielorders.vendor.unhide" at 1,
+    VendorDelete => "spielorders.vendor.delete" at 1,
     VendorContactAdd => "spielorders.vendor.contact.add" at 1,
     VendorContactEdit => "spielorders.vendor.contact.edit" at 1,
     VendorContactMove => "spielorders.vendor.contact.move" at 1,

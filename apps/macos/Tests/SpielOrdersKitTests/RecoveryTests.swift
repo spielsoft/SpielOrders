@@ -3,7 +3,7 @@ import Foundation
 import SpielOrdersKit
 import Testing
 
-@Test func packageRepairRestoresBrowsingWithoutRepairingUnrelatedOrderDamage() async throws {
+@Test func packageRepair() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     _ = try createVendor(in: root, name: "Known Vendor")
@@ -41,7 +41,7 @@ import Testing
     #expect(try Data(contentsOf: orderMetadata) == brokenOrderBytes)
 }
 
-@Test func anOfferedLocatorRepairIsExplicitAndReturnsTheOrderToLookup() async throws {
+@Test func locatorRepair() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     let directory = try createOrder(in: root)
@@ -67,7 +67,7 @@ import Testing
     #expect(orders.rows.first?.damage == nil)
 }
 
-@Test func aStaleRepairRefusesAndKeepsExternalMetadata() async throws {
+@Test func staleRepair() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     let directory = try createOrder(in: root)
@@ -90,7 +90,7 @@ import Testing
 @Test(arguments: [SPIELORDERS_REPAIR_ACTION_ASSIGN_EXISTING_VENDOR,
                   SPIELORDERS_REPAIR_ACTION_CREATE_AND_ASSIGN_VENDOR,
                   SPIELORDERS_REPAIR_ACTION_CLEAR_VENDOR_REFERENCE])
-func anUnresolvedVendorUsesOnlyTheExplicitResolution(_ code: Int32) async throws {
+func vendorResolution(_ code: Int32) async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     _ = try createVendor(in: root, name: "Known Vendor")
@@ -117,7 +117,7 @@ func anUnresolvedVendorUsesOnlyTheExplicitResolution(_ code: Int32) async throws
     #expect(row.values[SPIELORDERS_ORDER_FIELD_VENDOR] == expected)
 }
 
-@Test func completeReplacementRequiresValidTextAndPreservesTheOriginalUntilCommit() async throws {
+@Test func replacementRepair() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     let directory = try createOrder(in: root)
@@ -146,7 +146,7 @@ func anUnresolvedVendorUsesOnlyTheExplicitResolution(_ code: Int32) async throws
     #expect(try await session.diagnose(directory: directory, cancellation: LibraryCancellation()).isValid)
 }
 
-@Test func stagingRecoveryPromotesOnlyTheChosenCandidate() async throws {
+@Test func stagingRecovery() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     let directory = try createOrder(in: root)
@@ -170,7 +170,7 @@ func anUnresolvedVendorUsesOnlyTheExplicitResolution(_ code: Int32) async throws
     #expect(rows.count == 1)
 }
 
-@Test func duplicateResolutionChangesOnlyTheChosenOrderIdentity() async throws {
+@Test func duplicateResolution() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     let first = try createOrder(in: root, title: "Original")

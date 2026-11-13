@@ -1,7 +1,7 @@
 import Foundation
 
 /// Filesystem bytes for C calls; the URL is only for native presentation and services.
-struct FileSystemPath: Sendable {
+struct FileSystemPath: Sendable, Equatable {
     private let storage: [CChar]
 
     init(bytes: [UInt8]) throws {

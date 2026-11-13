@@ -4,8 +4,9 @@
 existing Package README. Supply `orders_path="All Orders"` and `removed_path=Removed`
 when the existing collection uses those locations. Initialization adopts no Orders.
 Ordinary initialization and opening create no agent files.
-Use `agent provision --root "$package"` to create missing skill and reference files.
-Existing guidance is preserved, including customizations. Root AGENTS.md is never read
+Use `agent provision --root "$package"` to write the current skill and reference files.
+Each run replaces earlier copies of those files, including local edits, and touches no
+other file; keep local notes in files of your own. Root AGENTS.md is never read
 or written by provisioning. Ask the agent to read the local skill and add a concise
 pointer to AGENTS.md without discarding existing instructions. `agent defaults` reports
 the installed default resources without requiring a Package.

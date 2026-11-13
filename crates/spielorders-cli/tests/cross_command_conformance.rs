@@ -26,8 +26,8 @@ use crate::support::{
     ENVELOPE, Invocation, SOME_ORDER_ID, TemporaryTree, directory_that_is_not_a_root, entry_names,
     file_outside_any_package, fixture_directory, initialized_package, link_to, managed_snapshot,
     material_answered, order_directory, package_with_an_adoption_candidate,
-    package_with_three_contacts, populated_package, response, supporting_material_provider,
-    unmanaged_directory,
+    package_with_an_unused_vendor, package_with_three_contacts, populated_package, response,
+    supporting_material_provider, unmanaged_directory,
 };
 use std::path::{Path, PathBuf};
 
@@ -164,6 +164,10 @@ const DECIDED_COMMANDS: &[(&[&str], Disposition)] = &[
     (
         &["vendor", "unhide"],
         Disposition::Own(ResponseContract::VendorUnhide),
+    ),
+    (
+        &["vendor", "delete"],
+        Disposition::Own(ResponseContract::VendorDelete),
     ),
     (
         &["vendor", "contact", "list"],
@@ -402,6 +406,7 @@ fn matrix(contract: ResponseContract) -> [(&'static str, Supply); 5] {
         | ResponseContract::VendorEdit
         | ResponseContract::VendorHide
         | ResponseContract::VendorUnhide
+        | ResponseContract::VendorDelete
         | ResponseContract::VendorContactAdd
         | ResponseContract::VendorContactEdit
         | ResponseContract::VendorContactMove
@@ -716,6 +721,9 @@ enum Subject {
     /// unchanged mutation without replacing anything — so the one command that moves a
     /// Contact needs somewhere to move it before its commit is a commit at all.
     PackageRootWithThreeContacts,
+    /// The same Root, also holding a Vendor no Order references, the one kind a deletion
+    /// removes rather than refuses.
+    PackageRootWithAnUnusedVendor,
     /// One Order Directory of that Package. An `order` command's `--root` names the Order
     /// Directory and never the Root above it.
     OrderRoot,
@@ -902,6 +910,12 @@ fn shape(contract: ResponseContract) -> Shape {
             arguments: &["Nethermoor"],
             mutating: true,
         },
+        ResponseContract::VendorDelete => Shape {
+            line: &["vendor", "delete"],
+            subject: Subject::PackageRootWithAnUnusedVendor,
+            arguments: &["Elderglass Optics"],
+            mutating: true,
+        },
         ResponseContract::VendorContactAdd => Shape {
             line: &["vendor", "contact", "add"],
             subject: Subject::PackageRoot,
@@ -993,6 +1007,15 @@ fn prepare(contract: ResponseContract, label: &str) -> Prepared {
         }
         Subject::PackageRootWithoutOrders => {
             let (tree, root) = initialized_package(label);
+            Prepared {
+                _tree: tree,
+                package_root: root.clone(),
+                root,
+                positional: None,
+            }
+        }
+        Subject::PackageRootWithAnUnusedVendor => {
+            let (tree, root) = package_with_an_unused_vendor(label);
             Prepared {
                 _tree: tree,
                 package_root: root.clone(),
@@ -1301,7 +1324,8 @@ fn every_stable_code_a_failure_carries_is_snake_case() {
 ///
 /// `init` is deliberately absent. Its subject is a directory that must *not* be a Package,
 /// so a plain directory inside one is a perfectly good subject for it and initializing a
-/// nested Package is not an ancestor search.
+/// nested Package is not an ancestor search. `agent provision` accepts any directory, so it
+/// shows the same claim by writing into exactly the directory it names.
 #[test]
 fn no_command_finds_its_root_by_searching_an_ancestor() {
     for contract in commanded().filter(|contract| *contract != ResponseContract::Init) {
@@ -1314,6 +1338,12 @@ fn no_command_finds_its_root_by_searching_an_ancestor() {
         let document = response(&outcome);
         let name = contract.name();
 
+        if contract == ResponseContract::AgentProvision {
+            assert_eq!(outcome.status, Some(0), "{name}: {}", outcome.stdout_text());
+            assert!(inside.join(".agents").is_dir(), "{name}");
+            assert!(!prepared.root.join(".agents").exists(), "{name}");
+            continue;
+        }
         assert_eq!(
             outcome.status,
             Some(1),
@@ -1342,26 +1372,32 @@ fn no_command_follows_a_link_named_as_its_root() {
         let label = format!("root-link-{}", name.replace(' ', "-"));
         let prepared = prepare(contract, &label);
         let (_link_tree, link) = link_to(&label, &prepared.root);
-        let outcome = line_at(line, contract, &prepared, &link)
-            .argument("--json")
-            .run();
-        let document = response(&outcome);
+        // A trailing separator makes the OS follow the link, so it is named both ways.
+        for link in [link.clone(), link.join("")] {
+            let outcome = line_at(line, contract, &prepared, &link)
+                .argument("--json")
+                .run();
+            let document = response(&outcome);
 
-        assert_eq!(
-            outcome.status,
-            Some(1),
-            "{name}: a link is never followed: {}",
-            outcome.stdout_text()
-        );
-        assert_eq!(
-            document["error"]["code"], "root_is_a_link",
-            "{name}: {document}"
-        );
-        assert_eq!(
-            document["error"]["detail"]["path"],
-            link.to_str().expect("the test path is UTF-8"),
-            "{name}: the refusal names the link, not what stands behind it"
-        );
+            assert_eq!(
+                outcome.status,
+                Some(1),
+                "{name} {}: a link is never followed: {}",
+                link.display(),
+                outcome.stdout_text()
+            );
+            assert_eq!(
+                document["error"]["code"],
+                "root_is_a_link",
+                "{name} {}: {document}",
+                link.display()
+            );
+            assert_eq!(
+                document["error"]["detail"]["path"],
+                link.to_str().expect("the test path is UTF-8"),
+                "{name}: the refusal names the link, not what stands behind it"
+            );
+        }
     }
 }
 
@@ -1525,6 +1561,7 @@ fn interrupted(contract: ResponseContract) -> Interrupted {
         | ResponseContract::VendorEdit
         | ResponseContract::VendorHide
         | ResponseContract::VendorUnhide
+        | ResponseContract::VendorDelete
         | ResponseContract::VendorContactAdd
         | ResponseContract::VendorContactEdit
         | ResponseContract::VendorContactMove

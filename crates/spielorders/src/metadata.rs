@@ -642,6 +642,13 @@ pub struct OrderItem {
         skip_serializing_if = "Option::is_none"
     )]
     pub catalog_number: Option<String>,
+    /// Multiline remarks tied to this Item alone.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present_optional",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub notes: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -832,7 +839,13 @@ pub(crate) fn order_shape_field(bytes: &[u8]) -> Option<String> {
                 return Some(format!("items[{index}].{field}"));
             }
         }
-        let known_item = ["description", "quantity", "unit_price", "catalog_number"];
+        let known_item = [
+            "description",
+            "quantity",
+            "unit_price",
+            "catalog_number",
+            "notes",
+        ];
         if let Some(field) = item
             .keys()
             .find(|field| !known_item.contains(&field.as_str()))
@@ -857,11 +870,10 @@ pub(crate) fn order_shape_field(bytes: &[u8]) -> Option<String> {
                 return Some(format!("items[{index}].{field}"));
             }
         }
-        if item
-            .get("catalog_number")
-            .is_some_and(|value| !value.is_string())
-        {
-            return Some(format!("items[{index}].catalog_number"));
+        for field in ["catalog_number", "notes"] {
+            if item.get(field).is_some_and(|value| !value.is_string()) {
+                return Some(format!("items[{index}].{field}"));
+            }
         }
     }
     for (field, valid) in [

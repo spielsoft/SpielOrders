@@ -6,14 +6,19 @@ parent: Chart the SpielOrders product and architecture
 
 ## Decision
 
-SpielOrders provides a package-local agent skill only. It does not install or maintain a global skill. The app and CLI ship the source material used to prepare a copy inside a SpielOrder Package, so the guidance travels with the Package an agent is operating on.
+SpielOrders provides a project-local agent skill only. It does not install or maintain a global skill. The app and CLI ship the source material used to prepare a copy inside a selected directory, usually a SpielOrder Package root, so the guidance travels with the work an agent is operating on.
 
 Agent Ready setup is explicit and opt-in. Ordinary Package initialization and opening
 create no agent files. `spielorders agent provision --root <PATH>` plans and commits
-missing Package-local guidance. The GUI Package menu provides Agent Ready using the
-same library operation. The GUI first obtains a separate, persistent macOS folder
-grant for the bundled CLI, which has its own sandbox. It reports authorization success,
-cancellation, or failure before reporting setup complete.
+missing guidance in any directory. It neither requires nor reads Package metadata, so an
+ordinary, managed, or damaged directory provisions alike. File → Agent Ready chooses an
+existing directory independently of the active Package or editor and uses the same
+library operation. It is available at startup without a Package. Agent Ready only
+provisions guidance: it requests no CLI authorization and writes nothing to the
+clipboard. The selected directory's security-scoped access remains active through
+provisioning. The native result confirms the directory is agent ready whether guidance
+was created, replaced, or already current, keeps a reported failure behind Details, and
+never reports a settled commit as cancelled.
 
 ### Generated guidance
 
@@ -30,16 +35,18 @@ Provisioning creates missing directories and files for one project-local skill:
     diagnostics-and-repair.md
 ```
 
-Provisioning preserves every existing regular guidance file, including user edits. It
-does not merge, replace, version, classify, or maintain a manifest. It refuses linked or
-unsuitable destination components and overlap with configured Orders or Removed Orders
-paths. Planning writes nothing and honors cancellation. Commit revalidates the Package
-configuration and destinations, never replaces a concurrently created file, and reports
-rollback or cleanup failures. An entirely preserved setup is unchanged. Guidance writes
-do not refresh the Package Index.
+Every provisioning is a requested refresh: each guidance file above is created where
+missing and replaced where it differs from the current one, including local edits, while
+other files in or beside the skill directory are never touched. It does not merge,
+version, classify, or maintain a manifest. It refuses a linked or non-directory root and
+linked or unsuitable destination components. Planning writes nothing and honors
+cancellation. Commit revalidates the destinations, replaces a file only while it still
+holds the bytes planned against, never replaces a concurrently created entry, and reports
+rollback or cleanup failures. A setup already current is unchanged. Guidance writes do not
+refresh the Package Index.
 
-The library exposes this through
-`spielorders_package_plan_provision_agent_setup` and the existing Plan, operation,
+The library exposes this through the directory-based
+`spielorders_provision_agent` and the existing Plan, operation,
 commit, report, and Entries readers. `spielorders_library_agent_setup_prompt` returns a
 static borrowed request asking an agent to read the local skill and add a concise
 AGENTS.md pointer while preserving existing instructions. Provisioning itself never
@@ -61,23 +68,23 @@ The references use progressive disclosure and concise examples. They document ho
 The agent-specific commands are `spielorders agent provision --root <PATH>` and
 `spielorders agent defaults`. They use ordinary human/JSON output conventions;
 provisioning accepts the ordinary dry-run option. Defaults is a read-only query of
-installed default resource locations and requires no Package. Packaging supplies
-actual macOS resource or Linux shared-data paths, using the same canonical templates
-the library embeds.
+installed default resource locations and requires no Package. On every platform the CLI
+finds them at `<prefix>/share/spielorders/agent-guidance`, where `<prefix>/bin` holds its
+executable after links are resolved; SpielOrders installs under the prefix
+`~/.spielorders`. The installed tree uses the same canonical templates the library embeds.
 
-The portable CLI does not prompt for sandbox authorization or know GUI permission UI.
-The macOS launcher restores remembered CLI access before ordinary invocations.
-Unauthorized Packages refuse through ordinary command results. There is no separate
-global installation, agent status command, initialization setup flag, runtime command,
-or snapshot command. `package show` remains the complete Package inspection.
+The CLI is a standalone executable with the invoking user's ordinary filesystem
+permissions. It has no sandbox, folder grant, launcher, or permission prompt; an
+unreadable or unwritable folder refuses through ordinary command results. There is no
+agent status command, initialization setup flag, runtime command, or snapshot command. `package show` remains the complete Package inspection.
 
 ### Command and data guidance
 
 `packages-and-adoption.md` explains and exemplifies Package initialization, optional Agent Ready provisioning, Package paths, `add-order` for a newly created Order Directory, and `adopt-order` for an eligible existing direct child. It states the facts these commands require and their effects. For legacy material, filenames and directory components are evidence rather than an automatic field grammar; the agent supplies explicit facts through ordinary CLI assignments. The reference explains existing Vendor and Reusable Free-Entry Value lookup, one-Order-at-a-time adoption, resumability from current Package state, and preservation of existing directory contents. It does not reproduce the full legacy-adoption decision or turn evidence interpretation into a fixed workflow.
 
-`orders-and-items.md` documents Order and Order Item create, show, edit, move, remove, alignment, README, and scoped-validation commands with short examples. Agent-supplied Order facts are `title`, `date_ordered`, and `status`, plus optional Vendor, Orderer, Ordering Institution, currency, Project, and Order Group. Item facts are required Description, Quantity, and Unit Price plus optional Catalog Number. It documents accepted statuses, date and currency formats, optional-field clearing, calculated rather than supplied totals, and one-based Item positions.
+`orders-and-items.md` documents Order and Order Item create, show, edit, move, remove, alignment, README, and scoped-validation commands with short examples. Agent-supplied Order facts are `title`, `date_ordered`, and `status`, plus optional Vendor, Orderer, Ordering Institution, currency, Project, and Order Group. Item facts are required Description, Quantity, and Unit Price plus optional Catalog Number and multiline Notes. It documents accepted statuses, date and currency formats, optional-field clearing, calculated rather than supplied totals, and one-based Item positions.
 
-`vendors-and-contacts.md` documents Vendor list, show, create, edit, hide, and unhide commands and Vendor Contact list, add, edit, move, and remove commands with short examples. A Vendor requires a Name and may receive general phone, email, website, multiline address, and purchasing notes. A Vendor Contact requires a Name and may receive role, phone, and email. The reference explains Vendor-name selection, optional-field clearing, one-based Contact positions, that a Vendor is never deleted but hidden — reversibly, whether or not Orders reference it, and without affecting how it resolves for them — and the absence of Vendor Merge and placeholder Vendors. IDs are generated and returned by SpielOrders rather than supplied as ordinary data.
+`vendors-and-contacts.md` documents Vendor list, show, create, edit, hide, unhide, and delete commands and Vendor Contact list, add, edit, move, and remove commands with short examples. A Vendor requires a Name and may receive general phone, email, website, multiline address, and purchasing notes. A Vendor Contact requires a Name and may receive role, phone, and email. The reference explains Vendor-name selection, optional-field clearing, one-based Contact positions, that a Vendor in use is hidden — reversibly, whether or not Orders reference it, and without affecting how it resolves for them — while only an unreferenced Vendor is deleted, and the absence of Vendor Merge and placeholder Vendors. IDs are generated and returned by SpielOrders rather than supplied as ordinary data.
 
 `search-and-inspection.md` documents Package show/list/value queries, Order and Vendor inspection, native Order and Vendor search, and OS-indexed Supporting Material search. It explains relevant inputs and result semantics without duplicating the global human-versus-JSON convention.
 

@@ -22,7 +22,7 @@ parsing contract. A frontend replacement alone requires no metadata change.
 
 ## Swift desktop boundary
 
-The [Swift desktop foundation](../../apps/macos/App/SpielOrdersApp.swift) follows
+The [Swift desktop](../../apps/macos/App/SpielOrdersApp.swift) follows
 [Native desktop distribution](../adr/0001-native-desktop-distribution.md) and directly
 links Rust in the app process; the GUI does not use CLI subprocesses or a backend
 service as its domain transport.

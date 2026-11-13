@@ -1,4 +1,5 @@
-//! Installed resources: relative to a macOS helper bundle, or a Unix installation prefix.
+//! Installed resources beside the executable under one installation prefix:
+//! `<prefix>/bin/spielorders` and `<prefix>/share/spielorders/agent-guidance`.
 
 use crate::response::Answer;
 use serde_json::json;
@@ -37,21 +38,11 @@ pub(crate) fn defaults() -> Answer {
 }
 
 fn directory() -> io::Result<PathBuf> {
-    let executable = std::env::current_exe()?;
-    let parent = executable
+    // A command on PATH may be a link to the installed executable; its prefix is the target's.
+    let executable = std::env::current_exe()?.canonicalize()?;
+    let prefix = executable
         .parent()
-        .ok_or_else(|| io::Error::other("The executable has no installation directory"))?;
-    if cfg!(target_os = "macos") {
-        // The Rust executable is Contents/Helpers/spielorders-backend in the CLI bundle.
-        Ok(parent
-            .parent()
-            .ok_or_else(|| io::Error::other("The helper has no bundle directory"))?
-            .join("Resources/agent-guidance"))
-    } else {
-        // A bin/ executable and share/ resources share their installation prefix.
-        Ok(parent
-            .parent()
-            .ok_or_else(|| io::Error::other("The executable has no installation prefix"))?
-            .join("share/spielorders/agent-guidance"))
-    }
+        .and_then(|bin| bin.parent())
+        .ok_or_else(|| io::Error::other("The executable has no installation prefix"))?;
+    Ok(prefix.join("share/spielorders/agent-guidance"))
 }

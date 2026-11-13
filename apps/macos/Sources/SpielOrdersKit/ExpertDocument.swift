@@ -151,9 +151,10 @@ extension PackageSession {
         return try ExpertDocument(root: root, directory: directory.map(FileSystemPath.init(url:)), artifact: artifact)
     }
 
-    public func revalidateAfterExpertWrite(directory: URL?) throws -> PackageDiagnosis {
+    /// Reloads the Package after a raw JSON write, then diagnoses the selected scope.
+    public func revalidate(directory: URL?) throws -> PackageDiagnosis {
         guard let package else { throw SessionAccessError.reopenRequired }
-        let notices = refreshPackageAfterCommit(package)
+        let notices = refreshAfterCommit(package)
         guard self.package != nil else { throw LibraryFailure(result: SPIELORDERS_RESULT_REFUSED, entries: notices) }
         return try diagnose(directory: directory, cancellation: LibraryCancellation())
     }

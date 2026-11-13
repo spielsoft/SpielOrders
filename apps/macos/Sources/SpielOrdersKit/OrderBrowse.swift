@@ -22,21 +22,13 @@ public struct OrderListing: Sendable {
     }
 }
 
-public struct OrderItem: Sendable, Identifiable {
-    public let id: Int64
-    public let catalogNumber: String
-    public let description: String
-    public let quantity: String
-    public let unitPrice: String
-    public let total: String
-}
-
 public struct OrderDetails: Sendable {
-    public let values: [Int32: String]
-    public let items: [OrderItem]
     public let readmeText: String
     public let readmeState: Int32
     public let notices: [String]
+    /// Whether the directory name differs from the name the Order's facts project, so that
+    /// Align Directory Name would rename it.
+    public let drifted: Bool
 }
 
 public enum OrderInspection: Sendable {
@@ -51,19 +43,46 @@ extension PackageSession {
 
     public var findings: [String] {
         guard let package else { return [] }
-        return consumeEntries(spielorders_package_findings(package.pointer)).map(\.message)
+        return consumeEntries(spielorders_package_findings(package.pointer)).map(\.presentation)
     }
 
-    public func orders(query: String, caseSensitive: Bool, sortField: Int32, descending: Bool,
+    /// The facts an Order search can be confined to, in the order a menu offers them.
+    public static let orderSearchFields: [Int32] = (0..<spielorders_order_search_field_count()).map {
+        spielorders_order_search_field($0)
+    }
+
+    /// The Orders matching `query` in one of `orderSearchFields`, or in every searchable fact.
+    public func orders(query: String, field: Int32? = nil, caseSensitive: Bool, sortField: Int32, descending: Bool,
                        cancellation: LibraryCancellation) throws -> OrderListing {
         guard let package else { throw SessionAccessError.reopenRequired }
+        let flags = caseSensitive ? UInt32(SPIELORDERS_LIST_CASE_SENSITIVE) : 0
+        return try listOrders { list, outcome in
+            try withInterfaceText(query) {
+                spielorders_package_search_orders(package.pointer, $0, field ?? -1, flags, sortField,
+                                                  descending ? 1 : 0, cancellation.token, list, outcome)
+            }
+        }
+    }
+
+    /// Folder Contents: the Orders whose facts match `query`, together with every Order
+    /// holding a file of `material`, a Supporting Material search of this Package.
+    public func folderContents(query: String, caseSensitive: Bool, material: MaterialAnswer?, sortField: Int32,
+                               descending: Bool, cancellation: LibraryCancellation) throws -> OrderListing {
+        guard let package else { throw SessionAccessError.reopenRequired }
+        let flags = caseSensitive ? UInt32(SPIELORDERS_LIST_CASE_SENSITIVE) : 0
+        return try listOrders { list, outcome in
+            try withInterfaceText(query) {
+                spielorders_package_search_contents(package.pointer, $0, flags, material?.search.pointer, sortField,
+                                                    descending ? 1 : 0, cancellation.token, list, outcome)
+            }
+        }
+    }
+
+    private func listOrders(_ search: (ListOut, EntriesOut) throws -> Int32) throws -> OrderListing {
         var list: UnsafeMutablePointer<SpielordersList>?
         var outcome: UnsafeMutablePointer<SpielordersEntries>?
-        let result = try withInterfaceText(query) {
-            spielorders_package_orders(package.pointer, $0, caseSensitive ? UInt32(SPIELORDERS_LIST_CASE_SENSITIVE) : 0,
-                                       sortField, descending ? 1 : 0, cancellation.token, &list, &outcome)
-        }
-        let notices = try checked(result, outcome).map(\.message)
+        let result = try search(&list, &outcome)
+        let notices = try checked(result, outcome).map(\.presentation)
         defer { spielorders_list_free(list) }
         guard let list else { throw LibraryFailure(result: SPIELORDERS_RESULT_INTERNAL, entries: []) }
         return OrderListing(rows: orderRows(list), notices: notices)
@@ -77,35 +96,35 @@ extension PackageSession {
             let result = row.path.withUnsafeFileSystemRepresentation {
                 spielorders_package_diagnose_order(package.pointer, $0, cancellation.token, &diagnosis, &outcome)
             }
-            let notices = try checked(result, outcome).map(\.message)
+            let notices = try checked(result, outcome).map(\.presentation)
             defer { spielorders_diagnosis_free(diagnosis) }
             guard let diagnosis else { throw LibraryFailure(result: SPIELORDERS_RESULT_INTERNAL, entries: []) }
             guard spielorders_diagnosis_is_valid(diagnosis) == 0 else { throw SessionAccessError.selectionChanged }
-            let findings = consumeEntries(spielorders_diagnosis_findings(diagnosis)).map(\.message)
+            let findings = consumeEntries(spielorders_diagnosis_findings(diagnosis)).map(\.presentation)
             return .damaged(notices + findings)
         }
         let (owner, entries) = try readOrder(row, token: cancellation.token)
         defer { withExtendedLifetime(owner) {} }
         let order = owner.pointer
-        let notices = entries.map(\.message)
-        let fields = [SPIELORDERS_ORDER_FIELD_TITLE, SPIELORDERS_ORDER_FIELD_DATE_ORDERED,
-                      SPIELORDERS_ORDER_FIELD_STATUS, SPIELORDERS_ORDER_FIELD_VENDOR, SPIELORDERS_ORDER_FIELD_ORDERER,
-                      SPIELORDERS_ORDER_FIELD_ORDERING_INSTITUTION, SPIELORDERS_ORDER_FIELD_CURRENCY,
-                      SPIELORDERS_ORDER_FIELD_PROJECT, SPIELORDERS_ORDER_FIELD_ORDER_GROUP,
-                      SPIELORDERS_ORDER_FIELD_DIRECTORY_NAME, SPIELORDERS_ORDER_FIELD_TOTAL]
-        let values = Dictionary(uniqueKeysWithValues: fields.map { ($0, String(cString: spielorders_order_field(order, $0))) })
-        let items = (0..<spielorders_order_item_count(order)).map { index in
-            func field(_ key: Int32) -> String { String(cString: spielorders_order_item_field(order, index, key)) }
-            return OrderItem(id: index, catalogNumber: field(SPIELORDERS_ITEM_FIELD_CATALOG_NUMBER),
-                             description: field(SPIELORDERS_ITEM_FIELD_DESCRIPTION), quantity: field(SPIELORDERS_ITEM_FIELD_QUANTITY),
-                             unitPrice: field(SPIELORDERS_ITEM_FIELD_UNIT_PRICE), total: field(SPIELORDERS_ITEM_FIELD_TOTAL))
-        }
+        let notices = entries.map(\.presentation)
         guard let readme = spielorders_order_readme(order) else {
             throw LibraryFailure(result: SPIELORDERS_RESULT_INTERNAL, entries: [])
         }
         defer { spielorders_readme_free(readme) }
-        return .healthy(OrderDetails(values: values, items: items, readmeText: String(cString: spielorders_readme_text(readme)),
-                                     readmeState: spielorders_readme_state(readme), notices: notices))
+        return .healthy(OrderDetails(readmeText: String(cString: spielorders_readme_text(readme)),
+                                     readmeState: spielorders_readme_state(readme), notices: notices,
+                                     drifted: drifted(order, token: cancellation.token)))
+    }
+
+    /// The library plans no operation to align an Order whose directory already has its
+    /// projected name. An alignment it refuses is not offered either.
+    private func drifted(_ order: UnsafeMutablePointer<SpielordersOrder>, token: UInt64) -> Bool {
+        var plan: UnsafeMutablePointer<SpielordersPlan>?
+        defer { spielorders_plan_free(plan) }
+        guard spielorders_order_plan_align(order, token, &plan, nil) == SPIELORDERS_RESULT_OK, let plan else {
+            return false
+        }
+        return spielorders_plan_operation_count(plan) > 0
     }
 
     func readOrder(_ row: OrderRow, token: UInt64) throws -> (LibraryHandle<SpielordersOrder>, [LibraryEntry]) {

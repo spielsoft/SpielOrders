@@ -3,7 +3,7 @@ import Foundation
 import Testing
 @testable import SpielOrdersKit
 
-@Test func aVendorInspectorReadsSharedFactsContactsAndAssociatedOrders() async throws {
+@Test func vendorInspection() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     let id = try createVendor(in: root, name: "Optics supplier", contactEmail: "sales@example.invalid")
@@ -17,11 +17,12 @@ import Testing
     #expect(row.name == "Optics supplier")
     let details = try await session.inspectVendor(row, cancellation: LibraryCancellation())
     #expect(details.values[SPIELORDERS_VENDOR_FIELD_NAME] == "Optics supplier")
-    #expect(details.contacts.first?.email == "sales@example.invalid")
+    let draft = try await session.vendorDraft(id: row.id, cancellation: LibraryCancellation())
+    #expect(draft.rowField(0, SPIELORDERS_CONTACT_FIELD_EMAIL) == "sales@example.invalid")
     #expect(details.orders.first?.values[SPIELORDERS_ORDER_FIELD_TITLE] == "Lens purchase")
 }
 
-@Test func aRenamedVendorIsStillReadByIdentityWhenItsOldNameIsReused() async throws {
+@Test func vendorIdentity() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     let id = try createVendor(in: root, name: "Original supplier")
@@ -48,7 +49,7 @@ import Testing
     #expect(inspected.values[SPIELORDERS_VENDOR_FIELD_NAME] == "Renamed supplier")
 }
 
-@Test func showingHiddenVendorsOnlyChangesTheListRequest() async throws {
+@Test func hiddenVendors() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     _ = try createVendor(in: root, name: "Alpha")

@@ -323,9 +323,10 @@ fn edited_order(
         }
     }
 
-    let reusable_values = resolve_reusable_values(&assignments, &mut object, package)
-        .map_err(|unconfirmed| faults.extend(unconfirmed))
-        .ok();
+    let reusable_values =
+        resolve_reusable_values(&assignments, &mut object, &prior_document, package)
+            .map_err(|unconfirmed| faults.extend(unconfirmed))
+            .ok();
     let mut faults = faults.into_iter().map(at_facts).collect::<Vec<_>>();
 
     if let Some(rows) = items {
@@ -425,17 +426,35 @@ fn resolved_vendor(vendor_id: Option<&str>, package: &CurrentPackageCandidate) -
 
 /// Canonicalizes every Reusable Free-Entry Value the resulting Order carries and
 /// refuses each genuinely new value the caller did not explicitly introduce.
+///
+/// An Order Group is judged among the groups of the resulting Project. An Order moved to
+/// another Project loses a group this edit did not name unless that Project already has
+/// it; a named group is reused or introduced there like any other value.
 fn resolve_reusable_values(
     assignments: &[(String, String, AssignmentIntent)],
     object: &mut serde_json::Map<String, serde_json::Value>,
+    prior: &OrderDocument,
     package: &CurrentPackageCandidate,
 ) -> Result<ReusableValues, Vec<Failure>> {
     let mut outcomes = Vec::new();
     let mut unconfirmed = Vec::new();
     for field in REUSABLE_FIELDS {
-        let existing = existing_values(field, package);
         let present = object.get(field).and_then(serde_json::Value::as_str);
-        let outcome = canonicalize_reusable_value(present, &existing);
+        let project = object.get("project").and_then(serde_json::Value::as_str);
+        let outcome = canonicalize_reusable(field, present, project, package);
+        let outcome = if field == "order_group" {
+            let moved = !same_value(prior.project.as_deref(), project);
+            let named = assignments
+                .iter()
+                .any(|(assigned, _, _)| assigned == "order_group");
+            if moved && !named && matches!(outcome, ReusableValue::New(_)) {
+                ReusableValue::Absent
+            } else {
+                outcome
+            }
+        } else {
+            outcome
+        };
         if let ReusableValue::New(proposed) = &outcome
             && !assignments.iter().any(|(assigned, _, intent)| {
                 assigned == field && *intent == AssignmentIntent::Introduce
@@ -471,14 +490,36 @@ fn resolve_reusable_values(
     })
 }
 
-fn existing_values<'a>(field: &str, package: &'a CurrentPackageCandidate) -> Vec<&'a str> {
+fn canonicalize_reusable(
+    field: &str,
+    proposed: Option<&str>,
+    project: Option<&str>,
+    package: &CurrentPackageCandidate,
+) -> ReusableValue {
+    let groups;
     let projections = match field {
         "orderer" => &package.orderers,
         "ordering_institution" => &package.ordering_institutions,
         "project" => &package.projects,
-        _ => &package.order_groups,
+        _ => {
+            groups = package.order_groups_of(project);
+            &groups
+        }
     };
-    projections.iter().map(|item| item.value.as_str()).collect()
+    let existing: Vec<&str> = projections.iter().map(|item| item.value.as_str()).collect();
+    canonicalize_reusable_value(proposed, &existing)
+}
+
+/// Whether two optional free-entry texts name the same value, as reuse compares them.
+fn same_value(left: Option<&str>, right: Option<&str>) -> bool {
+    fn present(text: Option<&str>) -> Option<&str> {
+        text.map(str::trim).filter(|text| !text.is_empty())
+    }
+    match (present(left), present(right)) {
+        (None, None) => true,
+        (Some(left), Some(right)) => focaccia::unicode_full_case_eq(left, right),
+        _ => false,
+    }
 }
 
 fn assigned<'a>(
@@ -782,8 +823,7 @@ fn reusable_values_still_current(plan: &OrderEditPlan, current: &CurrentPackageC
             "project" => plan.facts.project(),
             _ => plan.facts.order_group(),
         };
-        let existing = existing_values(field, current);
-        match canonicalize_reusable_value(planned, &existing) {
+        match canonicalize_reusable(field, planned, plan.facts.project(), current) {
             ReusableValue::Absent => planned.is_none(),
             ReusableValue::Reused(value) | ReusableValue::New(value) => {
                 planned == Some(value.as_str())
@@ -799,7 +839,13 @@ fn preconditions_changed(plan: &OrderEditPlan, path: PathBuf) -> Failure {
     }
 }
 
-const ITEM_FIELDS: [&str; 4] = ["description", "quantity", "unit_price", "catalog_number"];
+const ITEM_FIELDS: [&str; 5] = [
+    "description",
+    "quantity",
+    "unit_price",
+    "catalog_number",
+    "notes",
+];
 
 const REQUIRED_ITEM_FIELDS: [&str; 3] = ["description", "quantity", "unit_price"];
 

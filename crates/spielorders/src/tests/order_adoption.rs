@@ -187,7 +187,7 @@ fn dry_run_is_complete_and_has_no_filesystem_or_identity_effect() {
             .assign("status", "hold")
             .assign("vendor", "Nethermoor")
             .assign("orderer", " Ada ")
-            .assign("ordering_institution", " Northwind ")
+            .assign("ordering_institution", " Example Institute ")
             .assign("currency", "USD")
             .assign("project", " Clock ")
             .assign("order_group", " Legacy "),

@@ -1,6 +1,6 @@
 //! Decision sources: Define the SpielOrders package topology; Define integrity,
 //! validation, and repair boundaries; Define legacy Order adoption and metadata
-//! bootstrapping; Define the stable M2 diagnostic vocabulary and evidence contract.
+//! bootstrapping; Define the stable diagnostic vocabulary and evidence contract.
 //!
 //! A direct child of the Orders Directory whose filesystem name this application
 //! cannot express as a normalized Package-relative path is reported and skipped,

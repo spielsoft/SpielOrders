@@ -3,10 +3,10 @@
 //! **Targeting is the subject as much as the reads are.** For an `order` command
 //! `--root` names the Order Directory rather than the SpielOrders Root, the Package is
 //! reached through the Order's own `package_root` locator, and no ancestor is ever
-//! searched. M3 shipped a repair that counted two parents to find its Package and
-//! refreshed a stranger's directory under a nested layout; the same mistake here would
-//! be wrong for every `order` command at once, so the nested layout is exercised
-//! directly rather than assumed to behave like the default one.
+//! searched. Counting parents to find the Package would refresh a stranger's directory
+//! under a nested layout, and would be wrong for every `order` command at once, so the
+//! nested layout is exercised directly rather than assumed to behave like the default
+//! one.
 //!
 //! Decision sources: Define the Rust CLI capability contract; Define the Order record
 //! and lifecycle contract; Define durable metadata schemas and version evolution.

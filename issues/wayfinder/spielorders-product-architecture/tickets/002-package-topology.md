@@ -48,7 +48,7 @@ discovered, and aligned. What follows is what that code may never become.
   Vendor records.
 - `.spielorders/index.json` is required and versioned, but derived and rebuildable. It
   carries enough of the healthy Order, Order README, and Vendor projection to load the
-  eventual top-level GUI without reading every `order.json`, and it never becomes a
+  top-level GUI without reading every `order.json`, and it never becomes a
   second canonical source of domain facts.
 - Root `README.md` follows the SpielGantt convention: initialization creates it and the
   UI always presents it for editing, but a missing file loads as empty and does not

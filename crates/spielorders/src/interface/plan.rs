@@ -3,15 +3,16 @@
 
 use crate::interface::{
     OptionalPathBytes, PathBytes, SPIELORDERS_CHANGE_FACT, SPIELORDERS_CHANGE_NEW_IDENTITY,
-    SPIELORDERS_CHANGE_ROW_ADDED, SPIELORDERS_CHANGE_ROW_MOVED, SPIELORDERS_CHANGE_ROW_REMOVED,
-    SPIELORDERS_DRAFT_KIND_ORDER, SPIELORDERS_FAILURE_PANICKED, SPIELORDERS_FAMILY_OPERATION,
-    SPIELORDERS_ORDER_FIELD_ORDER_GROUP, SPIELORDERS_ORDER_FIELD_ORDERER,
-    SPIELORDERS_ORDER_FIELD_ORDERING_INSTITUTION, SPIELORDERS_ORDER_FIELD_PROJECT,
-    SPIELORDERS_REPORT_COMMITTED, SPIELORDERS_REPORT_UNCHANGED, SPIELORDERS_RESULT_BAD_ARGUMENT,
-    SPIELORDERS_RESULT_INTERNAL, SPIELORDERS_REUSE_NEW, SPIELORDERS_REUSE_REUSED,
-    SPIELORDERS_SEVERITY_ERROR, SPIELORDERS_VENDOR_FIELD_HIDDEN, SpielordersConstant,
-    SpielordersDraft, SpielordersEntries, SpielordersOrder, SpielordersPackage, SpielordersReadme,
-    SpielordersResult, SpielordersVendor, Text,
+    SPIELORDERS_CHANGE_RECORD_REMOVED, SPIELORDERS_CHANGE_ROW_ADDED, SPIELORDERS_CHANGE_ROW_MOVED,
+    SPIELORDERS_CHANGE_ROW_REMOVED, SPIELORDERS_DRAFT_KIND_ORDER, SPIELORDERS_FAILURE_PANICKED,
+    SPIELORDERS_FAMILY_OPERATION, SPIELORDERS_ORDER_FIELD_ORDER_GROUP,
+    SPIELORDERS_ORDER_FIELD_ORDERER, SPIELORDERS_ORDER_FIELD_ORDERING_INSTITUTION,
+    SPIELORDERS_ORDER_FIELD_PROJECT, SPIELORDERS_REPORT_COMMITTED, SPIELORDERS_REPORT_UNCHANGED,
+    SPIELORDERS_RESULT_BAD_ARGUMENT, SPIELORDERS_RESULT_INTERNAL, SPIELORDERS_REUSE_NEW,
+    SPIELORDERS_REUSE_REUSED, SPIELORDERS_SEVERITY_ERROR, SPIELORDERS_VENDOR_FIELD_HIDDEN,
+    SPIELORDERS_VENDOR_FIELD_NAME, SpielordersConstant, SpielordersDraft, SpielordersEntries,
+    SpielordersOrder, SpielordersPackage, SpielordersReadme, SpielordersResult, SpielordersVendor,
+    Text,
     call::{Session, deliver, fallible, put, quietly, settle},
     draft::{Origin, SpielordersDraftData},
     entries::{EMPTY, Entry, Subject, c_text},
@@ -70,6 +71,7 @@ struct SpielordersPlanData {
     subject: Subject,
     operations: Vec<(SpielordersConstant, CString)>,
     changes: Vec<PlannedChange>,
+    restored_order_id: CString,
 }
 
 fn operations(plan: &Plan) -> Vec<(SpielordersConstant, CString)> {
@@ -234,27 +236,33 @@ fn draft_changes(draft: &SpielordersDraftData, plan: &Plan) -> Vec<PlannedChange
     changes
 }
 
-/// Plans missing Package-local agent guidance without reading or changing root AGENTS.md.
-/// Existing regular guidance is preserved. Commit rechecks configuration and destinations.
+/// Plans writing the bundled agent guidance into `.agents/skills/spielorders` under the
+/// existing `directory`: each guidance file is created where missing and replaced
+/// (SPIELORDERS_OPERATION_REPLACE_FILE) where it differs, and one already current is kept.
+/// Reads no Package metadata, so any directory, a Package, or a Damaged Package plans
+/// alike. Never reads or changes AGENTS.md or any other file. Refuses a `directory` that is
+/// a link or not a directory; a guidance destination that exists as the wrong kind of
+/// entry, such as a link, a file where a directory belongs, or a directory where a file
+/// belongs; and a leftover staging entry beside a missing guidance file. Commit rechecks
+/// every destination, replaces a file only while it holds the bytes planned against, and
+/// never overwrites an entry created after planning.
 #[unsafe(no_mangle)]
-pub extern "C" fn spielorders_package_plan_provision_agent_setup(
-    package: &SpielordersPackage,
+pub extern "C" fn spielorders_provision_agent(
+    directory: PathBytes<'_>,
     token: u64,
     plan: &mut Option<Box<SpielordersPlan>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
     fallible(outcome, |entries| {
-        let result = package.healthy(entries).and_then(|_| {
-            let root = package.root().to_path_buf();
-            planned(
-                &Change::ProvisionAgentSetup { root: root.clone() },
-                root,
-                Subject::Other,
-                token,
-                entries,
-                |_| Vec::new(),
-            )
-        });
+        let root = directory.as_path().to_path_buf();
+        let result = planned(
+            &Change::ProvisionAgent { root: root.clone() },
+            root,
+            Subject::Other,
+            token,
+            entries,
+            |_| Vec::new(),
+        );
         deliver(result, plan)
     })
 }
@@ -270,6 +278,7 @@ impl SpielordersPlan {
             data: Box::new(SpielordersPlanData {
                 operations: operations(&plan),
                 changes: changes(&plan),
+                restored_order_id: c_text(plan.restored_order_id().unwrap_or_default()),
                 plan,
                 root,
                 subject,
@@ -411,6 +420,45 @@ pub extern "C" fn spielorders_vendor_plan_hidden(
     })
 }
 
+/// Plans deleting `vendor` and its Contacts. Refuses with
+/// SPIELORDERS_FAILURE_VENDOR_REFERENCED, one entry per referencing Order, while any
+/// healthy Order references it; hiding is how a Vendor in use stops being offered.
+#[unsafe(no_mangle)]
+pub extern "C" fn spielorders_vendor_plan_delete(
+    vendor: &SpielordersVendor,
+    token: u64,
+    plan: &mut Option<Box<SpielordersPlan>>,
+    outcome: Option<&mut Option<Box<SpielordersEntries>>>,
+) -> SpielordersResult {
+    fallible(outcome, |entries| {
+        let read = &vendor.data().read;
+        let change = Change::DeleteVendor {
+            root: vendor.root(),
+            vendor: VendorRef::Id(read.vendor.vendor_id.to_string()),
+        };
+        let result = planned(
+            &change,
+            vendor.root(),
+            Subject::Vendor,
+            token,
+            entries,
+            |plan| {
+                let vendor = plan
+                    .vendor_record()
+                    .expect("a Vendor deletion plans its subject record");
+                vec![PlannedChange::new(
+                    SPIELORDERS_CHANGE_RECORD_REMOVED,
+                    SPIELORDERS_VENDOR_FIELD_NAME,
+                    -1,
+                    vendor.name.as_str(),
+                    "",
+                )]
+            },
+        );
+        deliver(result, plan)
+    })
+}
+
 /// Plans replacing the text of `readme` with `text`, guarded by the bytes `readme` read.
 /// Refuses for a README that could not be read.
 #[unsafe(no_mangle)]
@@ -440,6 +488,39 @@ pub extern "C" fn spielorders_readme_plan_write(
         };
         deliver(
             planned(&change, root, Subject::Other, token, entries, |_| {
+                Vec::new()
+            }),
+            plan,
+        )
+    })
+}
+
+/// Plans restoring the removed Order at `removed`, a directory in the Removed Orders
+/// Directory of `package` such as a removal's final path, to its Orders Directory under the
+/// same name. Refuses SPIELORDERS_FAILURE_NOT_DIRECT_CHILD for a path outside the Removed
+/// Orders Directory, _NOT_AN_ORDER_DIRECTORY or _DAMAGED_RECORD for one that is not a
+/// readable Order with ordinary managed metadata, _UNRESOLVED_VENDOR when its Vendor
+/// reference no longer resolves, _DESTINATION_COLLISION when the Orders Directory already
+/// holds that name, and _ORDER_IDENTITY_IN_USE when another Order, including a damaged one
+/// with a readable identity, carries its Order ID. Commit refuses when any of that or the
+/// configured destination changed after planning. The report's final path is the restored
+/// Order.
+#[unsafe(no_mangle)]
+pub extern "C" fn spielorders_package_plan_restore_order(
+    package: &SpielordersPackage,
+    removed: PathBytes<'_>,
+    token: u64,
+    plan: &mut Option<Box<SpielordersPlan>>,
+    outcome: Option<&mut Option<Box<SpielordersEntries>>>,
+) -> SpielordersResult {
+    fallible(outcome, |entries| {
+        let root = package.root().to_path_buf();
+        let change = Change::RestoreOrder {
+            root: root.clone(),
+            removed: removed.as_path().to_path_buf(),
+        };
+        deliver(
+            planned(&change, root, Subject::Order, token, entries, |_| {
                 Vec::new()
             }),
             plan,
@@ -515,6 +596,15 @@ impl SpielordersPlan {
     fn planned_change(&self, index: i64) -> Option<&PlannedChange> {
         self.data.changes.get(usize::try_from(index).ok()?)
     }
+}
+
+/// The immutable Order ID of the removed Order a restore `plan` will restore; "" for
+/// another kind of plan. A caller undoing a specific removal compares this with that
+/// Order's ID before committing, because the removed path may now hold another Order.
+/// The plan owns the borrowed text, and commit rechecks its subject's identity.
+#[unsafe(no_mangle)]
+pub extern "C" fn spielorders_plan_restored_order_id(plan: &SpielordersPlan) -> Text<'_> {
+    quietly(Text::new(EMPTY), || Text::new(&plan.data.restored_order_id))
 }
 
 /// How many filesystem operations committing `plan` performs.
@@ -655,6 +745,9 @@ fn refreshed(report: &Report, root: &std::path::Path, subject: Subject) -> Spiel
             (None, Some(result.directory.absolute_path.clone()), None)
         }
         ChangeResult::AlignOrder(result) => {
+            (None, Some(result.directory.absolute_path.clone()), None)
+        }
+        ChangeResult::RestoreOrder(result) => {
             (None, Some(result.directory.absolute_path.clone()), None)
         }
         ChangeResult::Vendor(result) => (None, None, Some(result.vendor_id.to_string())),

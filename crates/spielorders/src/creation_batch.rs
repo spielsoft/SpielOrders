@@ -1,10 +1,12 @@
 //! Exclusive creation batches shared by Package initialization and agent provisioning.
-//! Publication never replaces a destination; rollback removes only unchanged owned artifacts.
+//! Creation never replaces a destination, and a replacement replaces a file only while it
+//! still holds exactly the bytes planned against; rollback removes only unchanged owned
+//! artifacts.
 
 use crate::{
     Answer, Failure,
-    filesystem::staging_path,
-    mutation::{CleanupFailure, CommitFailure, MutationReport},
+    filesystem::{FileReplacement, replace_validated_files, staging_path},
+    mutation::{CleanupFailure, CommitFailure, MutationReport, Never},
     ports::{
         FileChangeEvidence, FileChangeObservation, FileSystem, FileSystemEntryKind,
         NewFileLinkOutcome,
@@ -19,6 +21,7 @@ use std::path::{Path, PathBuf};
 pub enum CreationOperationKind {
     Create,
     Preserve,
+    Replace,
 }
 
 impl crate::code::Coded for CreationOperationKind {}
@@ -38,6 +41,8 @@ pub struct CreationOperation {
     pub(crate) destination_kind: CreationDestinationKind,
     pub(crate) location: Location,
     contents: Option<Vec<u8>>,
+    /// The bytes a replacement was planned against.
+    prior: Option<Vec<u8>>,
 }
 
 impl CreationOperation {
@@ -225,10 +230,53 @@ pub(crate) fn commit_creation<F: FileSystem>(
             }
         }
 
+        // Create missing entries first: a creation failure has no replaced content to
+        // restore. Replacements then share the guarded reverse rollback used by other
+        // multi-file mutations.
+        let replacements: Vec<_> = plan
+            .operations
+            .iter()
+            .filter(|operation| operation.kind == CreationOperationKind::Replace)
+            .map(|operation| {
+                FileReplacement::observed(
+                    operation.path(),
+                    operation.contents.as_deref().expect("replacement bytes"),
+                    operation.prior.as_deref().expect("planned prior bytes"),
+                )
+            })
+            .collect();
+        if let Err(error) =
+            replace_validated_files(&replacements, filesystem, |_, _| Ok::<(), Never>(()))
+        {
+            let destinations: Vec<_> = replacements
+                .iter()
+                .map(FileReplacement::destination)
+                .collect();
+            let failure = Failure::of_replacements(&root, &destinations, error);
+            let mut cleanup = cleanup_creation(
+                &plan,
+                StageCleanup::None,
+                created_files,
+                created_directories,
+                filesystem,
+            );
+            return Err(match failure {
+                Failure::CommitFailed { failure } => Failure::commit(*failure, cleanup),
+                Failure::CommitFailedCleanupIncomplete {
+                    failure,
+                    cleanup_failures,
+                } => {
+                    cleanup.extend(cleanup_failures);
+                    Failure::commit(*failure, cleanup)
+                }
+                other => other,
+            });
+        }
+
         if plan
             .operations
             .iter()
-            .any(|operation| operation.kind == CreationOperationKind::Create)
+            .any(|operation| operation.kind != CreationOperationKind::Preserve)
         {
             Ok(MutationReport::Committed { result: () })
         } else {
@@ -259,10 +307,12 @@ fn changed_precondition<F: FileSystem>(
     for operation in &plan.operations {
         let expected = match operation.kind {
             CreationOperationKind::Create => None,
-            CreationOperationKind::Preserve => Some(match operation.destination_kind {
-                CreationDestinationKind::Directory => FileSystemEntryKind::Directory,
-                CreationDestinationKind::File => FileSystemEntryKind::File,
-            }),
+            CreationOperationKind::Preserve | CreationOperationKind::Replace => {
+                Some(match operation.destination_kind {
+                    CreationDestinationKind::Directory => FileSystemEntryKind::Directory,
+                    CreationDestinationKind::File => FileSystemEntryKind::File,
+                })
+            }
         };
         match filesystem.symlink_metadata(operation.path()) {
             Ok(actual) if actual == expected => {}
@@ -327,10 +377,23 @@ fn rejected_after_cleanup<F: FileSystem>(
     plan: &CreationBatch,
     failure: CommitFailure,
     stage: StageCleanup<F::Error>,
+    created_files: Vec<TrackedArtifact<F::Error>>,
+    created_directories: Vec<TrackedArtifact<F::Error>>,
+    filesystem: &F,
+) -> Failure {
+    Failure::commit(
+        failure,
+        cleanup_creation(plan, stage, created_files, created_directories, filesystem),
+    )
+}
+
+fn cleanup_creation<F: FileSystem>(
+    plan: &CreationBatch,
+    stage: StageCleanup<F::Error>,
     mut created_files: Vec<TrackedArtifact<F::Error>>,
     mut created_directories: Vec<TrackedArtifact<F::Error>>,
     filesystem: &F,
-) -> Failure {
+) -> Vec<CleanupFailure> {
     let mut cleanup_failures = Vec::new();
     let root = plan.root.as_path();
     match stage {
@@ -359,7 +422,7 @@ fn rejected_after_cleanup<F: FileSystem>(
             refresh_containing_directories(&path, &mut created_directories, filesystem);
         }
     }
-    Failure::commit(failure, cleanup_failures)
+    cleanup_failures
 }
 
 fn remove_tracked<F: FileSystem>(
@@ -481,6 +544,7 @@ pub(crate) fn create_directory(root: &Path, path: PathBuf) -> CreationOperation 
         destination_kind: CreationDestinationKind::Directory,
         location: planned_location(root, path),
         contents: None,
+        prior: None,
     }
 }
 
@@ -490,6 +554,7 @@ pub(crate) fn preserve_directory(root: &Path, path: PathBuf) -> CreationOperatio
         destination_kind: CreationDestinationKind::Directory,
         location: planned_location(root, path),
         contents: None,
+        prior: None,
     }
 }
 
@@ -499,6 +564,7 @@ pub(crate) fn create_file(root: &Path, path: PathBuf, contents: Vec<u8>) -> Crea
         destination_kind: CreationDestinationKind::File,
         location: planned_location(root, path),
         contents: Some(contents),
+        prior: None,
     }
 }
 
@@ -508,5 +574,22 @@ pub(crate) fn preserve_file(root: &Path, path: PathBuf) -> CreationOperation {
         destination_kind: CreationDestinationKind::File,
         location: planned_location(root, path),
         contents: None,
+        prior: None,
+    }
+}
+
+/// Replaces the file at `path`, which held `prior` when planned, with `contents`.
+pub(crate) fn replace_file(
+    root: &Path,
+    path: PathBuf,
+    prior: Vec<u8>,
+    contents: Vec<u8>,
+) -> CreationOperation {
+    CreationOperation {
+        kind: CreationOperationKind::Replace,
+        destination_kind: CreationDestinationKind::File,
+        location: planned_location(root, path),
+        contents: Some(contents),
+        prior: Some(prior),
     }
 }

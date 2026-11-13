@@ -623,7 +623,7 @@ fn unavailable_read(reference: &ReadmeReference, reason: ReadmeUnavailableReason
     }
 }
 
-// Decision sources: Define the stable M2 diagnostic vocabulary and evidence contract;
+// Decision sources: Define the stable diagnostic vocabulary and evidence contract;
 // Define the SpielOrders package topology.
 #[cfg(test)]
 mod tests {

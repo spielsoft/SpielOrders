@@ -5,10 +5,12 @@ use std::{fs, process::Command};
 fn agent_provision_responses_match_their_contracts() {
     use crate::support::{ResponseContract, assert_matches_golden, unmanaged_directory};
     for cell in ["success", "invalid", "rejected"] {
-        let (_tree, root) = match cell {
-            "invalid" => unmanaged_directory("provision-invalid"),
-            _ => initialized_package("provision-response"),
-        };
+        // Any directory is a destination; no Package needs to stand there.
+        let (_tree, mut root) = unmanaged_directory("provision-response");
+        if cell == "invalid" {
+            root = root.join("notes.txt");
+            fs::write(&root, "not a directory").unwrap();
+        }
         if cell == "rejected" {
             fs::write(root.join(".agents"), "owner content").unwrap();
         }
@@ -20,20 +22,11 @@ fn agent_provision_responses_match_their_contracts() {
 }
 
 #[test]
-fn agent_defaults_queries_an_installed_resource_tree_without_a_package_or_grant() {
+fn agent_defaults_queries_an_installed_resource_tree_without_a_package() {
     use crate::support::{ResponseContract, assert_golden, unmanaged_directory};
     let (_tree, installation) = unmanaged_directory("agent-defaults-installation");
-    let (executable, resources) = if cfg!(target_os = "macos") {
-        (
-            installation.join("CLI.app/Contents/Helpers/spielorders-backend"),
-            installation.join("CLI.app/Contents/Resources/agent-guidance"),
-        )
-    } else {
-        (
-            installation.join("bin/spielorders"),
-            installation.join("share/spielorders/agent-guidance"),
-        )
-    };
+    let executable = installation.join("bin/spielorders");
+    let resources = installation.join("share/spielorders/agent-guidance");
     fs::create_dir_all(executable.parent().unwrap()).unwrap();
     fs::copy(env!("CARGO_BIN_EXE_spielorders"), &executable).unwrap();
     fs::create_dir_all(resources.join("references")).unwrap();
@@ -71,6 +64,22 @@ fn agent_defaults_queries_an_installed_resource_tree_without_a_package_or_grant(
         outcome
             .stdout_text()
             .replace(resources.to_str().unwrap(), "<RESOURCE_DIRECTORY>"),
+    );
+
+    // A command registered on PATH by link still reports the installed prefix's guidance.
+    let (_link_tree, elsewhere) = unmanaged_directory("agent-defaults-path-link");
+    let link = elsewhere.join("spielorders");
+    std::os::unix::fs::symlink(&executable, &link).unwrap();
+    let linked = Command::new(&link)
+        .args(["agent", "defaults", "--json"])
+        .current_dir(&elsewhere)
+        .output()
+        .unwrap();
+    assert_eq!(linked.status.code(), Some(0));
+    let linked: serde_json::Value = serde_json::from_slice(&linked.stdout).unwrap();
+    assert_eq!(
+        std::path::Path::new(linked["data"]["skill_directory"].as_str().unwrap()),
+        resources
     );
 
     let (_package_tree, package) = initialized_package("defaults-canonical-content");
@@ -119,7 +128,7 @@ fn agent_defaults_queries_an_installed_resource_tree_without_a_package_or_grant(
 }
 
 #[test]
-fn agent_provision_dry_runs_preserves_custom_guidance_and_retries_after_failed_staging() {
+fn agent_provision_dry_runs_refreshes_guidance_and_retries_after_failed_staging() {
     let (_tree, root) = initialized_package("agent-provision");
     let skill = root.join(".agents/skills/spielorders");
     fs::create_dir_all(skill.join("references")).unwrap();
@@ -137,6 +146,11 @@ fn agent_provision_dry_runs_preserves_custom_guidance_and_retries_after_failed_s
         .run();
     assert_eq!(dry.status, Some(0), "{}", dry.stdout_text());
     assert!(!skill.join("references/orders-and-items.md").exists());
+    assert_eq!(
+        fs::read_to_string(skill.join("SKILL.md")).unwrap(),
+        "owner skill\n",
+        "a dry run replaces nothing"
+    );
 
     // Exclusive write succeeds but its write-only staging file cannot be read back.
     // Failure after creation must remove that owned file so the next run can retry.
@@ -173,9 +187,12 @@ fn agent_provision_dry_runs_preserves_custom_guidance_and_retries_after_failed_s
     assert_eq!(answer.status, Some(0), "{}", answer.stdout_text());
     assert_eq!(response(&answer)["contract"], "spielorders.agent.provision");
     assert!(skill.join("references/orders-and-items.md").is_file());
+    let shipped =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../spielorders/agent-guidance");
     assert_eq!(
-        fs::read_to_string(skill.join("SKILL.md")).unwrap(),
-        "owner skill\n"
+        fs::read(skill.join("SKILL.md")).unwrap(),
+        fs::read(shipped.join("SKILL.md")).unwrap(),
+        "a requested refresh replaces the earlier copy"
     );
     assert_eq!(
         fs::read_to_string(root.join("AGENTS.md")).unwrap(),
@@ -186,6 +203,20 @@ fn agent_provision_dry_runs_preserves_custom_guidance_and_retries_after_failed_s
         .rooted_at(&root)
         .run();
     assert_eq!(response(&repeated)["data"]["outcome"], "unchanged");
+}
+
+#[test]
+fn agent_provision_neither_requires_nor_reads_package_metadata() {
+    let (_tree, root) = initialized_package("agent-provision-damaged");
+    fs::write(root.join(".spielorders/config.toml"), "orders_path = [").unwrap();
+    let metadata = managed_snapshot(&root.join(".spielorders"));
+    let answer = Invocation::new(&["agent", "provision", "--json"])
+        .rooted_at(&root)
+        .run();
+    assert_eq!(answer.status, Some(0), "{}", answer.stdout_text());
+    assert_eq!(response(&answer)["data"]["outcome"], "committed");
+    assert!(root.join(".agents/skills/spielorders/SKILL.md").is_file());
+    assert_eq!(managed_snapshot(&root.join(".spielorders")), metadata);
 }
 
 /// Every shipped example is a command line that succeeds on a disposable Package

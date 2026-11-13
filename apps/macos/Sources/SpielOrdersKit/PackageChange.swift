@@ -38,7 +38,9 @@ public final class PackageChange: Sendable {
 public struct PackageChangeOutcome: Sendable {
     public let finalDirectory: URL?
     public let requiresReopen: Bool
+    public let notices: [String]
     public let message: String
+    public let summary: String
 }
 
 extension PackageSession {
@@ -68,7 +70,7 @@ extension PackageSession {
         let path = spielorders_report_final_path(report)
         let directory = path.pointee == 0 ? nil
             : URL(fileURLWithFileSystemRepresentation: path, isDirectory: true, relativeTo: nil)
-        notices += refreshPackageAfterCommit(change.source)
+        notices += refreshAfterCommit(change.source)
         let requiresReopen = package == nil
         if change.action == .trash, let directory {
             let trashFailure: String?
@@ -79,7 +81,8 @@ extension PackageSession {
             let removal = RemovalOutcome(removedDirectory: directory, trashFailure: trashFailure,
                                          warnings: notices, requiresReopen: requiresReopen)
             return PackageChangeOutcome(finalDirectory: trashFailure == nil ? nil : directory,
-                                        requiresReopen: requiresReopen, message: removal.message)
+                                        requiresReopen: requiresReopen, notices: notices.map(\.presentation),
+                                        message: removal.message, summary: removal.summary)
         }
         var messages: [String]
         switch change.action {
@@ -87,9 +90,13 @@ extension PackageSession {
         case .remove: messages = ["Order removed. It remains recoverable at \(directory?.path ?? "the Removed Orders directory")."]
         default: messages = ["Repair committed."]
         }
-        if requiresReopen { messages.append("Reopen the Package before continuing.") }
+        if requiresReopen { messages.append("Reload the Package before continuing.") }
         messages += notices.map(\.presentation)
         return PackageChangeOutcome(finalDirectory: directory, requiresReopen: requiresReopen,
-                                    message: messages.joined(separator: "\n"))
+                                    notices: notices.map(\.presentation),
+                                    message: messages.joined(separator: "\n"),
+                                    summary: requiresReopen ? "Change committed. Reload the Package before continuing."
+                                        : change.action == .align ? "Directory name aligned."
+                                        : change.action == .remove ? "Order removed. Edit → Undo restores it." : "Repair committed.")
     }
 }

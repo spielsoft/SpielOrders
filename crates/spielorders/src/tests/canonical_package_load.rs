@@ -1,5 +1,5 @@
-//! Decision sources: Define the stable M2 diagnostic vocabulary and evidence
-//! contract; Define the complete M2 Package read projection and load-state
+//! Decision sources: Define the stable diagnostic vocabulary and evidence
+//! contract; Define the complete Package read projection and load-state
 //! contract; Decide how Package Index freshness is proven without canonical rereads.
 
 use crate::Failure;
@@ -190,7 +190,10 @@ fn healthy_order_projection_contains_complete_facts_totals_readme_vendor_and_reu
     );
     assert!(package.contents.damaged_orders.is_empty());
     assert!(package.contents.diagnostic_groups.is_empty());
-    assert_eq!(package.contents.ordering_institutions[0].value, "Northwind");
+    assert_eq!(
+        package.contents.ordering_institutions[0].value,
+        "Example Institute"
+    );
     assert_eq!(package.contents.orderers[0].value, "Ada Lovelace");
     assert_eq!(package.contents.projects[0].value, "Telescope");
     assert_eq!(package.contents.order_groups[0].value, "Summer build");
@@ -773,7 +776,7 @@ fn healthy_order_sorting_drives_unicode_reusable_value_spelling_counts_and_order
         "c3333333-3333-4333-8333-333333333333",
         "Newest path but older date",
         "2025-01-01",
-        "Cedarbrook",
+        "Sample Academy",
     );
     let filesystem = minimal_package()
         .with_directory("/package/Orders/Z-Older")
@@ -815,7 +818,7 @@ fn healthy_order_sorting_drives_unicode_reusable_value_spelling_counts_and_order
                 .iter()
                 .map(|value| (value.value.as_str(), value.usage_count))
                 .collect::<Vec<_>>(),
-            vec![("Cedarbrook", 1), ("Straße Team", 2)]
+            vec![("Sample Academy", 1), ("Straße Team", 2)]
         );
     }
 }

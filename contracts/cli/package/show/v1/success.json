@@ -22,7 +22,7 @@
         "status": "in_preparation",
         "vendor": "Tarnwick",
         "orderer": "Ada Lovelace",
-        "ordering_institution": "Northwind",
+        "ordering_institution": "Example Institute",
         "currency": "USD",
         "project": "Telescope",
         "order_group": "Summer build",
@@ -78,7 +78,7 @@
     "values": {
       "ordering_institution": [
         {
-          "value": "Northwind",
+          "value": "Example Institute",
           "usage_count": "1"
         }
       ],

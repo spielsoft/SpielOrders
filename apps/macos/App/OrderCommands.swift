@@ -9,7 +9,7 @@ struct OrderCommands: Commands {
             Button("Open") { model.openOrder(model.currentOrder?.id) }
                 .disabled(model.busy || model.vendorSheet != nil || model.currentOrder == nil)
                 .accessibilityIdentifier("order.menu.open")
-            Button("Reveal in Finder") { model.selectOrder(model.currentOrder?.id, revealInFinder: true) }
+            Button("Show in Finder") { model.revealOrder(model.currentOrder?.id) }
                 .disabled(model.busy || model.vendorSheet != nil || model.currentOrder == nil)
                 .accessibilityIdentifier("order.menu.reveal")
             Button("Align Directory Name…") { model.changeOrderDirectory(.align) }
@@ -18,7 +18,7 @@ struct OrderCommands: Commands {
             Button("Diagnose Order") { model.showDiagnosis(directory: model.currentOrder?.directory) }
                 .disabled(model.busy || model.vendorSheet != nil || model.currentOrder == nil)
                 .accessibilityIdentifier("order.menu.diagnose")
-            Button("Remove Order…") { model.changeOrderDirectory(.remove) }
+            Button("Remove Order") { model.changeOrderDirectory(.remove) }
                 .disabled(!model.canChangeDirectory || model.vendorSheet != nil)
                 .accessibilityIdentifier("order.menu.remove")
             Divider()

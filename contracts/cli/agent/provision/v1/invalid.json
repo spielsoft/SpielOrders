@@ -8,14 +8,14 @@
   "data": null,
   "diagnostics": [],
   "error": {
-    "code": "unmanaged_package",
+    "code": "root_not_ordinary_directory",
     "detail": {
       "severity": "error",
-      "message": "Unmanaged package",
+      "message": "Root not ordinary directory",
       "field": null,
       "reason": null,
       "position": null,
-      "path": "<PACKAGE_ROOT>",
+      "path": null,
       "before": null,
       "after": null
     }

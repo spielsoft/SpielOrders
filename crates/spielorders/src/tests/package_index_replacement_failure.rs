@@ -1,5 +1,5 @@
 //! Decision sources: Decide how Package Index freshness is proven without canonical rereads;
-//! Define the stable M2 diagnostic vocabulary and evidence contract; Define the complete M2
+//! Define the stable diagnostic vocabulary and evidence contract; Define the complete
 //! Package read projection and load-state contract.
 //! A deliberate Package Index rebuild whose replacement fails: evidence and effect budget.
 
@@ -120,7 +120,9 @@ fn every_replacement_and_cleanup_failure_preserves_complete_evidence_and_effect_
         assert!(
             calls
                 .iter()
-                .all(|call| allowed_paths.contains(call.path.as_path())
+                .all(|call| (allowed_paths.contains(call.path.as_path())
+                    || (call.operation == Operation::SymlinkMetadata
+                        && call.path == Path::new("/package/Orders/Order/.spielorders")))
                     && call
                         .source
                         .as_deref()

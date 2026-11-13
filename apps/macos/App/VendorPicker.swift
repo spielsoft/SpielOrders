@@ -6,6 +6,7 @@ import SwiftUI
 struct VendorPicker: View {
     @Binding var text: String
     let choices: [String]
+    let identifier: String
     let newVendor: () -> Void
     @State private var presented = false
     @State private var query = ""
@@ -23,14 +24,18 @@ struct VendorPicker: View {
             presented = true
         } label: {
             HStack {
-                Text(text.isEmpty ? "Choose Vendor…" : text).lineLimit(1).truncationMode(.tail)
+                // Its own color keeps the choice legible while the picker is disabled.
+                Text(text.isEmpty ? "Choose Vendor…" : text)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 Spacer()
                 Image(systemName: "chevron.up.chevron.down").font(.caption)
             }
         }
         .accessibilityLabel("Vendor")
         .accessibilityValue(text.isEmpty ? "None" : text)
-        .accessibilityIdentifier("order.editor.vendor")
+        .accessibilityIdentifier(identifier)
         .popover(isPresented: $presented, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 8) {
                 SearchField(placeholder: "Search Vendors", text: $query, identifier: "vendor.chooser.search",

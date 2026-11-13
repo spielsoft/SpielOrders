@@ -88,7 +88,7 @@
         "field": "ordering_institution",
         "position": null,
         "before": null,
-        "after": "Northwind",
+        "after": "Example Institute",
         "reuse": "reused"
       },
       {
@@ -122,7 +122,7 @@
       "status": "ordered",
       "vendor": "Tarnwick",
       "orderer": "Ada Lovelace",
-      "ordering_institution": "Northwind",
+      "ordering_institution": "Example Institute",
       "currency": "USD",
       "project": "Telescope",
       "order_group": "Autumn build",

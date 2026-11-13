@@ -1,18 +1,17 @@
-//! Package-local guidance, created only where missing and never merged into user files.
+//! Agent guidance written into any directory: each guidance file this application ships is
+//! created where missing and replaced where it differs, so a requested refresh always leaves
+//! the current guidance. Nothing else is read or written, and Package metadata plays no part.
 
 use crate::{
     Answer, Failure,
-    canonical::{CurrentPackageCandidate, load_package},
     creation_batch::{
         CreationBatch, CreationPrecondition, commit_creation, create_directory, create_file,
-        planned_location, preserve_directory, preserve_file,
+        planned_location, preserve_directory, preserve_file, replace_file,
     },
     filesystem::staging_path,
-    mutation::{CommitFailure, MutationReport},
+    mutation::MutationReport,
     operations::{FailedOperation, FailedPath},
-    paths::{ManagedDirectory, resolve_managed_directory, resolved_paths_overlap},
     ports::{FileSystem, FileSystemEntryKind},
-    readme::Location,
 };
 use std::path::{Path, PathBuf};
 
@@ -41,175 +40,84 @@ const GUIDANCE: &[(&str, &[u8])] = &[
     ),
 ];
 
+const DIRECTORIES: [&str; 4] = [
+    ".agents",
+    ".agents/skills",
+    ".agents/skills/spielorders",
+    ".agents/skills/spielorders/references",
+];
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AgentSetupPlan {
     pub(crate) batch: CreationBatch,
-    inputs: Vec<(PathBuf, Vec<u8>)>,
-    managed: Vec<PathBuf>,
 }
 
-fn failed<F: FileSystem>(root: &Location, path: &Path, error: &F::Error, fs: &F) -> Failure {
-    FailedOperation::filesystem(FailedPath::of(path), error, fs)
-        .under(root)
-        .into()
-}
-
-fn inputs<F: FileSystem>(
-    package: &CurrentPackageCandidate,
-    fs: &F,
-) -> Result<Vec<(PathBuf, Vec<u8>)>, Failure> {
-    [&package.context.config, &package.context.version]
-        .into_iter()
-        .map(|location| {
-            let bytes = fs.read(&location.absolute_path).map_err(|error| {
-                failed(&package.context.root, &location.absolute_path, &error, fs)
-            })?;
-            Ok((location.absolute_path.clone(), bytes))
-        })
-        .collect()
-}
-
-fn managed(package: &CurrentPackageCandidate) -> Vec<PathBuf> {
-    [
-        &package.context.orders_directory,
-        &package.context.removed_orders_directory,
-    ]
-    .into_iter()
-    .flatten()
-    .map(|location| location.absolute_path.clone())
-    .collect()
-}
-
-/// Refuse both literal overlap and aliases the actual filesystem resolves. Missing
-/// directories are checked again immediately after creation, before publishing files.
-fn check_overlap<F: FileSystem>(
-    root: &Path,
-    path: &Path,
-    managed: &[PathBuf],
-    fs: &F,
-) -> Result<(), Failure> {
-    let root_location = planned_location(root, root.to_path_buf());
-    for directory in managed {
-        let resolved = |path| {
-            resolve_managed_directory(path, fs)
-                .map_err(|(_, error)| failed(&root_location, path, &error, fs))
-        };
-        let overlaps = resolved_paths_overlap(path, directory)
-            || matches!((resolved(path)?, resolved(directory)?),
-                (ManagedDirectory::Resolved(left), ManagedDirectory::Resolved(right))
-                    if resolved_paths_overlap(&left, &right));
-        if overlaps {
-            return Err(Failure::DestinationCollision {
-                root: root_location,
-                location: planned_location(root, path.to_path_buf()),
-                found: fs.symlink_metadata(path).map_err(|error| {
-                    failed(
-                        &planned_location(root, root.to_path_buf()),
-                        path,
-                        &error,
-                        fs,
-                    )
-                })?,
-            });
-        }
-    }
-    Ok(())
-}
-
+/// The caller has already refused a linked `selected` root.
 pub(crate) fn plan_agent_setup<F: FileSystem>(selected: &Path, fs: &F) -> Answer<AgentSetupPlan> {
     Answer::of(|| {
-        let first = load_package(selected, fs)?;
-        let before = inputs(&first, fs)?;
-        let package = load_package(selected, fs)?;
-        let after = inputs(&package, fs)?;
-        if before != after {
-            return Err(Failure::PreconditionsChanged {
-                location: package.context.config.clone(),
-            });
+        let failed = |path: &Path, error: &F::Error| -> Failure {
+            FailedOperation::filesystem(FailedPath::of(path), error, fs).into()
+        };
+        if fs
+            .symlink_metadata(selected)
+            .map_err(|error| failed(selected, &error))?
+            != Some(FileSystemEntryKind::Directory)
+        {
+            return Err(Failure::RootNotOrdinaryDirectory);
         }
-        let root = package.context.root.absolute_path.clone();
-        let managed = managed(&package);
+        let root = fs
+            .canonicalize(selected)
+            .map_err(|error| failed(selected, &error))?;
+        let observe = |path: &Path| {
+            fs.symlink_metadata(path)
+                .map_err(|error| failed(path, &error))
+        };
+        let collision = |path: PathBuf, found| Failure::DestinationCollision {
+            root: planned_location(&root, root.clone()),
+            location: planned_location(&root, path),
+            found,
+        };
         let mut operations = Vec::new();
-        for relative in [
-            ".agents",
-            ".agents/skills",
-            ".agents/skills/spielorders",
-            ".agents/skills/spielorders/references",
-        ] {
+        for relative in DIRECTORIES {
             let path = root.join(relative);
-            check_overlap(&root, &path, &managed, fs)?;
-            match fs
-                .symlink_metadata(&path)
-                .map_err(|error| failed(&package.context.root, &path, &error, fs))?
-            {
+            match observe(&path)? {
                 None => operations.push(create_directory(&root, path)),
                 Some(FileSystemEntryKind::Directory) => {
                     operations.push(preserve_directory(&root, path))
                 }
-                Some(actual) => {
-                    return Err(Failure::DestinationCollision {
-                        root: package.context.root.clone(),
-                        location: planned_location(&root, path),
-                        found: Some(actual),
-                    });
-                }
+                found => return Err(collision(path, found)),
             }
         }
         for (relative, bytes) in GUIDANCE {
             let path = root.join(".agents/skills/spielorders").join(relative);
-            match fs
-                .symlink_metadata(&path)
-                .map_err(|error| failed(&package.context.root, &path, &error, fs))?
-            {
+            match observe(&path)? {
                 None => {
                     let stage = staging_path(&path).expect("guidance files have basenames");
-                    if let Some(actual) = fs
-                        .symlink_metadata(&stage)
-                        .map_err(|error| failed(&package.context.root, &stage, &error, fs))?
-                    {
-                        return Err(Failure::DestinationCollision {
-                            root: package.context.root.clone(),
-                            location: planned_location(&root, stage),
-                            found: Some(actual),
-                        });
+                    if let Some(found) = observe(&stage)? {
+                        return Err(collision(stage, Some(found)));
                     }
                     operations.push(create_file(&root, path, bytes.to_vec()));
                 }
-                Some(FileSystemEntryKind::File) => operations.push(preserve_file(&root, path)),
-                Some(actual) => {
-                    return Err(Failure::DestinationCollision {
-                        root: package.context.root.clone(),
-                        location: planned_location(&root, path),
-                        found: Some(actual),
+                Some(FileSystemEntryKind::File) => {
+                    let current = fs.read(&path).map_err(|error| failed(&path, &error))?;
+                    operations.push(if current == *bytes {
+                        preserve_file(&root, path)
+                    } else {
+                        replace_file(&root, path, current, bytes.to_vec())
                     });
                 }
+                found => return Err(collision(path, found)),
             }
         }
         Ok(AgentSetupPlan {
             batch: CreationBatch {
-                root: root.clone(),
+                preconditions: vec![CreationPrecondition {
+                    path: root.clone(),
+                    expected: Some(FileSystemEntryKind::Directory),
+                }],
+                root,
                 operations,
-                preconditions: vec![
-                    CreationPrecondition {
-                        path: root,
-                        expected: Some(FileSystemEntryKind::Directory),
-                    },
-                    CreationPrecondition {
-                        path: package.context.metadata_directory.absolute_path,
-                        expected: Some(FileSystemEntryKind::Directory),
-                    },
-                    CreationPrecondition {
-                        path: package.context.config.absolute_path,
-                        expected: Some(FileSystemEntryKind::File),
-                    },
-                    CreationPrecondition {
-                        path: package.context.version.absolute_path,
-                        expected: Some(FileSystemEntryKind::File),
-                    },
-                ],
             },
-            inputs: after,
-            managed,
         })
     })
 }
@@ -218,22 +126,5 @@ pub(crate) fn commit_agent_setup<F: FileSystem>(
     plan: AgentSetupPlan,
     fs: &F,
 ) -> Answer<MutationReport<()>> {
-    Answer::of(|| {
-        let package = load_package(&plan.batch.root, fs)?;
-        if inputs(&package, fs)? != plan.inputs || managed(&package) != plan.managed {
-            return Err(Failure::PreconditionsChanged {
-                location: package.context.config,
-            });
-        }
-        for operation in &plan.batch.operations {
-            check_overlap(&plan.batch.root, operation.path(), &plan.managed, fs)?;
-        }
-        let root = plan.batch.root.clone();
-        commit_creation(plan.batch, fs, |directory, fs| {
-            check_overlap(&root, directory, &plan.managed, fs)
-                .err()
-                .map(|_| CommitFailure::new(planned_location(&root, directory.to_path_buf())))
-        })
-        .result
-    })
+    commit_creation(plan.batch, fs, |_, _| None)
 }

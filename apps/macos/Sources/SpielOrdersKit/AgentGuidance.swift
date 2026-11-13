@@ -1,31 +1,30 @@
 import CSpielOrders
 import Foundation
 
-public struct AgentGuidance: Sendable {
-    public let message: String
-    public let prompt: String
-}
-
-extension PackageSession {
-    public func provisionAgentGuidance(cancellation: LibraryCancellation) throws -> AgentGuidance {
-        guard let package else { throw SessionAccessError.reopenRequired }
+public enum AgentGuidance {
+    /// Provision independently of any open Package. Cancellation can stop planning,
+    /// but a commit always settles and its actual outcome is returned.
+    @concurrent public static func provision(in directory: URL, cancellation: LibraryCancellation) async throws -> [String] {
+        let path = try FileSystemPath(url: directory)
         var planned: UnsafeMutablePointer<SpielordersPlan>?
-        var outcome: UnsafeMutablePointer<SpielordersEntries>?
-        let result = spielorders_package_plan_provision_agent_setup(package.pointer, cancellation.token, &planned, &outcome)
-        var notices = try checked(result, outcome).map(\.presentation)
-        guard let planned else { throw LibraryFailure(result: SPIELORDERS_RESULT_INTERNAL, entries: []) }
-        let plan = LibraryHandle(planned, free: spielorders_plan_free)
-        try Task.checkCancellation()
         var report: UnsafeMutablePointer<SpielordersReport>?
+        var outcome: UnsafeMutablePointer<SpielordersEntries>?
+        defer { spielorders_plan_free(planned); spielorders_report_free(report) }
+        let result = path.withUnsafeFileSystemRepresentation {
+            spielorders_provision_agent($0, cancellation.token, &planned, &outcome)
+        }
+        var notices: [String]
+        do { notices = try checked(result, outcome).map(\.presentation) }
+        catch {
+            if result == SPIELORDERS_RESULT_CANCELLED { throw CancellationError() }
+            throw error
+        }
+        guard let planned else { throw LibraryFailure(result: SPIELORDERS_RESULT_INTERNAL, entries: []) }
+        try Task.checkCancellation()
         outcome = nil
-        let committed = spielorders_plan_commit(plan.pointer, &report, &outcome)
-        defer { spielorders_report_free(report) }
+        let committed = spielorders_plan_commit(planned, &report, &outcome)
         notices += try checked(committed, outcome).map(\.presentation)
-        guard let report else { throw LibraryFailure(result: SPIELORDERS_RESULT_INTERNAL, entries: []) }
-        let message = spielorders_report_kind(report) == SPIELORDERS_REPORT_UNCHANGED
-            ? "Agent guidance already exists; existing files are preserved."
-            : "Missing agent guidance created; existing files are preserved."
-        return AgentGuidance(message: ([message] + notices).joined(separator: "\n"),
-                             prompt: String(cString: spielorders_library_agent_setup_prompt()))
+        guard report != nil else { throw LibraryFailure(result: SPIELORDERS_RESULT_INTERNAL, entries: []) }
+        return notices
     }
 }

@@ -1,5 +1,5 @@
-//! Decision sources: Define the stable M2 diagnostic vocabulary and evidence
-//! contract; Define the complete M2 Package read projection and load-state
+//! Decision sources: Define the stable diagnostic vocabulary and evidence
+//! contract; Define the complete Package read projection and load-state
 //! contract; Define the SpielOrders package topology.
 
 use crate::Failure;

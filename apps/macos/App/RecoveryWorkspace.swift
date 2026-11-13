@@ -27,11 +27,18 @@ struct RecoveryWorkspace: View {
                 Button("Back to Orders", systemImage: "chevron.left") { model.leaveDiagnosis() }
                     .disabled(model.busy || !model.canBrowseRecords)
                     .accessibilityIdentifier("diagnosis.back")
-                Text(model.diagnosticDirectory?.lastPathComponent ?? "Package Diagnostics").font(.title2)
+                if let directory = model.diagnosticDirectory {
+                    Text(directory.lastPathComponent)
+                        .font(.title2)
+                }
+                if model.reloadReason != nil {
+                    ReloadBadge(model: model, explanation: "Reload the Package before continuing.",
+                                identifier: "diagnosis.reloadRequired")
+                }
                 Spacer()
                 Button("Revalidate") { model.showDiagnosis(directory: model.diagnosticDirectory) }
                     .disabled(model.busy).accessibilityIdentifier("diagnosis.refresh")
-                Button("Reveal in Finder") { model.reveal(model.diagnosticDirectory ?? model.root!) }
+                Button("Show in Finder") { model.reveal(model.diagnosticDirectory ?? model.root!) }
                     .accessibilityIdentifier("diagnosis.reveal")
             }
             Menu("Expert Raw JSON") {

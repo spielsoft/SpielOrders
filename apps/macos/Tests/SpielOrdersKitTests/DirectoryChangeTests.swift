@@ -8,7 +8,7 @@ private func listed(_ session: PackageSession) async throws -> [OrderRow] {
                              cancellation: LibraryCancellation()).rows
 }
 
-@Test func directoryChangesPreviewBeforeWritingAndKeepTheWholeOrderRecoverable() async throws {
+@Test func directoryChanges() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     let directory = try createOrder(in: root)
@@ -38,7 +38,7 @@ private func listed(_ session: PackageSession) async throws -> [OrderRow] {
     #expect(!removed.requiresReopen)
 }
 
-@Test func collisionAndChangedEvidenceRefuseWithoutMovingOrOverwriting() async throws {
+@Test func staleDirectoryPlan() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     let original = try createOrder(in: root)
@@ -62,7 +62,7 @@ private func listed(_ session: PackageSession) async throws -> [OrderRow] {
     #expect(FileManager.default.fileExists(atPath: moved.path))
 }
 
-@Test func aCancelledDirectoryPlanWritesNothing() async throws {
+@Test func cancelledDirectoryPlan() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
     let directory = try createOrder(in: root)
@@ -75,4 +75,117 @@ private func listed(_ session: PackageSession) async throws -> [OrderRow] {
         try await session.planDirectoryChange(row, action: .remove, cancellation: cancellation)
     }
     #expect(FileManager.default.fileExists(atPath: directory.path))
+}
+
+private func details(_ session: PackageSession) async throws -> OrderDetails? {
+    let row = try #require(try await listed(session).first)
+    guard case let .healthy(details) = try await session.inspectOrder(row, cancellation: LibraryCancellation()) else {
+        return nil
+    }
+    return details
+}
+
+@Test func directoryDrift() async throws {
+    let root = try initializedPackage()
+    defer { try? FileManager.default.removeItem(at: root) }
+    _ = try createOrder(in: root, title: "Mirror mounts")
+    let session = try await openedSession(root)
+    #expect(try await details(session)?.drifted == false)
+    let row = try #require(try await listed(session).first)
+    let draft = try await session.orderDraft(row, cancellation: LibraryCancellation())
+    try draft.set(SPIELORDERS_ORDER_FIELD_TITLE, to: "Kinematic mirror mounts")
+    _ = try await session.save(draft, cancellation: LibraryCancellation())
+    #expect(try await details(session)?.drifted == true)
+    let edited = try #require(try await listed(session).first)
+    let alignment = try await session.planDirectoryChange(edited, action: .align, cancellation: LibraryCancellation())
+    _ = try await session.commit(alignment)
+    #expect(try await details(session)?.drifted == false)
+}
+
+@Test func removalRestore() async throws {
+    let root = try initializedPackage()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let directory = try createOrder(in: root, title: "Beam splitter")
+    let session = try await openedSession(root)
+    let row = try #require(try await listed(session).first)
+    let removal = try await session.planDirectoryChange(row, action: .remove, cancellation: LibraryCancellation())
+    let removed = try #require(try await session.commit(removal).finalDirectory)
+    #expect(try await listed(session).isEmpty)
+
+    let restored = try await session.restoreOrder(id: row.id, from: removed, cancellation: LibraryCancellation())
+    #expect(!restored.requiresReopen)
+    #expect(restored.finalDirectory?.lastPathComponent == directory.lastPathComponent)
+    #expect(try await listed(session).map(\.id) == [row.id])
+    #expect(!FileManager.default.fileExists(atPath: removed.path))
+
+    // The same removal cannot be restored twice; the restored Order stays as it is.
+    await #expect(throws: RestoreRefusal.self) {
+        try await session.restoreOrder(id: row.id, from: removed, cancellation: LibraryCancellation())
+    }
+    #expect(try await listed(session).map(\.id) == [row.id])
+}
+
+@Test func occupiedRestore() async throws {
+    let root = try initializedPackage()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let directory = try createOrder(in: root, title: "Beam splitter")
+    let session = try await openedSession(root)
+    let row = try #require(try await listed(session).first)
+    let removal = try await session.planDirectoryChange(row, action: .remove, cancellation: LibraryCancellation())
+    let removed = try #require(try await session.commit(removal).finalDirectory)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+
+    do {
+        _ = try await session.restoreOrder(id: row.id, from: removed, cancellation: LibraryCancellation())
+        Issue.record("A restore onto an occupied name must refuse")
+    } catch let refusal as RestoreRefusal {
+        #expect(refusal.summary.contains("already holds a folder with its name"))
+    }
+    #expect(FileManager.default.fileExists(atPath: removed.path))
+}
+
+@Test func replacedRemoval() async throws {
+    let root = try initializedPackage()
+    defer { try? FileManager.default.removeItem(at: root) }
+    _ = try createOrder(in: root, title: "First optics")
+    _ = try createOrder(in: root, title: "Second optics")
+    let session = try await openedSession(root)
+    let rows = try await listed(session)
+    let first = try #require(rows.first { $0.values[SPIELORDERS_ORDER_FIELD_TITLE] == "First optics" })
+    let second = try #require(rows.first { $0.id != first.id })
+    let firstPlan = try await session.planDirectoryChange(first, action: .remove, cancellation: LibraryCancellation())
+    let firstPath = try #require(try await session.commit(firstPlan).finalDirectory)
+    let secondPlan = try await session.planDirectoryChange(second, action: .remove, cancellation: LibraryCancellation())
+    let secondPath = try #require(try await session.commit(secondPlan).finalDirectory)
+    try FileManager.default.moveItem(at: firstPath, to: root.appendingPathComponent("parked"))
+    try FileManager.default.moveItem(at: secondPath, to: firstPath)
+
+    await #expect(throws: (any Error).self) {
+        try await session.restoreOrder(id: first.id, from: firstPath, cancellation: LibraryCancellation())
+    }
+    #expect(try await listed(session).isEmpty)
+    #expect(FileManager.default.fileExists(atPath: firstPath.path))
+    _ = try await session.restoreOrder(id: second.id, from: firstPath, cancellation: LibraryCancellation())
+    #expect(try await listed(session).map(\.id) == [second.id])
+}
+
+@Test func directoryWarnings() async throws {
+    let root = try initializedPackage()
+    let metadata = root.appendingPathComponent(".spielorders")
+    defer {
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: metadata.path)
+        try? FileManager.default.removeItem(at: root)
+    }
+    _ = try createOrder(in: root, title: "Initial optics")
+    let session = try await openedSession(root)
+    let row = try #require(try await listed(session).first)
+    let draft = try await session.orderDraft(row, cancellation: LibraryCancellation())
+    try draft.set(SPIELORDERS_ORDER_FIELD_TITLE, to: "Projected optics")
+    _ = try await session.save(draft, cancellation: LibraryCancellation())
+    let plan = try await session.planDirectoryChange(row, action: .align, cancellation: LibraryCancellation())
+    try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: metadata.path)
+    let changed = try await session.commit(plan)
+    #expect(!changed.requiresReopen)
+    #expect(changed.notices.contains { $0.contains("index_refresh_failed") })
+    #expect(changed.finalDirectory?.lastPathComponent.contains("Projected_optics") == true)
 }

@@ -27,6 +27,9 @@
         },
         "catalog_number": {
           "type": "string"
+        },
+        "notes": {
+          "type": "string"
         }
       }
     },

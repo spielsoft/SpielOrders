@@ -3,94 +3,130 @@ import XCTest
 
 @MainActor final class AgentReadyTests: XCTestCase {
     override func tearDown() async throws {
-        for app in [XCUIApplication(bundleIdentifier: "com.spielsoft.SpielOrders.Development.CLI"), XCUIApplication()] {
-            if app.state != .notRunning { app.terminate() }
-        }
+        let app = XCUIApplication()
+        if app.state != .notRunning { app.terminate() }
         try await super.tearDown()
     }
 
-    func testCancellingAuthorizationLeavesThePackageUnchanged() throws {
-        let root = try makeNativeTestPackage()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let instructions = root.appendingPathComponent("AGENTS.md")
-        try "Keep the owner's instructions.\n".write(to: instructions, atomically: true, encoding: .utf8)
-        let app = XCUIApplication()
-        app.launchArguments = ["-packageBookmark", ""]
-        app.launch()
-        openNativeTestPackage(root, in: app)
-        packageMenu(in: app).click()
-        app.menuItems["Agent Ready…"].click()
-        let authorization = XCUIApplication(bundleIdentifier: "com.spielsoft.SpielOrders.Development.CLI")
-        XCTAssertTrue(authorization.buttons["Authorize CLI"].waitForExistence(timeout: 10))
-        authorization.buttons["Cancel"].click()
-        XCTAssertTrue(authorization.wait(for: .notRunning, timeout: 10))
-        XCTAssertTrue(app.staticTexts["Agent Ready cancelled. No guidance was written."].waitForExistence(timeout: 10))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".agents").path))
-        XCTAssertEqual(try String(contentsOf: instructions, encoding: .utf8), "Keep the owner's instructions.\n")
-        app.typeKey("q", modifierFlags: .command)
-        XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
+    private func directory() throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("splord")
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
+        return url
     }
 
-    func testAuthorizationProvisionsGuidanceAndPreservesInstructions() throws {
-        let root = try makeNativeTestPackage()
+    private func launch() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = ["-packageBookmark", "", "-sidebarVisible", "YES"]
+        app.launch()
+        return app
+    }
+
+    private func choose(_ root: URL, in app: XCUIApplication, prompt: String) {
+        XCTAssertTrue(app.buttons[prompt].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10), "A requested permission panel must receive focus before entering its folder.")
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        app.typeText(root.path)
+        app.typeKey(.return, modifierFlags: [])
+        app.buttons[prompt].click()
+    }
+
+    private func begin(in app: XCUIApplication) {
+        fileMenu(in: app).click()
+        let action = app.menuItems["file.agentReady"]
+        XCTAssertTrue(action.isEnabled)
+        action.click()
+    }
+
+    private func notice(_ title: String, in app: XCUIApplication) {
+        XCTAssertTrue(app.staticTexts[title].waitForExistence(timeout: 10))
+        app.buttons["agentReady.dismiss"].click()
+    }
+
+    func testCancelledFolderChoice() throws {
+        let app = launch()
+        begin(in: app)
+        XCTAssertTrue(app.buttons["Choose Folder"].waitForExistence(timeout: 10))
+        app.sheets.buttons["Cancel"].click()
+        XCTAssertTrue(app.menuBars.menuBarItems["File"].isEnabled)
+        XCTAssertFalse(app.buttons["agentReady.dismiss"].exists)
+    }
+
+    func testGuidanceWithoutPackage() throws {
+        let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
         let instructions = root.appendingPathComponent("AGENTS.md")
         try "Keep the owner's instructions.\n".write(to: instructions, atomically: true, encoding: .utf8)
-        let app = XCUIApplication()
-        app.launchArguments = ["-packageBookmark", ""]
-        app.launch()
-        openNativeTestPackage(root, in: app)
-        packageMenu(in: app).click()
-        app.menuItems["Agent Ready…"].click()
-        let authorization = XCUIApplication(bundleIdentifier: "com.spielsoft.SpielOrders.Development.CLI")
-        XCTAssertTrue(authorization.buttons["Authorize CLI"].waitForExistence(timeout: 10))
-        authorization.typeKey("g", modifierFlags: [.command, .shift])
-        authorization.typeText(root.path)
-        authorization.typeKey(.return, modifierFlags: [])
-        authorization.buttons["Authorize CLI"].click()
-        XCTAssertTrue(authorization.wait(for: .notRunning, timeout: 10))
-        let completed = app.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "CLI folder access authorized.")).firstMatch
-        XCTAssertTrue(completed.waitForExistence(timeout: 10))
+        let app = launch()
+        let ready = app.buttons["welcome.agentReady"]
+        XCTAssertTrue(ready.waitForExistence(timeout: 10))
+        XCTAssertTrue(ready.isEnabled)
+        ready.click()
+        choose(root, in: app, prompt: "Choose Folder")
+        notice("“\(root.lastPathComponent)” is ready for agents.", in: app)
+        XCTAssertTrue(app.buttons["welcome.open"].exists)
+        XCTAssertEqual(app.windows["package.window"].label, "SpielOrders")
         let skill = root.appendingPathComponent(".agents/skills/spielorders/SKILL.md")
         XCTAssertFalse(try Data(contentsOf: skill).isEmpty)
         XCTAssertEqual(try String(contentsOf: instructions, encoding: .utf8), "Keep the owner's instructions.\n")
-        app.typeKey("q", modifierFlags: .command)
-        XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".spielorders").path))
+        try "Custom guidance\n".write(to: skill, atomically: true, encoding: .utf8)
+        begin(in: app)
+        choose(root, in: app, prompt: "Choose Folder")
+        notice("“\(root.lastPathComponent)” is ready for agents.", in: app)
+        XCTAssertEqual(try String(contentsOf: skill, encoding: .utf8), "Custom guidance\n")
     }
 
-    func testQuitCancelsAuthorizationBeforeAskingAboutTheDraft() throws {
-        let root = try makeNativeTestPackage()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let app = XCUIApplication()
-        app.launchArguments = ["-packageBookmark", ""]
-        app.launch()
-        openNativeTestPackage(root, in: app)
-        app.toolbars.buttons["New Order"].click()
+    func testProvisioningElsewhereKeepsDraftAndPackage() throws {
+        let package = try makePackage()
+        let target = try directory()
+        defer {
+            try? FileManager.default.removeItem(at: package)
+            try? FileManager.default.removeItem(at: target)
+        }
+        let app = launch()
+        openPackage(package, in: app)
+        newOrder(in: app)
         let title = app.textFields["order.editor.title"]
         title.click()
         app.typeKey("a", modifierFlags: .command)
-        app.typeText("Authorization quit draft")
+        app.typeText("Keep this draft")
         app.typeKey(.tab, modifierFlags: [])
-        XCTAssertEqual(title.value as? String, "Authorization quit draft")
-        packageMenu(in: app).click()
-        app.menuItems["Agent Ready…"].click()
-        let authorization = XCUIApplication(bundleIdentifier: "com.spielsoft.SpielOrders.Development.CLI")
-        XCTAssertTrue(authorization.buttons["Authorize CLI"].waitForExistence(timeout: 10))
-        app.activate()
-        app.typeKey("q", modifierFlags: .command)
-        XCTAssertTrue(authorization.wait(for: .notRunning, timeout: 10))
-        XCTAssertTrue(app.sheets.buttons["Cancel"].waitForExistence(timeout: 10))
+        begin(in: app)
+        XCTAssertTrue(app.buttons["Choose Folder"].waitForExistence(timeout: 10))
         app.sheets.buttons["Cancel"].click()
-        XCTAssertTrue(app.staticTexts["Agent Ready cancelled. No guidance was written."].waitForExistence(timeout: 5))
-        XCTAssertEqual(title.value as? String, "Authorization quit draft")
+        XCTAssertEqual(title.value as? String, "Keep this draft")
         XCTAssertTrue(title.isEnabled)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".agents").path))
-        app.typeKey("q", modifierFlags: .command)
-        let discard = app.sheets.buttons["draft.unsaved.discard"]
-        XCTAssertTrue(discard.waitForExistence(timeout: 5))
-        discard.click()
-        XCTAssertTrue(app.wait(for: .notRunning, timeout: 10))
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("Orders").path), [])
+        XCTAssertEqual(app.windows["package.window"].label, package.lastPathComponent)
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: package.appendingPathComponent("Orders").path).isEmpty)
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: target.path).isEmpty)
+        begin(in: app)
+        choose(target, in: app, prompt: "Choose Folder")
+        notice("“\(target.lastPathComponent)” is ready for agents.", in: app)
+        XCTAssertEqual(title.value as? String, "Keep this draft")
+        XCTAssertTrue(title.isEnabled)
+        XCTAssertEqual(app.windows["package.window"].label, package.lastPathComponent)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: package.appendingPathComponent(".agents").path))
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: package.appendingPathComponent("Orders").path).isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: target.appendingPathComponent(".agents/skills/spielorders/SKILL.md").path))
+    }
+
+    func testGuidanceConflict() throws {
+        let target = try directory()
+        defer { try? FileManager.default.removeItem(at: target) }
+        let conflict = target.appendingPathComponent(".agents")
+        let original = Data("Owner file".utf8)
+        try original.write(to: conflict)
+        let app = launch()
+        begin(in: app)
+        choose(target, in: app, prompt: "Choose Folder")
+        XCTAssertTrue(app.staticTexts["Agent guidance incomplete"].waitForExistence(timeout: 10))
+        app.buttons["agentReady.details"].click()
+        let diagnostic = app.staticTexts["feedback.detail.0"]
+        XCTAssertTrue(diagnostic.waitForExistence(timeout: 10))
+        XCTAssertTrue((diagnostic.value as? String)?.contains("destination_collision") == true)
+        app.buttons["feedback.done"].click()
+        XCTAssertEqual(try Data(contentsOf: conflict), original)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: target.appendingPathComponent(".spielorders").path))
     }
 
 }

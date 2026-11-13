@@ -18,4 +18,7 @@ spielorders vendor contact move "Optics Supplier" 1 position=2 --root "$package"
 one-based. Select an Order's Vendor by existing Name, not a fabricated placeholder.
 There is no Vendor Merge. `vendor hide` and `vendor unhide` are reversible, including
 when Orders reference the Vendor. Hiding affects selection for new use, never how an
-existing Order resolves its live Vendor facts. Vendors are never deleted.
+existing Order resolves its live Vendor facts. `vendor delete` removes a Vendor and its
+Contacts only when no Order references it; otherwise it refuses and lists those Orders.
+Re-point them with `order edit vendor=...` first, or hide a Vendor that stays in use.
+Deletion cannot be undone.

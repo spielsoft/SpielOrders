@@ -40,11 +40,13 @@ duplicate an existing Vendor, the user must select the existing Vendor, create a
 deliberately distinct Vendor, or leave the Order without a Vendor. SpielOrders never
 combines Vendor facts or redirects managed Order references as a merge.
 
-A Vendor is never deleted. A Vendor the user no longer wants offered for new use is
-**hidden** instead, which is permitted whether or not Orders reference it and is
-reversible at any time. Its record and Vendor ID stay in `vendors.json` permanently, so
-every Vendor Reference keeps resolving the Vendor's current shared facts and SpielOrders
-itself can never orphan one. Hiding governs what is offered, never what is resolved.
+A Vendor that no Order references may be **deleted**, removing its record and Contacts
+from `vendors.json`; deletion is refused while any healthy Order references it, naming
+each such Order, and cannot be undone. A Vendor still in use that the user no longer
+wants offered for new use is **hidden** instead, which is permitted whether or not Orders
+reference it and is reversible at any time. Either way every Vendor Reference keeps
+resolving the Vendor's current shared facts, and SpielOrders itself never orphans one.
+Hiding governs what is offered, never what is resolved.
 
 Vendor ID and Vendor Name are the only required Vendor facts. An Order whose Vendor is
 not known has no Vendor Reference; placeholder Vendors such as `Unknown` or `Vendor Not

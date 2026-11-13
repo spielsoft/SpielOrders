@@ -169,17 +169,17 @@ typedef struct SpielordersList {
   struct SpielordersListData *_Nonnull data;
 } SpielordersList;
 
+// The eligible files a Supporting Material search found, in the order they are shown.
+typedef struct SpielordersSearch {
+  struct SpielordersSearchData *_Nonnull data;
+} SpielordersSearch;
+
 // What a front end's Supporting Material provider found, gathered one hit at a time
 // for spielorders_package_search_material. Like a Draft, it changes in place and must
 // not be used from two threads at once.
 typedef struct SpielordersHits {
   struct SpielordersHitsData *_Nonnull data;
 } SpielordersHits;
-
-// The eligible files a Supporting Material search found, in the order they are shown.
-typedef struct SpielordersSearch {
-  struct SpielordersSearchData *_Nonnull data;
-} SpielordersSearch;
 
 // One conventional README: the Package's or one Order's. An unreadable README leaves
 // its Order readable and refuses only a plan to write it.
@@ -521,6 +521,12 @@ typedef struct SpielordersReport {
 // `panicked`. A commit stopped on an internal failure; `after` is "replaced" when it had already replaced a managed file, and "unchanged" otherwise.
 #define SPIELORDERS_FAILURE_PANICKED 1078
 
+// `vendor_referenced`. Orders still reference the Vendor a deletion names; one entry per Order, located at its directory.
+#define SPIELORDERS_FAILURE_VENDOR_REFERENCED 1079
+
+// `order_identity_in_use`. An Order of the Package already carries the Order ID of the Order being restored; located at that Order.
+#define SPIELORDERS_FAILURE_ORDER_IDENTITY_IN_USE 1080
+
 // What a committed change warns of beside its result: an entry code.
 // `index_refresh_failed`. The derived Package Index could not be refreshed after the commit.
 #define SPIELORDERS_WARNING_INDEX_REFRESH_FAILED 2000
@@ -755,6 +761,9 @@ typedef struct SpielordersReport {
 // `total`. Read-only: the row total, unrounded.
 #define SPIELORDERS_ITEM_FIELD_TOTAL 10004
 
+// `notes`. Multiline remarks tied to this Item alone.
+#define SPIELORDERS_ITEM_FIELD_NOTES 10005
+
 // A fact of a Vendor.
 // `name`.
 #define SPIELORDERS_VENDOR_FIELD_NAME 11000
@@ -901,6 +910,9 @@ typedef struct SpielordersReport {
 // `preserve_file`. Initialization keeps an existing file.
 #define SPIELORDERS_OPERATION_PRESERVE_FILE 19022
 
+// `replace_file`. Agent provisioning replaces a guidance file that differs from the current one.
+#define SPIELORDERS_OPERATION_REPLACE_FILE 19023
+
 // One change a plan makes to a record.
 // `fact`. A fact changes from `before` to `after`; a row of -1 is the record's own fact.
 #define SPIELORDERS_CHANGE_FACT 20000
@@ -916,6 +928,9 @@ typedef struct SpielordersReport {
 
 // `new_identity`. The commit mints a new identity for the record.
 #define SPIELORDERS_CHANGE_NEW_IDENTITY 20004
+
+// `record_removed`. The commit removes the whole record; `before` is its Name.
+#define SPIELORDERS_CHANGE_RECORD_REMOVED 20005
 
 // Whether a reusable value already exists.
 // `reused`. The Package already uses this value.
@@ -1287,6 +1302,44 @@ SpielordersResult spielorders_package_orders(const struct SpielordersPackage *_N
                                              struct SpielordersList *_Nullable *_Nonnull list,
                                              struct SpielordersEntries *_Nullable *_Nullable outcome);
 
+// How many facts an Order search can be confined to.
+int64_t spielorders_order_search_field_count(void);
+
+// Fact `index` an Order search can be confined to, in the order a menu offers them: a
+// `SPIELORDERS_ORDER_FIELD_*` or `SPIELORDERS_ITEM_FIELD_*` constant, or -1 out of range.
+// SPIELORDERS_ORDER_FIELD_VENDOR matches the referenced Vendor's Name; an Item fact
+// matches any of the Order's Items.
+SpielordersConstant spielorders_order_search_field(int64_t index);
+
+// The Orders matching `query` (or NULL) in one searchable fact, `field`, from
+// spielorders_order_search_field, or in every searchable fact for -1. Otherwise as
+// spielorders_package_orders; SPIELORDERS_RESULT_BAD_ARGUMENT for any other `field`.
+SpielordersResult spielorders_package_search_orders(const struct SpielordersPackage *_Nonnull package,
+                                                    SpielordersOptionalText query_text,
+                                                    SpielordersConstant field,
+                                                    uint32_t flags,
+                                                    SpielordersConstant sort,
+                                                    int32_t descending,
+                                                    uint64_t token,
+                                                    struct SpielordersList *_Nullable *_Nonnull list,
+                                                    struct SpielordersEntries *_Nullable *_Nullable outcome);
+
+// Folder Contents: the Orders whose facts match `query` (or NULL) in every searchable
+// fact, under `flags` as for spielorders_package_orders, together with every Order holding
+// a file of `material`, a Supporting Material search of this Package (or NULL). Each
+// appears once, sorted as spielorders_package_orders sorts; case applies only to facts.
+// Read an Order's matched files from `material` by spielorders_search_order_directory,
+// which spells the Order Directory as spielorders_list_path does.
+SpielordersResult spielorders_package_search_contents(const struct SpielordersPackage *_Nonnull package,
+                                                      SpielordersOptionalText query_text,
+                                                      uint32_t flags,
+                                                      const struct SpielordersSearch *_Nullable material,
+                                                      SpielordersConstant sort,
+                                                      int32_t descending,
+                                                      uint64_t token,
+                                                      struct SpielordersList *_Nullable *_Nonnull list,
+                                                      struct SpielordersEntries *_Nullable *_Nullable outcome);
+
 // The Vendors matching `query` (or NULL), in the Package's own order or sorted by
 // `sort_field` (a `SPIELORDERS_VENDOR_FIELD_*`, or -1). `flags`:
 // SPIELORDERS_LIST_CASE_SENSITIVE, SPIELORDERS_LIST_INCLUDE_HIDDEN.
@@ -1299,6 +1352,27 @@ SpielordersResult spielorders_package_vendors(const struct SpielordersPackage *_
                                               struct SpielordersList *_Nullable *_Nonnull list,
                                               struct SpielordersEntries *_Nullable *_Nullable outcome);
 
+// How many facts a Vendor search can be confined to.
+int64_t spielorders_vendor_search_field_count(void);
+
+// Fact `index` a Vendor search can be confined to, in the order a menu offers them: a
+// `SPIELORDERS_VENDOR_FIELD_*` or `SPIELORDERS_CONTACT_FIELD_*` constant, or -1 out of
+// range. A Contact fact matches any of the Vendor's Contacts.
+SpielordersConstant spielorders_vendor_search_field(int64_t index);
+
+// The Vendors matching `query` (or NULL) in one searchable fact, `field`, from
+// spielorders_vendor_search_field, or in every searchable fact for -1. Otherwise as
+// spielorders_package_vendors; SPIELORDERS_RESULT_BAD_ARGUMENT for any other `field`.
+SpielordersResult spielorders_package_search_vendors(const struct SpielordersPackage *_Nonnull package,
+                                                     SpielordersOptionalText query_text,
+                                                     SpielordersConstant field,
+                                                     uint32_t flags,
+                                                     SpielordersConstant sort,
+                                                     int32_t descending,
+                                                     uint64_t token,
+                                                     struct SpielordersList *_Nullable *_Nonnull list,
+                                                     struct SpielordersEntries *_Nullable *_Nullable outcome);
+
 // The healthy Orders whose Vendor is `vendor_id`, in the Package's own order.
 SpielordersResult spielorders_package_orders_of_vendor(const struct SpielordersPackage *_Nonnull package,
                                                        SpielordersText vendor_id,
@@ -1306,9 +1380,21 @@ SpielordersResult spielorders_package_orders_of_vendor(const struct SpielordersP
                                                        struct SpielordersList *_Nullable *_Nonnull list,
                                                        struct SpielordersEntries *_Nullable *_Nullable outcome);
 
+// The Order Groups of `project`, or of the Orders with no Project for NULL or "", each
+// row read with `SPIELORDERS_VALUE_FIELD_*`. A group belongs to the Project of the Orders
+// that use it, so these are the suggestions for an Order in that Project, and the same
+// name under two Projects is two groups. `project` matches as reuse does: trimmed and
+// case-insensitively.
+SpielordersResult spielorders_package_project_groups(const struct SpielordersPackage *_Nonnull package,
+                                                     SpielordersOptionalText project,
+                                                     struct SpielordersList *_Nullable *_Nonnull list,
+                                                     struct SpielordersEntries *_Nullable *_Nullable outcome);
+
 // The current values of one reusable-value field (SPIELORDERS_ORDER_FIELD_ORDERER,
 // _ORDERING_INSTITUTION, _PROJECT, or _ORDER_GROUP), each row read with
-// `SPIELORDERS_VALUE_FIELD_*`.
+// `SPIELORDERS_VALUE_FIELD_*`. Order Groups are every group name across Projects, a
+// name used under several counted once; spielorders_package_project_groups gives one
+// Project's groups.
 SpielordersResult spielorders_package_values(const struct SpielordersPackage *_Nonnull package,
                                              SpielordersConstant field,
                                              struct SpielordersList *_Nullable *_Nonnull list,
@@ -1494,12 +1580,20 @@ SpielordersResult spielorders_package_read_readme(const struct SpielordersPackag
 // Frees `package`. Freeing NULL does nothing; handles read from it stay valid.
 void spielorders_package_free(struct SpielordersPackage *_Nullable package);
 
-// Plans missing Package-local agent guidance without reading or changing root AGENTS.md.
-// Existing regular guidance is preserved. Commit rechecks configuration and destinations.
-SpielordersResult spielorders_package_plan_provision_agent_setup(const struct SpielordersPackage *_Nonnull package,
-                                                                 uint64_t token,
-                                                                 struct SpielordersPlan *_Nullable *_Nonnull plan,
-                                                                 struct SpielordersEntries *_Nullable *_Nullable outcome);
+// Plans writing the bundled agent guidance into `.agents/skills/spielorders` under the
+// existing `directory`: each guidance file is created where missing and replaced
+// (SPIELORDERS_OPERATION_REPLACE_FILE) where it differs, and one already current is kept.
+// Reads no Package metadata, so any directory, a Package, or a Damaged Package plans
+// alike. Never reads or changes AGENTS.md or any other file. Refuses a `directory` that is
+// a link or not a directory; a guidance destination that exists as the wrong kind of
+// entry, such as a link, a file where a directory belongs, or a directory where a file
+// belongs; and a leftover staging entry beside a missing guidance file. Commit rechecks
+// every destination, replaces a file only while it holds the bytes planned against, and
+// never overwrites an entry created after planning.
+SpielordersResult spielorders_provision_agent(SpielordersPathBytes directory,
+                                              uint64_t token,
+                                              struct SpielordersPlan *_Nullable *_Nonnull plan,
+                                              struct SpielordersEntries *_Nullable *_Nullable outcome);
 
 // Plans saving `draft`: every rule it breaks refuses together, each entry located by
 // field and row. The plan of an edit is guarded by the read the draft was made from.
@@ -1529,6 +1623,14 @@ SpielordersResult spielorders_vendor_plan_hidden(const struct SpielordersVendor 
                                                  struct SpielordersPlan *_Nullable *_Nonnull plan,
                                                  struct SpielordersEntries *_Nullable *_Nullable outcome);
 
+// Plans deleting `vendor` and its Contacts. Refuses with
+// SPIELORDERS_FAILURE_VENDOR_REFERENCED, one entry per referencing Order, while any
+// healthy Order references it; hiding is how a Vendor in use stops being offered.
+SpielordersResult spielorders_vendor_plan_delete(const struct SpielordersVendor *_Nonnull vendor,
+                                                 uint64_t token,
+                                                 struct SpielordersPlan *_Nullable *_Nonnull plan,
+                                                 struct SpielordersEntries *_Nullable *_Nullable outcome);
+
 // Plans replacing the text of `readme` with `text`, guarded by the bytes `readme` read.
 // Refuses for a README that could not be read.
 SpielordersResult spielorders_readme_plan_write(const struct SpielordersReadme *_Nonnull readme,
@@ -1536,6 +1638,22 @@ SpielordersResult spielorders_readme_plan_write(const struct SpielordersReadme *
                                                 uint64_t token,
                                                 struct SpielordersPlan *_Nullable *_Nonnull plan,
                                                 struct SpielordersEntries *_Nullable *_Nullable outcome);
+
+// Plans restoring the removed Order at `removed`, a directory in the Removed Orders
+// Directory of `package` such as a removal's final path, to its Orders Directory under the
+// same name. Refuses SPIELORDERS_FAILURE_NOT_DIRECT_CHILD for a path outside the Removed
+// Orders Directory, _NOT_AN_ORDER_DIRECTORY or _DAMAGED_RECORD for one that is not a
+// readable Order with ordinary managed metadata, _UNRESOLVED_VENDOR when its Vendor
+// reference no longer resolves, _DESTINATION_COLLISION when the Orders Directory already
+// holds that name, and _ORDER_IDENTITY_IN_USE when another Order, including a damaged one
+// with a readable identity, carries its Order ID. Commit refuses when any of that or the
+// configured destination changed after planning. The report's final path is the restored
+// Order.
+SpielordersResult spielorders_package_plan_restore_order(const struct SpielordersPackage *_Nonnull package,
+                                                         SpielordersPathBytes removed,
+                                                         uint64_t token,
+                                                         struct SpielordersPlan *_Nullable *_Nonnull plan,
+                                                         struct SpielordersEntries *_Nullable *_Nullable outcome);
 
 // Plans rebuilding the derived Package Index of `package`.
 SpielordersResult spielorders_package_plan_rebuild_index(const struct SpielordersPackage *_Nonnull package,
@@ -1551,6 +1669,12 @@ SpielordersResult spielorders_plan_initialize(SpielordersPathBytes root,
                                               uint64_t token,
                                               struct SpielordersPlan *_Nullable *_Nonnull plan,
                                               struct SpielordersEntries *_Nullable *_Nullable outcome);
+
+// The immutable Order ID of the removed Order a restore `plan` will restore; "" for
+// another kind of plan. A caller undoing a specific removal compares this with that
+// Order's ID before committing, because the removed path may now hold another Order.
+// The plan owns the borrowed text, and commit rechecks its subject's identity.
+SpielordersText spielorders_plan_restored_order_id(const struct SpielordersPlan *_Nonnull plan);
 
 // How many filesystem operations committing `plan` performs.
 int64_t spielorders_plan_operation_count(const struct SpielordersPlan *_Nonnull plan);

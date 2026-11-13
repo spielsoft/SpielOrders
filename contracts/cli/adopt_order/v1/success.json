@@ -11,19 +11,19 @@
     "operations": [
       {
         "kind": "create_metadata_directory",
-        "path": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber/.spielorders"
+        "path": "<PACKAGE_ROOT>/Orders/2030_02_30_Example_Cable/.spielorders"
       },
       {
         "kind": "stage_order_record",
-        "path": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber/.spielorders/.order.json.spielorders-stage"
+        "path": "<PACKAGE_ROOT>/Orders/2030_02_30_Example_Cable/.spielorders/.order.json.spielorders-stage"
       },
       {
         "kind": "commit_order_record",
-        "path": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber/.spielorders/order.json"
+        "path": "<PACKAGE_ROOT>/Orders/2030_02_30_Example_Cable/.spielorders/order.json"
       },
       {
         "kind": "remove_staging",
-        "path": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber/.spielorders/.order.json.spielorders-stage"
+        "path": "<PACKAGE_ROOT>/Orders/2030_02_30_Example_Cable/.spielorders/.order.json.spielorders-stage"
       },
       {
         "kind": "refresh_package_index",
@@ -84,7 +84,7 @@
         "field": "ordering_institution",
         "position": null,
         "before": null,
-        "after": "Northwind",
+        "after": "Example Institute",
         "reuse": "reused"
       },
       {
@@ -102,23 +102,23 @@
       "status": "complete",
       "vendor": "Tarnwick",
       "orderer": "Ada Lovelace",
-      "ordering_institution": "Northwind",
+      "ordering_institution": "Example Institute",
       "currency": null,
       "project": "Telescope",
       "order_group": null,
       "order_id": "<ID-1>",
-      "directory_name": "2009_04_31_Lcom_Fiber",
+      "directory_name": "2030_02_30_Example_Cable",
       "total": "0",
       "damage": null,
       "vendor_id": "<ID-2>",
-      "directory": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber",
+      "directory": "<PACKAGE_ROOT>/Orders/2030_02_30_Example_Cable",
       "items": [],
       "readme": {
         "state": "present",
-        "path": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber/README.md"
+        "path": "<PACKAGE_ROOT>/Orders/2030_02_30_Example_Cable/README.md"
       }
     },
-    "final_path": "<PACKAGE_ROOT>/Orders/2009_04_31_Lcom_Fiber"
+    "final_path": "<PACKAGE_ROOT>/Orders/2030_02_30_Example_Cable"
   },
   "diagnostics": [],
   "error": null

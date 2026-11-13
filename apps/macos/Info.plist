@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>SpielOrders Package</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>$(SPIELORDERS_DOCUMENT_RANK)</string>
+            <key>LSItemContentTypes</key>
+            <array><string>com.spielsoft.spielorders.package</string></array>
+            <key>LSTypeIsPackage</key>
+            <true/>
+        </dict>
+    </array>
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.spielsoft.spielorders.package</string>
+            <key>UTTypeDescription</key>
+            <string>SpielOrders Package</string>
+            <key>UTTypeConformsTo</key>
+            <array><string>com.apple.package</string></array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array><string>splord</string></array>
+            </dict>
+            <key>UTTypeIcons</key>
+            <dict>
+                <key>UTTypeIconBadgeName</key>
+                <string>AppIcon</string>
+                <key>UTTypeIconText</key>
+                <string>SPLORD</string>
+            </dict>
+        </dict>
+    </array>
+</dict>
+</plist>

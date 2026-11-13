@@ -12,7 +12,7 @@
         "status": "ordered",
         "vendor_id": "e0990d31-06aa-42e9-97c8-088e3e894822",
         "orderer": "Ada Lovelace",
-        "ordering_institution": "Northwind",
+        "ordering_institution": "Example Institute",
         "currency": "USD",
         "project": "Telescope",
         "order_group": "Summer build",
@@ -21,7 +21,8 @@
             "description": "Mirror mount",
             "quantity": 2.0,
             "unit_price": 84.5,
-            "catalog_number": "TM-100"
+            "catalog_number": "TM-100",
+            "notes": "Kinematic, for 1 in. optics\nSubstitution acceptable"
           }
         ]
       },

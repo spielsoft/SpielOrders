@@ -1,6 +1,18 @@
 import CSpielOrders
 import Foundation
 
+/// A README as the library read it for editing.
+public struct ReadmeText: Sendable {
+    public let text: String
+    /// Whether the library could read it; an unreadable README cannot be written.
+    public let readable: Bool
+
+    init(_ readme: UnsafePointer<SpielordersReadme>) {
+        readable = spielorders_readme_state(readme) != SPIELORDERS_README_STATE_UNREADABLE
+        text = String(cString: spielorders_readme_text(readme))
+    }
+}
+
 public struct ReadmeSaveResult: Sendable {
     public let refreshedText: String?
     private let warnings: [String]
@@ -19,7 +31,7 @@ public struct ReadmeSaveResult: Sendable {
     }
 
     public var message: String {
-        let status = !canEdit ? "Saved. Reopen the Package before editing again."
+        let status = !canEdit ? "Saved. Reload the Package before editing again."
             : warnings.isEmpty ? "Saved." : "Saved with warnings."
         return ([status] + warnings).joined(separator: "\n")
     }
@@ -30,8 +42,8 @@ enum SessionAccessError: Error, LocalizedError {
     case selectionChanged
     var errorDescription: String? {
         switch self {
-        case .reopenRequired: "Open or reopen the Package before continuing."
-        case .selectionChanged: "The selected Order changed. Reopen the Package before selecting it again."
+        case .reopenRequired: "Open or reload the Package before continuing."
+        case .selectionChanged: "The selected Order changed. Reload the Package before selecting it again."
         }
     }
 }

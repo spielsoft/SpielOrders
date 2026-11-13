@@ -3,10 +3,11 @@ import SpielOrdersKit
 
 extension DesktopModel {
     func showDiagnosis(directory: URL?) {
+        if deferNavigation({ [self] in showDiagnosis(directory: directory) }) { return }
         guard !busy, let retainedFolder = folder,
               confirmDiscard(retry: { [self] in showDiagnosis(directory: directory) }) else { return }
         busy = true
-        message = ""
+        diagnosis = nil
         let cancellation = LibraryCancellation()
         work = OwnedOperation(kind: .read) { [self] in
             defer { busy = false; withExtendedLifetime(retainedFolder) {} }
@@ -16,12 +17,15 @@ extension DesktopModel {
                 } onCancel: { cancellation.request() }
                 try Task.checkCancellation()
                 discardEditors()
-                editingOrder = nil
-                text = original
                 diagnosticDirectory = directory
                 diagnosis = found
                 diagnosticWorkspace = true
-            } catch { if !Task.isCancelled { message = "Couldn’t diagnose this scope.\n" + error.localizedDescription } }
+            } catch {
+                if !Task.isCancelled {
+                    alert("Couldn’t diagnose", "Reload the Package, then try again.",
+                          details: error.localizedDescription, identifier: "diagnosis.read")
+                }
+            }
         }
     }
 
@@ -43,14 +47,15 @@ extension DesktopModel {
                 try Task.checkCancellation()
                 expertDocument = nil
                 recoveryEditor = RecoveryEditor(repair: repair, action: action, values: values)
-            } catch { message = "Couldn’t open this repair.\n" + error.localizedDescription }
+            } catch {
+                alert("Couldn’t open this repair", details: error.localizedDescription, identifier: "repair.open")
+            }
         }
     }
 
     func applyRepair() {
         guard !busy, let diagnosis, let editor = recoveryEditor, let retainedFolder = folder else { return }
         busy = true
-        message = ""
         let cancellation = LibraryCancellation()
         work = OwnedOperation(kind: .mutation) { [self] in
             defer { busy = false; withExtendedLifetime(retainedFolder) {} }
@@ -61,21 +66,24 @@ extension DesktopModel {
                 } onCancel: { cancellation.request() }
                 try Task.checkCancellation()
                 let supplied = editor.action.fields.map { editor.values[$0] ?? "" }.joined(separator: "\n")
-                guard await confirm("Apply \(editor.action.title)?", editor.repair.path + "\n\n" + supplied
-                              + "\n\n" + plan.operations.joined(separator: "\n"), identifier: "repair.confirmation",
-                              approve: "Apply Repair") else { return }
+                guard await dialogs.review("Apply \(editor.action.title)?", explanation: "Review the supplied values and planned filesystem changes before committing.",
+                    details: editor.repair.path + "\n\n" + supplied + "\n\n" + plan.operations.joined(separator: "\n"),
+                    identifier: "repair.confirmation", approve: "Apply Repair", destructive: false) else { return }
                 let result = try await library.commit(plan)
                 recoveryEditor = nil
-                await refreshRecovery(after: result.message, requiresReopen: result.requiresReopen)
-            } catch { message = "Repair not completed. Your input is retained.\n" + error.localizedDescription }
+                await refreshRecovery(after: Notice(result.summary, details: result.message),
+                                      notices: result.notices, requiresReopen: result.requiresReopen)
+            } catch {
+                alert("The repair wasn’t applied", "Your input is kept.",
+                      details: error.localizedDescription, identifier: "repair.apply")
+            }
         }
     }
 
-    func refreshRecovery(after notice: String, requiresReopen: Bool) async {
-        message = notice
+    /// Diagnoses the scope again after `change` was written, unless it requires Reload.
+    func refreshRecovery(after change: Notice, notices: [String], requiresReopen: Bool) async {
         if requiresReopen {
-            canBrowseRecords = false
-            writable = false
+            requireReload(change)
             orders = []
             vendors = []
             diagnosis = nil
@@ -86,9 +94,11 @@ extension DesktopModel {
             canBrowseRecords = !(await library.diagnosticOnly)
             if canBrowseRecords { await refreshRecords(selectingOrder: selectedOrderID, vendor: selectedVendorID) }
             else { orders = []; vendors = [] }
+            addWarnings(notices, to: .orders)
         } catch {
             diagnosis = nil
-            message = notice + "\nRevalidation is unavailable; reopen the Package.\n" + error.localizedDescription
+            requireReload(Notice(change.summary + " It couldn’t be diagnosed again.",
+                                 details: [change.details, error.localizedDescription].joined(separator: "\n\n")))
         }
     }
 
@@ -105,8 +115,9 @@ extension DesktopModel {
                 expertDocument = document
                 rawText = document.text
                 rawOriginal = document.text
-                message = ""
-            } catch { message = "Couldn’t open this managed JSON document.\n" + error.localizedDescription }
+            } catch {
+                alert("Couldn’t open the JSON document", details: error.localizedDescription, identifier: "expert.open")
+            }
         }
     }
 
@@ -123,19 +134,21 @@ extension DesktopModel {
                 let warnings = try await document.write(draft)
                 rawOriginal = draft
                 expertDocument = nil
-                let notice = (["Raw JSON written."] + warnings).joined(separator: "\n")
+                let written = Notice("Raw JSON written.", details: (["Raw JSON written."] + warnings).joined(separator: "\n"))
                 do {
-                    diagnosis = try await library.revalidateAfterExpertWrite(directory: diagnosticDirectory)
-                    await refreshRecovery(after: notice, requiresReopen: false)
+                    diagnosis = try await library.revalidate(directory: diagnosticDirectory)
+                    await refreshRecovery(after: written, notices: warnings, requiresReopen: false)
                 } catch {
                     diagnosis = nil
-                    canBrowseRecords = false
-                    writable = false
+                    requireReload(Notice(written.summary + " It couldn’t be diagnosed again.",
+                                         details: written.details + "\n\n" + error.localizedDescription))
                     orders = []
                     vendors = []
-                    message = notice + "\nRevalidation is unavailable; reopen the Package.\n" + error.localizedDescription
                 }
-            } catch { message = "Raw JSON was not written. Your draft is retained.\n" + error.localizedDescription }
+            } catch {
+                alert("The raw JSON wasn’t written", "Your text is kept.",
+                      details: error.localizedDescription, identifier: "expert.write")
+            }
         }
     }
 }

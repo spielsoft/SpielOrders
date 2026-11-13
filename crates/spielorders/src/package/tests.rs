@@ -196,7 +196,7 @@ fn validation_normalizes_vendor_and_contact_facts() {
 
 #[test]
 fn reusable_values_are_absent_reused_with_canonical_spelling_or_new() {
-    let existing = ["Northwind", "Straße Team"];
+    let existing = ["Example Institute", "Straße Team"];
 
     assert_eq!(
         canonicalize_reusable_value(Some("  \t "), &existing),
@@ -207,8 +207,8 @@ fn reusable_values_are_absent_reused_with_canonical_spelling_or_new() {
         ReusableValue::Reused("Straße Team".into())
     );
     assert_eq!(
-        canonicalize_reusable_value(Some("  Cedarbrook  "), &existing),
-        ReusableValue::New("Cedarbrook".into())
+        canonicalize_reusable_value(Some("  Sample Academy  "), &existing),
+        ReusableValue::New("Sample Academy".into())
     );
 }
 

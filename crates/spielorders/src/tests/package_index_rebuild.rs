@@ -1,5 +1,5 @@
 //! Decision sources: Decide how Package Index freshness is proven without canonical rereads;
-//! Define the stable M2 diagnostic vocabulary and evidence contract; Define the complete M2
+//! Define the stable diagnostic vocabulary and evidence contract; Define the complete
 //! Package read projection and load-state contract.
 
 use crate::Coded;
