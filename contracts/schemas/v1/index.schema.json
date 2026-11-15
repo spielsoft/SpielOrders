@@ -165,6 +165,53 @@
           "type": "string"
         }
       }
+    },
+    "stored_values": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ordering_institutions", "orderers", "projects", "order_groups"],
+      "properties": {
+        "ordering_institutions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nonblank"
+          }
+        },
+        "orderers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nonblank"
+          }
+        },
+        "projects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/stored_project"
+          }
+        },
+        "order_groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nonblank"
+          }
+        }
+      }
+    },
+    "stored_project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "order_groups"],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "order_groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nonblank"
+          }
+        }
+      }
     }
   },
   "type": "object",
@@ -185,6 +232,9 @@
       "items": {
         "$ref": "#/$defs/vendor"
       }
+    },
+    "values": {
+      "$ref": "#/$defs/stored_values"
     }
   }
 }

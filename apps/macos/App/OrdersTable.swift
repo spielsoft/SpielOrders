@@ -45,7 +45,6 @@ struct OrdersTable: NSViewRepresentable {
         table.doubleAction = #selector(Coordinator.openClicked(_:))
         table.open = { [weak coordinator = context.coordinator] in coordinator?.openSelected() }
         table.remove = { [weak model] in model?.changeOrderDirectory(.remove) }
-        table.removals = model.removals
         table.headerView?.menu = context.coordinator.columnsMenu
         table.menu = context.coordinator.rowMenu
         context.coordinator.table = table
@@ -301,25 +300,10 @@ struct OrdersTable: NSViewRepresentable {
     }
 }
 
-/// Return focuses the selected Order's detail; Delete removes the Order, and Undo and Redo
-/// follow Remove Order's history while it has any.
+/// Return focuses the selected Order's detail; Delete removes the Order.
 final class OrdersTableView: NSTableView {
     var open: () -> Void = {}
     var remove: () -> Void = {}
-    var removals: UndoManager?
-
-    override var undoManager: UndoManager? {
-        guard let removals, removals.canUndo || removals.canRedo else { return super.undoManager }
-        return removals
-    }
-
-    @objc func undo(_ sender: Any?) {
-        undoManager?.undo()
-    }
-
-    @objc func redo(_ sender: Any?) {
-        undoManager?.redo()
-    }
 
     override func keyDown(with event: NSEvent) {
         guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else {

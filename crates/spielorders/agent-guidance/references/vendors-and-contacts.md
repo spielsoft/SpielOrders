@@ -16,9 +16,17 @@ spielorders vendor contact move "Optics Supplier" 1 position=2 --root "$package"
 
 `vendor contact list`, `edit`, and `remove` inspect and change Contacts; positions are
 one-based. Select an Order's Vendor by existing Name, not a fabricated placeholder.
-There is no Vendor Merge. `vendor hide` and `vendor unhide` are reversible, including
-when Orders reference the Vendor. Hiding affects selection for new use, never how an
-existing Order resolves its live Vendor facts. `vendor delete` removes a Vendor and its
-Contacts only when no Order references it; otherwise it refuses and lists those Orders.
-Re-point them with `order edit vendor=...` first, or hide a Vendor that stays in use.
-Deletion cannot be undone.
+`vendor hide` and `vendor unhide` are reversible, including when Orders reference the
+Vendor. Hiding affects selection for new use, never how an existing Order resolves its
+live Vendor facts. `vendor delete` removes a Vendor and its Contacts; while Orders
+reference it, it refuses and lists them unless `--replacement NAME` re-points them to
+another Vendor or `--clear` leaves them with none. `vendor merge` makes duplicates one
+Vendor: the `--keep` Vendor keeps its facts and gains the others' Contacts, their Orders
+reference it, and the others are deleted. Deletion and merging cannot be undone; the
+response's `orders` is how many Orders changed.
+
+```sh
+spielorders add-vendor --root "$package" name="Optics Supplier Inc"
+spielorders vendor merge "Optics Supplier" "Optics Supplier Inc" --keep "Optics Supplier" --root "$package" --dry-run
+spielorders vendor delete "Optics Supplier Inc" --replacement "Optics Supplier" --root "$package"
+```

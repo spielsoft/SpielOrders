@@ -114,3 +114,45 @@ fn every_usage_error_these_commands_reach_carries_the_shared_identity() {
         );
     }
 }
+
+/// A value the Package lacks is refused by name and writes nothing; `--add-values` adds it
+/// in the same change, after which an ordinary command reuses it.
+#[test]
+fn a_value_the_package_lacks_is_refused_unless_the_command_adds_it() {
+    let (_tree, root) = initialized_package("add-order-new-values");
+    let before = managed_snapshot(&root);
+    let refused = Invocation::new(&["add-order", "title=Ruby cell", "orderer=Emmy Noether"])
+        .argument("--json")
+        .rooted_at(&root)
+        .run();
+    assert_ne!(refused.status, Some(0));
+    let document = response(&refused);
+    assert_eq!(document["error"]["code"], "unconfirmed_reusable_value");
+    assert_eq!(document["error"]["detail"]["field"], "orderer");
+    assert_eq!(document["error"]["detail"]["after"], "Emmy Noether");
+    assert_eq!(managed_snapshot(&root), before);
+
+    let added = Invocation::new(&["add-order", "title=Ruby cell", "orderer=Emmy Noether"])
+        .argument("--add-values")
+        .argument("--json")
+        .rooted_at(&root)
+        .run();
+    assert_eq!(added.status, Some(0), "{}", added.stdout_text());
+    let kept: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join(".spielorders/vendors.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        kept["values"]["orderers"],
+        serde_json::json!(["Emmy Noether"])
+    );
+
+    let reused = Invocation::new(&["add-order", "title=Cesium cell", "orderer=emmy noether"])
+        .argument("--json")
+        .rooted_at(&root)
+        .run();
+    assert_eq!(reused.status, Some(0), "{}", reused.stdout_text());
+    assert_eq!(
+        response(&reused)["data"]["order"]["orderer"],
+        "Emmy Noether"
+    );
+}

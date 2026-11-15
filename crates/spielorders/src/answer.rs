@@ -155,6 +155,21 @@ pub enum Failure {
         vendor_id: String,
         orders: Vec<crate::readme::Location>,
     },
+    /// The Package has no value of this field spelled so.
+    UnknownValue {
+        field: String,
+        value: String,
+    },
+    /// Orders still use the value a deletion names; each is listed.
+    ValueInUse {
+        field: String,
+        value: String,
+        orders: Vec<crate::readme::Location>,
+    },
+    /// A value is required and blank.
+    BlankValue {
+        field: String,
+    },
     /// An Order of the Package already carries the Order ID of the Order being restored.
     OrderIdentityInUse {
         order_id: String,
@@ -185,7 +200,7 @@ pub enum Failure {
     },
     /// The record these facts would write does not validate.
     InvalidFacts,
-    /// A new Reusable Free-Entry Value was proposed without confirmation.
+    /// A value the Package does not have was named without asking that it be added.
     UnconfirmedReusableValue {
         field: String,
         proposed: String,
@@ -387,6 +402,9 @@ impl Failure {
             Self::UnresolvedVendor { .. } => "unresolved_vendor",
             Self::VendorNameInUse { .. } => "vendor_name_in_use",
             Self::VendorReferenced { .. } => "vendor_referenced",
+            Self::UnknownValue { .. } => "unknown_value",
+            Self::ValueInUse { .. } => "value_in_use",
+            Self::BlankValue { .. } => "blank_value",
             Self::OrderIdentityInUse { .. } => "order_identity_in_use",
             Self::MissingRequiredName { .. } => "missing_required_name",
             Self::InvalidAggregate => "invalid_aggregate",

@@ -14,11 +14,26 @@ extension DesktopModel {
     /// Shows `text` as the README of `order`, or of the Package when `order` is nil.
     func showReadme(_ text: ReadmeText, of order: OrderRow?) {
         let session = ReadmeSession(order: order, readme: text)
+        session.onChange = { [weak self] change in self?.register(change) }
         session.onPause = { [weak self, weak session] in
             guard let self, let session, readme === session else { return }
             saveReadme()
         }
         readme = session
+    }
+
+    /// Shows the document a history action belongs to before reversing it.
+    func showReadme(_ change: ReadmeChange, then shown: @escaping @MainActor () -> Void) {
+        if let id = change.orderID {
+            showRecord(.order, id: id, then: shown)
+        } else {
+            readReadme(of: nil) { [self] text in
+                discardEditors()
+                destination = .packageReadme
+                showReadme(text, of: nil)
+                shown()
+            }
+        }
     }
 
     /// Reads the Package README and shows it in the content area.

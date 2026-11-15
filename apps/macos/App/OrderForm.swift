@@ -6,7 +6,7 @@ import SwiftUI
 
 /// The kind of control an Order fact is entered with.
 enum OrderFieldControl {
-    case text, date, status, vendor, suggesting
+    case text, date, status, chooser
 
     init(_ field: Int32) {
         switch field {
@@ -14,11 +14,10 @@ enum OrderFieldControl {
             self = .date
         case SPIELORDERS_ORDER_FIELD_STATUS:
             self = .status
-        case SPIELORDERS_ORDER_FIELD_VENDOR:
-            self = .vendor
-        case SPIELORDERS_ORDER_FIELD_ORDERER, SPIELORDERS_ORDER_FIELD_ORDERING_INSTITUTION,
-             SPIELORDERS_ORDER_FIELD_PROJECT, SPIELORDERS_ORDER_FIELD_ORDER_GROUP:
-            self = .suggesting
+        case SPIELORDERS_ORDER_FIELD_VENDOR, SPIELORDERS_ORDER_FIELD_ORDERER,
+             SPIELORDERS_ORDER_FIELD_ORDERING_INSTITUTION, SPIELORDERS_ORDER_FIELD_PROJECT,
+             SPIELORDERS_ORDER_FIELD_ORDER_GROUP:
+            self = .chooser
         default:
             self = .text
         }

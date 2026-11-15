@@ -1,0 +1,35 @@
+{
+  "contract": "spielorders.value.delete",
+  "contract_version": 1,
+  "ok": false,
+  "context": {
+    "root": "<PACKAGE_ROOT>"
+  },
+  "data": null,
+  "diagnostics": [
+    {
+      "code": "value_in_use",
+      "severity": "error",
+      "message": "Value in use",
+      "field": "project",
+      "reason": null,
+      "position": null,
+      "path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace",
+      "before": null,
+      "after": null
+    }
+  ],
+  "error": {
+    "code": "value_in_use",
+    "detail": {
+      "severity": "error",
+      "message": "Value in use",
+      "field": "project",
+      "reason": null,
+      "position": null,
+      "path": "Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace",
+      "before": null,
+      "after": null
+    }
+  }
+}

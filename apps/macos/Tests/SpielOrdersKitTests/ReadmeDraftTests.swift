@@ -57,3 +57,27 @@ import Testing
     draft.text = "Saved"
     #expect(!draft.unsaved)
 }
+
+@Test func readmeSpellingIsInput() {
+    let composed = "Caf\u{e9}"
+    let decomposed = "Cafe\u{301}"
+    var draft = ReadmeDraft(composed)
+    draft.text = decomposed
+    #expect(draft.unsaved)
+    #expect(draft.submit()?.utf8.elementsEqual(decomposed.utf8) == true)
+    draft.save(decomposed)
+    #expect(!draft.unsaved)
+    #expect(draft.text.utf8.elementsEqual(decomposed.utf8))
+}
+
+@Test func laterSpellingSurvivesSave() {
+    let composed = "Caf\u{e9}"
+    let decomposed = "Cafe\u{301}"
+    var draft = ReadmeDraft("")
+    draft.text = composed
+    _ = draft.submit()
+    draft.text = decomposed
+    draft.save(composed)
+    #expect(draft.text.utf8.elementsEqual(decomposed.utf8))
+    #expect(draft.unsaved)
+}

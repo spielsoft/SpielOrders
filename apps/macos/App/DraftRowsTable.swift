@@ -195,7 +195,7 @@ struct DraftRowsTable: NSViewRepresentable {
 
         private func configure(_ cell: RowCell, row: Int, column index: Int, updateText: Bool = true) {
             guard let text = cell.textField, let column = definition(index) else { return }
-            let problems = editor.problems(at: column.field, row: row).map(\.message)
+            let problems = editor.statements(at: column.field, row: row)
             let value = editor.rowField(row, column.field)
             if updateText { text.stringValue = column.display(value, currency: parent.currency) }
             text.isEditable = column.editable && isEnabled && text.currentEditor() != nil
@@ -221,7 +221,7 @@ struct DraftRowsTable: NSViewRepresentable {
             guard let table else { return }
             let row = table.row(for: sender)
             guard row >= 0, let column = definition(table.column(for: sender)) else { return }
-            let problems = editor.problems(at: column.field, row: row).map(\.message)
+            let problems = editor.statements(at: column.field, row: row)
             guard !problems.isEmpty else { return }
             problem?.close()
             problem = sender.showNotice(level: .problem, title: RecordFieldLabel.of(column.field), lines: problems,

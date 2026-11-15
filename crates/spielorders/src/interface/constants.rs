@@ -134,7 +134,7 @@ pub const SPIELORDERS_FAILURE_MISSING_REQUIRED_ITEM_FACTS: SpielordersConstant =
 pub const SPIELORDERS_FAILURE_INVALID_FACT_VALUE: SpielordersConstant = SpielordersConstant(1026);
 /// `invalid_facts`. The record these facts would write does not validate.
 pub const SPIELORDERS_FAILURE_INVALID_FACTS: SpielordersConstant = SpielordersConstant(1027);
-/// `unconfirmed_reusable_value`. A new Reusable Free-Entry Value was proposed without confirmation.
+/// `unconfirmed_reusable_value`. A value the Package does not have was named without asking that it be added.
 pub const SPIELORDERS_FAILURE_UNCONFIRMED_REUSABLE_VALUE: SpielordersConstant =
     SpielordersConstant(1028);
 /// `invalid_draft`. A whole draft broke these rules, each at the fact or the row it names, the record's own facts first.
@@ -268,6 +268,12 @@ pub const SPIELORDERS_FAILURE_VENDOR_REFERENCED: SpielordersConstant = Spielorde
 /// `order_identity_in_use`. An Order of the Package already carries the Order ID of the Order being restored; located at that Order.
 pub const SPIELORDERS_FAILURE_ORDER_IDENTITY_IN_USE: SpielordersConstant =
     SpielordersConstant(1080);
+/// `unknown_value`. The Package has no value of this field spelled so; the entry's field names the field and `after` the value.
+pub const SPIELORDERS_FAILURE_UNKNOWN_VALUE: SpielordersConstant = SpielordersConstant(1081);
+/// `value_in_use`. Orders still use the value a deletion names; one entry per Order, located at its directory.
+pub const SPIELORDERS_FAILURE_VALUE_IN_USE: SpielordersConstant = SpielordersConstant(1082);
+/// `blank_value`. A value is required and blank.
+pub const SPIELORDERS_FAILURE_BLANK_VALUE: SpielordersConstant = SpielordersConstant(1083);
 
 /// What a committed change warns of beside its result: an entry code.
 /// `index_refresh_failed`. The derived Package Index could not be refreshed after the commit.
@@ -956,6 +962,9 @@ pub(crate) const NAMES: &[(SpielordersConstant, &CStr)] = &[
         SPIELORDERS_FAILURE_ORDER_IDENTITY_IN_USE,
         c"order_identity_in_use",
     ),
+    (SPIELORDERS_FAILURE_UNKNOWN_VALUE, c"unknown_value"),
+    (SPIELORDERS_FAILURE_VALUE_IN_USE, c"value_in_use"),
+    (SPIELORDERS_FAILURE_BLANK_VALUE, c"blank_value"),
     (
         SPIELORDERS_WARNING_INDEX_REFRESH_FAILED,
         c"index_refresh_failed",

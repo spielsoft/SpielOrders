@@ -10,7 +10,7 @@ use crate::{
     cli::{
         self, AgentCommand, ContactCommand, Execution, Family, FieldAssignment, IndexCommand,
         ItemCommand, ListCommand, OrderCommand, OrderTarget, PackageCommand, RepairRequest,
-        SearchCommand, ValueKind, VendorCommand,
+        SearchCommand, ValueCommand, ValueKind, VendorCommand,
     },
     contract::ResponseContract as Contract,
     library::{self, Calls, c_path, c_text, constant, resolution_name},
@@ -118,6 +118,7 @@ pub(crate) fn run(family: &Family) -> Shown<'_> {
             subject,
             target,
             execution,
+            values,
             ..
         } => {
             let assignments = cli::subject_assignments(subject, cli::ORDER_TITLE_FIELD);
@@ -127,12 +128,13 @@ pub(crate) fn run(family: &Family) -> Shown<'_> {
                     spielorders_package_new_order_draft(&package, draft, outcome)
                 })?;
                 without_default(&mut draft, SPIELORDERS_ORDER_FIELD_TITLE);
-                save(
+                save_adding(
                     calls,
                     draft,
                     SPIELORDERS_FAMILY_ORDER_FIELD,
                     &assignments,
                     execution,
+                    values.add_values,
                 )
             });
             (Contract::AddOrder, &target.root, answer, Human::Whole)
@@ -142,6 +144,7 @@ pub(crate) fn run(family: &Family) -> Shown<'_> {
             assignments,
             target,
             execution,
+            values,
             ..
         } => {
             let (facts, items) = cli::adoption_assignments(assignments);
@@ -168,12 +171,13 @@ pub(crate) fn run(family: &Family) -> Shown<'_> {
                         item,
                     )?;
                 }
-                save(
+                save_adding(
                     calls,
                     draft,
                     SPIELORDERS_FAMILY_ORDER_FIELD,
                     &facts,
                     execution,
+                    values.add_values,
                 )
             });
             (Contract::AdoptOrder, &target.root, answer, Human::Whole)
@@ -253,6 +257,7 @@ pub(crate) fn run(family: &Family) -> Shown<'_> {
             ),
         },
         Family::Order { command } => order(command),
+        Family::Value { command } => value(command),
         Family::Vendor { command } => vendor(command),
         Family::Search { command } => search(command),
     };
@@ -403,18 +408,20 @@ fn order(command: &OrderCommand) -> Command<'_> {
             assignments,
             target,
             execution,
+            values,
             ..
         } => (
             Contract::OrderEdit,
             &target.root,
             answered(|calls| {
                 let draft = order_draft(calls, target)?;
-                save(
+                save_adding(
                     calls,
                     draft,
                     SPIELORDERS_FAMILY_ORDER_FIELD,
                     assignments,
                     execution,
+                    values.add_values,
                 )
             }),
             Human::Whole,
@@ -623,6 +630,7 @@ fn vendor(command: &VendorCommand) -> Command<'_> {
         ),
         VendorCommand::Delete {
             name,
+            in_use,
             target,
             execution,
             ..
@@ -631,15 +639,217 @@ fn vendor(command: &VendorCommand) -> Command<'_> {
             &target.root,
             answered(|calls| {
                 let vendor = read_vendor(calls, &target.root, name)?;
+                let plan = match (&in_use.replacement, in_use.clear) {
+                    (None, false) => calls.get(|plan, outcome| {
+                        spielorders_vendor_plan_delete(&vendor, 0, plan, outcome)
+                    })?,
+                    (replacement, _) => {
+                        let replacement = match replacement {
+                            Some(name) => vendor_id(calls, &target.root, name)?,
+                            None => String::new(),
+                        };
+                        let replacement = c_text(replacement.as_str());
+                        calls.get(|plan, outcome| {
+                            spielorders_vendor_plan_delete_replacing(
+                                &vendor,
+                                OptionalText::new(&replacement),
+                                0,
+                                plan,
+                                outcome,
+                            )
+                        })?
+                    }
+                };
+                counted(calls, &plan, execution)
+            }),
+            Human::Whole,
+        ),
+        VendorCommand::Merge {
+            names,
+            keep,
+            target,
+            execution,
+            ..
+        } => (
+            Contract::VendorMerge,
+            &target.root,
+            answered(|calls| {
+                let ids = names
+                    .iter()
+                    .map(|name| vendor_id(calls, &target.root, name).map(|id| c_text(id.as_str())))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let keep = c_text(vendor_id(calls, &target.root, keep)?.as_str());
+                let package = open(calls, &target.root)?;
+                let texts: Vec<Text<'_>> = ids.iter().map(|id| Text::new(id)).collect();
                 let plan = calls.get(|plan, outcome| {
-                    spielorders_vendor_plan_delete(&vendor, 0, plan, outcome)
+                    spielorders_package_plan_merge_vendors(
+                        &package,
+                        std::ptr::NonNull::new(texts.as_ptr().cast_mut()),
+                        i64::try_from(texts.len()).unwrap_or(i64::MAX),
+                        Text::new(&keep),
+                        0,
+                        plan,
+                        outcome,
+                    )
                 })?;
-                mutate(calls, &plan, execution)
+                counted(calls, &plan, execution)
             }),
             Human::Whole,
         ),
         VendorCommand::Contact { command } => contact(command),
     }
+}
+
+/// The Vendor ID of the Vendor a Name selects.
+fn vendor_id(calls: &mut Calls, root: &Path, name: &str) -> Result<String, Answer> {
+    let vendor = read_vendor(calls, root, name)?;
+    Ok(
+        spielorders_vendor_field(&vendor, SPIELORDERS_VENDOR_FIELD_VENDOR_ID)
+            .to_str()
+            .unwrap_or_default()
+            .to_owned(),
+    )
+}
+
+/// The Order field constant a value kind names.
+fn value_field(kind: ValueKind) -> SpielordersConstant {
+    match kind {
+        ValueKind::OrderingInstitution => SPIELORDERS_ORDER_FIELD_ORDERING_INSTITUTION,
+        ValueKind::Orderer => SPIELORDERS_ORDER_FIELD_ORDERER,
+        ValueKind::Project => SPIELORDERS_ORDER_FIELD_PROJECT,
+        ValueKind::OrderGroup => SPIELORDERS_ORDER_FIELD_ORDER_GROUP,
+    }
+}
+
+fn value(command: &ValueCommand) -> Command<'_> {
+    let (contract, target) = match command {
+        ValueCommand::Add { target, .. } => (Contract::ValueAdd, target),
+        ValueCommand::Rename { target, .. } => (Contract::ValueRename, target),
+        ValueCommand::Merge { target, .. } => (Contract::ValueMerge, target),
+        ValueCommand::Delete { target, .. } => (Contract::ValueDelete, target),
+    };
+    let answer = answered(|calls| {
+        let package = open(calls, &target.root)?;
+        let (plan, execution) = match command {
+            ValueCommand::Add {
+                kind,
+                value,
+                scope,
+                execution,
+                ..
+            } => {
+                let (project, value) =
+                    (scope.project.as_deref().map(c_text), c_text(value.as_str()));
+                let plan = calls.get(|plan, outcome| {
+                    spielorders_package_plan_add_value(
+                        &package,
+                        value_field(*kind),
+                        optional(project.as_deref()),
+                        Text::new(&value),
+                        0,
+                        plan,
+                        outcome,
+                    )
+                })?;
+                (plan, execution)
+            }
+            ValueCommand::Rename {
+                kind,
+                value,
+                to,
+                scope,
+                execution,
+                ..
+            } => {
+                let project = scope.project.as_deref().map(c_text);
+                let (value, to) = (c_text(value.as_str()), c_text(to.as_str()));
+                let plan = calls.get(|plan, outcome| {
+                    spielorders_package_plan_rename_value(
+                        &package,
+                        value_field(*kind),
+                        optional(project.as_deref()),
+                        Text::new(&value),
+                        Text::new(&to),
+                        0,
+                        plan,
+                        outcome,
+                    )
+                })?;
+                (plan, execution)
+            }
+            ValueCommand::Merge {
+                kind,
+                values,
+                keep,
+                scope,
+                execution,
+                ..
+            } => {
+                let project = scope.project.as_deref().map(c_text);
+                let values: Vec<_> = values.iter().map(|value| c_text(value.as_str())).collect();
+                let texts: Vec<Text<'_>> = values.iter().map(|value| Text::new(value)).collect();
+                let keep = c_text(keep.as_str());
+                let plan = calls.get(|plan, outcome| {
+                    spielorders_package_plan_merge_values(
+                        &package,
+                        value_field(*kind),
+                        optional(project.as_deref()),
+                        std::ptr::NonNull::new(texts.as_ptr().cast_mut()),
+                        i64::try_from(texts.len()).unwrap_or(i64::MAX),
+                        Text::new(&keep),
+                        0,
+                        plan,
+                        outcome,
+                    )
+                })?;
+                (plan, execution)
+            }
+            ValueCommand::Delete {
+                kind,
+                value,
+                in_use,
+                scope,
+                execution,
+                ..
+            } => {
+                let project = scope.project.as_deref().map(c_text);
+                let value = c_text(value.as_str());
+                let replacement = match (&in_use.replacement, in_use.clear) {
+                    (Some(replacement), _) => Some(c_text(replacement.as_str())),
+                    (None, true) => Some(c_text("")),
+                    (None, false) => None,
+                };
+                let plan = calls.get(|plan, outcome| {
+                    spielorders_package_plan_delete_value(
+                        &package,
+                        value_field(*kind),
+                        optional(project.as_deref()),
+                        Text::new(&value),
+                        optional(replacement.as_deref()),
+                        0,
+                        plan,
+                        outcome,
+                    )
+                })?;
+                (plan, execution)
+            }
+        };
+        counted(calls, &plan, execution)
+    });
+    (contract, &target.root, answer, Human::Whole)
+}
+
+/// `text` as an optional C text: NULL for none.
+fn optional(text: Option<&std::ffi::CStr>) -> OptionalText<'_> {
+    text.map_or(OptionalText::null(), OptionalText::new)
+}
+
+/// [`mutate`], reporting how many Orders the change rewrites beside what it did.
+fn counted(calls: &mut Calls, plan: &SpielordersPlan, execution: &Execution) -> Read {
+    let orders = spielorders_plan_order_count(plan);
+    let mut data = mutate(calls, plan, execution)?;
+    data["orders"] = Value::from(orders);
+    Ok(data)
 }
 
 fn hide(calls: &mut Calls, root: &Path, name: &str, hidden: bool, execution: &Execution) -> Read {
@@ -938,13 +1148,25 @@ fn vendor_draft(
 
 /// Sets each assignment on `draft` at `row`, or on the record's own facts where it is
 /// `None`, as a field of the family `family`. Status goes first, so a Date Ordered on the same command line is the
-/// one kept; an assignment is the confirmation of any new reusable value it names.
+/// one kept.
 fn assign(
     calls: &mut Calls,
     draft: &mut SpielordersDraft,
     family: SpielordersConstant,
     row: Option<i64>,
     assignments: &[FieldAssignment],
+) -> Result<(), Answer> {
+    assign_adding(calls, draft, family, row, assignments, false)
+}
+
+/// As [`assign`], where `add_values` asks that each value the Package lacks be added.
+fn assign_adding(
+    calls: &mut Calls,
+    draft: &mut SpielordersDraft,
+    family: SpielordersConstant,
+    row: Option<i64>,
+    assignments: &[FieldAssignment],
+    add_values: bool,
 ) -> Result<(), Answer> {
     let mut rejected = Vec::new();
     let mut fields = Vec::new();
@@ -973,7 +1195,7 @@ fn assign(
             // A row the draft does not have.
             Err((_, refused)) => return Err(refused),
             // Only the four reusable fields take a confirmation; the others refuse it.
-            Ok(()) if row.is_none() => {
+            Ok(()) if row.is_none() && add_values => {
                 let _ = spielorders_draft_confirm(draft, field, -1, None);
             }
             Ok(()) => {}
@@ -1063,12 +1285,24 @@ fn without_default(draft: &mut SpielordersDraft, field: SpielordersConstant) {
 
 fn save(
     calls: &mut Calls,
-    mut draft: Box<SpielordersDraft>,
+    draft: Box<SpielordersDraft>,
     family: SpielordersConstant,
     assignments: &[FieldAssignment],
     execution: &Execution,
 ) -> Read {
-    assign(calls, &mut draft, family, None, assignments)?;
+    save_adding(calls, draft, family, assignments, execution, false)
+}
+
+/// As [`save`], where `add_values` asks that each value the Package lacks be added.
+fn save_adding(
+    calls: &mut Calls,
+    mut draft: Box<SpielordersDraft>,
+    family: SpielordersConstant,
+    assignments: &[FieldAssignment],
+    execution: &Execution,
+    add_values: bool,
+) -> Read {
+    assign_adding(calls, &mut draft, family, None, assignments, add_values)?;
     let plan = calls.get(|plan, outcome| spielorders_draft_plan(&draft, 0, plan, outcome))?;
     mutate(calls, &plan, execution)
 }
@@ -1437,6 +1671,7 @@ mod tests {
                 "date_ordered=2026-08-21",
                 "vendor=Nethermoor",
                 "orderer=Ada Lovelace",
+                "--add-values",
             ],
         );
         std::fs::write(

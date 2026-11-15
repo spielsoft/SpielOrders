@@ -47,5 +47,22 @@
       ],
       "purchasing_notes": "Use institutional account."
     }
-  ]
+  ],
+  "values": {
+    "ordering_institutions": [
+      "Example Institute"
+    ],
+    "orderers": [
+      "Ada Lovelace"
+    ],
+    "projects": [
+      {
+        "name": "Telescope",
+        "order_groups": [
+          "Summer build"
+        ]
+      }
+    ],
+    "order_groups": []
+  }
 }

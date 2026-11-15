@@ -1,0 +1,23 @@
+{
+  "contract": "spielorders.vendor.merge",
+  "contract_version": 1,
+  "ok": false,
+  "context": {
+    "root": "<PACKAGE_ROOT>"
+  },
+  "data": null,
+  "diagnostics": [],
+  "error": {
+    "code": "unknown_vendor",
+    "detail": {
+      "severity": "error",
+      "message": "Unknown vendor",
+      "field": null,
+      "reason": null,
+      "position": null,
+      "path": ".spielorders/vendors.json",
+      "before": null,
+      "after": null
+    }
+  }
+}

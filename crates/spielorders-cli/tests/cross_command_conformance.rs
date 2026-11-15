@@ -170,6 +170,26 @@ const DECIDED_COMMANDS: &[(&[&str], Disposition)] = &[
         Disposition::Own(ResponseContract::VendorDelete),
     ),
     (
+        &["vendor", "merge"],
+        Disposition::Own(ResponseContract::VendorMerge),
+    ),
+    (
+        &["value", "add"],
+        Disposition::Own(ResponseContract::ValueAdd),
+    ),
+    (
+        &["value", "rename"],
+        Disposition::Own(ResponseContract::ValueRename),
+    ),
+    (
+        &["value", "merge"],
+        Disposition::Own(ResponseContract::ValueMerge),
+    ),
+    (
+        &["value", "delete"],
+        Disposition::Own(ResponseContract::ValueDelete),
+    ),
+    (
         &["vendor", "contact", "list"],
         Disposition::Shared(ResponseContract::VendorShow),
     ),
@@ -407,6 +427,11 @@ fn matrix(contract: ResponseContract) -> [(&'static str, Supply); 5] {
         | ResponseContract::VendorHide
         | ResponseContract::VendorUnhide
         | ResponseContract::VendorDelete
+        | ResponseContract::VendorMerge
+        | ResponseContract::ValueAdd
+        | ResponseContract::ValueRename
+        | ResponseContract::ValueMerge
+        | ResponseContract::ValueDelete
         | ResponseContract::VendorContactAdd
         | ResponseContract::VendorContactEdit
         | ResponseContract::VendorContactMove
@@ -914,6 +939,36 @@ fn shape(contract: ResponseContract) -> Shape {
             line: &["vendor", "delete"],
             subject: Subject::PackageRootWithAnUnusedVendor,
             arguments: &["Elderglass Optics"],
+            mutating: true,
+        },
+        ResponseContract::VendorMerge => Shape {
+            line: &["vendor", "merge"],
+            subject: Subject::PackageRootWithAnUnusedVendor,
+            arguments: &["Tarnwick", "Elderglass Optics", "--keep", "Tarnwick"],
+            mutating: true,
+        },
+        ResponseContract::ValueAdd => Shape {
+            line: &["value", "add"],
+            subject: Subject::PackageRoot,
+            arguments: &["orderer", "Emmy Noether"],
+            mutating: true,
+        },
+        ResponseContract::ValueRename => Shape {
+            line: &["value", "rename"],
+            subject: Subject::PackageRoot,
+            arguments: &["project", "Telescope", "Telescope array"],
+            mutating: true,
+        },
+        ResponseContract::ValueMerge => Shape {
+            line: &["value", "merge"],
+            subject: Subject::PackageRoot,
+            arguments: &["project", "Telescope", "--keep", "TeleScope"],
+            mutating: true,
+        },
+        ResponseContract::ValueDelete => Shape {
+            line: &["value", "delete"],
+            subject: Subject::PackageRoot,
+            arguments: &["project", "Telescope", "--clear"],
             mutating: true,
         },
         ResponseContract::VendorContactAdd => Shape {
@@ -1555,13 +1610,18 @@ enum Interrupted {
 /// this way.
 fn interrupted(contract: ResponseContract) -> Interrupted {
     match contract {
-        // One Vendor aggregate is the whole Package's, and all eight mutations of a Vendor
-        // or one of its Contacts replace it.
+        // One Vendor aggregate is the whole Package's, holding its kept values too, and
+        // every mutation of a Vendor, one of its Contacts, or a kept value replaces it.
         ResponseContract::AddVendor
         | ResponseContract::VendorEdit
         | ResponseContract::VendorHide
         | ResponseContract::VendorUnhide
         | ResponseContract::VendorDelete
+        | ResponseContract::VendorMerge
+        | ResponseContract::ValueAdd
+        | ResponseContract::ValueRename
+        | ResponseContract::ValueMerge
+        | ResponseContract::ValueDelete
         | ResponseContract::VendorContactAdd
         | ResponseContract::VendorContactEdit
         | ResponseContract::VendorContactMove

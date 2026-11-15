@@ -148,6 +148,33 @@ import SwiftUI
         return approved
     }
 
+    /// Attaches `content` as a sheet and waits until it finishes with an answer; nil when it is
+    /// cancelled or the window cannot ask.
+    func ask<Answer, Content: View>(_ title: String, identifier: String,
+                                    @ViewBuilder content: (@escaping (Answer?) -> Void) -> Content) async -> Answer? {
+        guard !isTerminating, !isPresenting, let parent else { return nil }
+        isPresenting = true
+        let sheet = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: false)
+        defer { didPresent(sheet) }
+        sheet.title = title
+        sheet.setAccessibilityIdentifier(identifier + ".dialog")
+        var answer: Answer?
+        let view = NSHostingView(rootView: content { [weak sheet, weak parent] chosen in
+            guard let sheet, let parent else { return }
+            answer = chosen
+            parent.endSheet(sheet)
+        })
+        sheet.contentView = view
+        sheet.setContentSize(view.fittingSize)
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            parent.beginSheet(sheet) { _ in
+                sheet.orderOut(nil)
+                continuation.resume()
+            }
+        }
+        return answer
+    }
+
     private func didPresent(_ sheet: NSWindow) {
         isPresenting = false
         Task {

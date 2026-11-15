@@ -368,7 +368,7 @@ typedef struct SpielordersReport {
 // `invalid_facts`. The record these facts would write does not validate.
 #define SPIELORDERS_FAILURE_INVALID_FACTS 1027
 
-// `unconfirmed_reusable_value`. A new Reusable Free-Entry Value was proposed without confirmation.
+// `unconfirmed_reusable_value`. A value the Package does not have was named without asking that it be added.
 #define SPIELORDERS_FAILURE_UNCONFIRMED_REUSABLE_VALUE 1028
 
 // `invalid_draft`. A whole draft broke these rules, each at the fact or the row it names, the record's own facts first.
@@ -526,6 +526,15 @@ typedef struct SpielordersReport {
 
 // `order_identity_in_use`. An Order of the Package already carries the Order ID of the Order being restored; located at that Order.
 #define SPIELORDERS_FAILURE_ORDER_IDENTITY_IN_USE 1080
+
+// `unknown_value`. The Package has no value of this field spelled so; the entry's field names the field and `after` the value.
+#define SPIELORDERS_FAILURE_UNKNOWN_VALUE 1081
+
+// `value_in_use`. Orders still use the value a deletion names; one entry per Order, located at its directory.
+#define SPIELORDERS_FAILURE_VALUE_IN_USE 1082
+
+// `blank_value`. A value is required and blank.
+#define SPIELORDERS_FAILURE_BLANK_VALUE 1083
 
 // What a committed change warns of beside its result: an entry code.
 // `index_refresh_failed`. The derived Package Index could not be refreshed after the commit.
@@ -1190,9 +1199,10 @@ SpielordersResult spielorders_draft_row_set(struct SpielordersDraft *_Nonnull dr
                                             SpielordersText text,
                                             struct SpielordersEntries *_Nullable *_Nullable outcome);
 
-// Confirms the value `field` now holds as a new reusable value. `field` is
+// Asks that saving add the value `field` now holds to the Package's values where the
+// Package lacks it; without this, a value the Package lacks is refused. `field` is
 // SPIELORDERS_ORDER_FIELD_ORDERER, _ORDERING_INSTITUTION, _PROJECT, or _ORDER_GROUP and
-// `row` is -1. Changing the field again withdraws the confirmation.
+// `row` is -1. Changing the field again withdraws the request.
 SpielordersResult spielorders_draft_confirm(struct SpielordersDraft *_Nonnull draft,
                                             SpielordersConstant field,
                                             int64_t row,
@@ -1399,6 +1409,11 @@ SpielordersResult spielorders_package_values(const struct SpielordersPackage *_N
                                              SpielordersConstant field,
                                              struct SpielordersList *_Nullable *_Nonnull list,
                                              struct SpielordersEntries *_Nullable *_Nullable outcome);
+
+// 1 when `left` and `right` name the same reusable value: surrounding whitespace is
+// ignored and Unicode letter case is folded. Canonically equivalent Unicode spellings
+// are not otherwise normalized. Returns 0 for different values or invalid UTF-8.
+int32_t spielorders_value_matches(SpielordersText left, SpielordersText right);
 
 // How many rows `list` holds.
 int64_t spielorders_list_count(const struct SpielordersList *_Nonnull list);
@@ -1625,11 +1640,98 @@ SpielordersResult spielorders_vendor_plan_hidden(const struct SpielordersVendor 
 
 // Plans deleting `vendor` and its Contacts. Refuses with
 // SPIELORDERS_FAILURE_VENDOR_REFERENCED, one entry per referencing Order, while any
-// healthy Order references it; hiding is how a Vendor in use stops being offered.
+// readable reference in a supported Order names it, including a damaged Order; hiding
+// is how a Vendor in use stops being offered.
 SpielordersResult spielorders_vendor_plan_delete(const struct SpielordersVendor *_Nonnull vendor,
                                                  uint64_t token,
                                                  struct SpielordersPlan *_Nullable *_Nonnull plan,
                                                  struct SpielordersEntries *_Nullable *_Nullable outcome);
+
+// Plans keeping `value` among the values of `field` (SPIELORDERS_ORDER_FIELD_ORDERER,
+// _ORDERING_INSTITUTION, _PROJECT, or _ORDER_GROUP), used by an Order or not. An Order
+// Group belongs to `project`, or to the Orders with no Project for NULL or "". A value
+// the Package already has plans no change. Refuses SPIELORDERS_FAILURE_BLANK_VALUE for a
+// blank value and _UNKNOWN_VALUE for a Project the Package lacks.
+SpielordersResult spielorders_package_plan_add_value(const struct SpielordersPackage *_Nonnull package,
+                                                     SpielordersConstant field,
+                                                     SpielordersOptionalText project,
+                                                     SpielordersText value,
+                                                     uint64_t token,
+                                                     struct SpielordersPlan *_Nullable *_Nonnull plan,
+                                                     struct SpielordersEntries *_Nullable *_Nullable outcome);
+
+// Plans respelling the value `value` of `field` as `to` in every Order that uses it;
+// renaming onto another value the Package has merges the two under `to`.
+// spielorders_plan_order_count is how many Orders change. Refuses
+// SPIELORDERS_FAILURE_UNKNOWN_VALUE for a value the Package lacks and _BLANK_VALUE for a
+// blank `to`. `field` and `project` are as for spielorders_package_plan_add_value.
+SpielordersResult spielorders_package_plan_rename_value(const struct SpielordersPackage *_Nonnull package,
+                                                        SpielordersConstant field,
+                                                        SpielordersOptionalText project,
+                                                        SpielordersText value,
+                                                        SpielordersText to,
+                                                        uint64_t token,
+                                                        struct SpielordersPlan *_Nullable *_Nonnull plan,
+                                                        struct SpielordersEntries *_Nullable *_Nullable outcome);
+
+// Plans making the `count` values of `field` at `values` one value spelled `keep`, which
+// every Order using one of them then uses; a Project's groups go with it.
+// spielorders_plan_order_count is how many Orders change. Refuses
+// SPIELORDERS_FAILURE_UNKNOWN_VALUE for a value the Package lacks. `field` and `project`
+// are as for spielorders_package_plan_add_value.
+SpielordersResult spielorders_package_plan_merge_values(const struct SpielordersPackage *_Nonnull package,
+                                                        SpielordersConstant field,
+                                                        SpielordersOptionalText project,
+                                                        SpielordersText *_Nullable values,
+                                                        int64_t count,
+                                                        SpielordersText keep,
+                                                        uint64_t token,
+                                                        struct SpielordersPlan *_Nullable *_Nonnull plan,
+                                                        struct SpielordersEntries *_Nullable *_Nullable outcome);
+
+// Plans taking the value `value` of `field` out of the Package. `replacement` says what
+// each Order using it uses instead: another value the Package has, "" for none, or NULL
+// to refuse with SPIELORDERS_FAILURE_VALUE_IN_USE, one entry per Order, while any does.
+// A deleted Project's groups go with its Orders. spielorders_plan_order_count is how many
+// Orders change. Refuses _UNKNOWN_VALUE for a value or replacement the Package lacks.
+// `field` and `project` are as for spielorders_package_plan_add_value.
+SpielordersResult spielorders_package_plan_delete_value(const struct SpielordersPackage *_Nonnull package,
+                                                        SpielordersConstant field,
+                                                        SpielordersOptionalText project,
+                                                        SpielordersText value,
+                                                        SpielordersOptionalText replacement,
+                                                        uint64_t token,
+                                                        struct SpielordersPlan *_Nullable *_Nonnull plan,
+                                                        struct SpielordersEntries *_Nullable *_Nullable outcome);
+
+// Plans merging the `count` Vendors whose Vendor IDs are at `vendor_ids` into the Vendor
+// `keep` names by ID: every Order referencing one of them references `keep`, which gains
+// their Contacts, and the others are deleted. spielorders_plan_order_count is how many
+// Orders change. Refuses SPIELORDERS_FAILURE_UNKNOWN_VENDOR_ID for an ID the Package lacks.
+// Refuses _VENDOR_REFERENCED when a damaged Order still references a removed Vendor,
+// because its record cannot safely be rewritten.
+SpielordersResult spielorders_package_plan_merge_vendors(const struct SpielordersPackage *_Nonnull package,
+                                                         SpielordersText *_Nullable vendor_ids,
+                                                         int64_t count,
+                                                         SpielordersText keep,
+                                                         uint64_t token,
+                                                         struct SpielordersPlan *_Nullable *_Nonnull plan,
+                                                         struct SpielordersEntries *_Nullable *_Nullable outcome);
+
+// Plans deleting `vendor` and its Contacts. `replacement` says what each Order
+// referencing it references instead: another Vendor by Vendor ID, "" for none, or NULL to
+// refuse as spielorders_vendor_plan_delete does. spielorders_plan_order_count is how many
+// Orders change. A damaged Order's readable reference still refuses _VENDOR_REFERENCED:
+// correct that record before deleting the Vendor it references.
+SpielordersResult spielorders_vendor_plan_delete_replacing(const struct SpielordersVendor *_Nonnull vendor,
+                                                           SpielordersOptionalText replacement,
+                                                           uint64_t token,
+                                                           struct SpielordersPlan *_Nullable *_Nonnull plan,
+                                                           struct SpielordersEntries *_Nullable *_Nullable outcome);
+
+// How many Order records committing `plan` writes: the Orders a value change, merge, or
+// replacement changes, or the one Order a save writes.
+int64_t spielorders_plan_order_count(const struct SpielordersPlan *_Nonnull plan);
 
 // Plans replacing the text of `readme` with `text`, guarded by the bytes `readme` read.
 // Refuses for a README that could not be read.
@@ -1734,9 +1836,15 @@ SpielordersConstant spielorders_report_kind(const struct SpielordersReport *_Non
 // when it wrote none or removed it.
 struct SpielordersOrder *_Nullable spielorders_report_order(const struct SpielordersReport *_Nonnull report);
 
-// A fresh read of the Vendor the commit wrote, as a new handle the caller frees, or
-// NULL when it wrote none.
+// The Vendor the commit wrote or kept in a merge or replacement deletion, as a new
+// handle the caller frees, or NULL when it wrote or kept none.
 struct SpielordersVendor *_Nullable spielorders_report_vendor(const struct SpielordersReport *_Nonnull report);
+
+// The affected value list after the committed value change, as a new handle the caller
+// frees, or NULL for another kind of change. Order Groups are scoped to the Project the
+// change named. The list, including an empty one after deletion, retains this report's
+// result even when the Package changes again.
+struct SpielordersList *_Nullable spielorders_report_values(const struct SpielordersReport *_Nonnull report);
 
 // Where the committed Order Directory now is, or "". Lists refresh by opening the
 // Package again.
@@ -1761,6 +1869,13 @@ SpielordersText spielorders_order_item_field(const struct SpielordersOrder *_Non
 
 // The Order Directory of `order`.
 SpielordersPathBytes spielorders_order_directory(const struct SpielordersOrder *_Nonnull order);
+
+// The directory name aligning `order` gives it, from its facts and its Vendor's current
+// Name; "" when its facts project none. A caller compares it with
+// SPIELORDERS_ORDER_FIELD_DIRECTORY_NAME to learn whether the directory has drifted
+// without planning an alignment, which can still be refused, for instance when another
+// directory already has that name.
+SpielordersText spielorders_order_aligned_name(const struct SpielordersOrder *_Nonnull order);
 
 // The README of `order`, read with it; always a handle the caller frees.
 struct SpielordersReadme *_Nullable spielorders_order_readme(const struct SpielordersOrder *_Nonnull order);

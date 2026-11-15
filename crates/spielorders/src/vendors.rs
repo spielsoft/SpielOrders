@@ -6,7 +6,9 @@ use crate::{
     canonical::{CurrentPackageCandidate, load_package},
     change::Assignment,
     filesystem::{DestinationExpectation, replace_validated_file_expecting},
-    metadata::{OrderDocument, Vendor, VendorContact, VendorId, VendorsDocument, Version1},
+    metadata::{
+        OrderDocument, StoredValues, Vendor, VendorContact, VendorId, VendorsDocument, Version1,
+    },
     mutation::{
         IndexRefresh, MutationReport, Never, OperationKind, PlannedOperation, RejectedAssignment,
         RejectedAssignmentReason,
@@ -36,8 +38,8 @@ pub struct PlannedVendorFacts {
     pub(crate) document: Vendor,
 }
 
-/// A Vendor is never deleted. The visibility kinds govern whether a Vendor is offered
-/// for new use, never whether it resolves.
+/// The visibility kinds govern whether a Vendor is offered for new use; Delete removes
+/// its record only when no readable Order reference names it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VendorMutationKind {
     Create,
@@ -56,6 +58,8 @@ pub struct VendorMutationPlan {
     subject_vendor_id: String,
     candidate_vendors: Vec<Vendor>,
     prior_vendors: Vec<Vendor>,
+    /// The values the record kept when planned, which the commit writes back unchanged.
+    prior_values: StoredValues,
     original_vendor: Option<Vendor>,
     pub(crate) operations: Vec<PlannedOperation>,
 }
@@ -294,7 +298,7 @@ pub(crate) fn plan_vendor_unhide<F: FileSystem>(
     })
 }
 
-/// Removes one Vendor and its Contacts, refused while any healthy Order references it so
+/// Removes one Vendor and its Contacts, refused while any readable Order reference names it so
 /// that no Order is left with an unresolved Vendor Reference.
 pub(crate) fn plan_vendor_delete<F: FileSystem>(
     selected_root: &Path,
@@ -304,7 +308,7 @@ pub(crate) fn plan_vendor_delete<F: FileSystem>(
     Answer::of(|| {
         let package = load_package(selected_root, filesystem)?;
         let position = vendor_position(vendor_id, &package.vendors)?;
-        let orders: Vec<_> = package
+        let mut orders: Vec<_> = package
             .healthy_orders
             .iter()
             .filter(|order| {
@@ -316,6 +320,7 @@ pub(crate) fn plan_vendor_delete<F: FileSystem>(
             })
             .map(|order| order.paths.directory.clone())
             .collect();
+        orders.extend(damaged_references(&package, vendor_id));
         if !orders.is_empty() {
             return Err(Failure::VendorReferenced {
                 vendor_id: vendor_id.to_owned(),
@@ -332,6 +337,25 @@ pub(crate) fn plan_vendor_delete<F: FileSystem>(
             Some(subject),
         )
     })
+}
+
+/// Supported damaged records still retain their readable Vendor references. A mutation
+/// cannot safely rewrite those records, but must not remove the Vendor they resolve.
+pub(crate) fn damaged_references(
+    package: &CurrentPackageCandidate,
+    vendor_id: &str,
+) -> Vec<Location> {
+    package
+        .damaged_orders
+        .iter()
+        .filter(|order| {
+            order
+                .vendor_id
+                .as_ref()
+                .is_some_and(|id| id.as_str() == vendor_id)
+        })
+        .map(|order| order.paths.directory.clone())
+        .collect()
 }
 
 fn plan_vendor_visibility<F: FileSystem>(
@@ -416,6 +440,7 @@ fn plan_from_candidate_aggregate_with(
         subject_vendor_id: subject_vendor_id.to_owned(),
         candidate_vendors: vendors.vendors,
         prior_vendors,
+        prior_values: package.values.clone(),
         original_vendor: None,
         operations,
     })
@@ -433,6 +458,7 @@ fn validated_aggregate(
     let candidate = VendorsDocument {
         schema_version: Version1,
         vendors,
+        values: package.values.clone(),
     };
     PackageMetadata::new(&orders, &candidate)
         .validate()
@@ -592,7 +618,12 @@ fn commit_vendor<F: FileSystem>(
     filesystem: &F,
 ) -> Result<VendorMutationReport, Failure> {
     let current = load_package(&plan.root, filesystem)?;
-    if current.vendors != plan.prior_vendors {
+    if plan.kind == VendorMutationKind::Delete
+        && !damaged_references(&current, &plan.subject_vendor_id).is_empty()
+    {
+        return Err(preconditions_changed(&plan, ChangedPrecondition::Package));
+    }
+    if current.vendors != plan.prior_vendors || current.values != plan.prior_values {
         return Err(preconditions_changed(
             &plan,
             ChangedPrecondition::VendorRecord,
@@ -695,7 +726,10 @@ fn commit_vendor<F: FileSystem>(
             VendorsDocument::from_json_bytes(current)
                 .ok()
                 .and_then(|document| PackageMetadata::new(&[], &document).validate().ok())
-                .is_some_and(|projected| projected.vendors().vendors == plan.prior_vendors)
+                .is_some_and(|projected| {
+                    projected.vendors().vendors == plan.prior_vendors
+                        && projected.vendors().values == plan.prior_values
+                })
         };
         replace_validated_file_expecting(
             &plan.vendors_path.absolute_path,

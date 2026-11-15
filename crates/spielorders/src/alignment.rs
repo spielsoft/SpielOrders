@@ -9,7 +9,7 @@ use crate::{
     canonical::{CurrentPackageCandidate, HealthyOrder},
     creation::{normalize_filename_component, projected_order_basename},
     evidence::EvidenceFingerprint,
-    metadata::{OrderDocument, VendorId},
+    metadata::{OrderDocument, Vendor, VendorId},
     mutation::{CommitFailure, IndexRefresh, MutationReport, OperationKind, PlannedOperation},
     operations::FailedOperation,
     order_edits::resolve_order,
@@ -115,16 +115,31 @@ fn projected_basename(
         })?),
         None => None,
     };
+    projected_name(document, vendor_name).ok_or(Failure::EmptyProjectedComponent)
+}
+
+/// The basename `document`'s facts project with `vendor_name` as its Vendor's Name, or
+/// `None` where its Title projects an empty component.
+fn projected_name(document: &OrderDocument, vendor_name: Option<&str>) -> Option<String> {
     let title_component = normalize_filename_component(document.title.as_str());
-    if title_component.is_empty() {
-        return Err(Failure::EmptyProjectedComponent);
+    (!title_component.is_empty()).then(|| {
+        projected_order_basename(
+            document.date_ordered.as_str(),
+            vendor_name,
+            &title_component,
+            document.orderer.as_deref(),
+        )
+    })
+}
+
+/// The directory name aligning an Order gives it, from its record and the Vendor that
+/// record resolves to; `None` where its facts project none, including a Vendor Reference
+/// that resolves to nothing.
+pub(crate) fn aligned_name(document: &OrderDocument, vendor: Option<&Vendor>) -> Option<String> {
+    match (&document.vendor_id, vendor) {
+        (Some(_), None) => None,
+        (_, vendor) => projected_name(document, vendor.map(|vendor| vendor.name.as_str())),
     }
-    Ok(projected_order_basename(
-        document.date_ordered.as_str(),
-        vendor_name,
-        &title_component,
-        document.orderer.as_deref(),
-    ))
 }
 
 /// The current Name of one referenced Vendor, resolved live from the Package. `None` is

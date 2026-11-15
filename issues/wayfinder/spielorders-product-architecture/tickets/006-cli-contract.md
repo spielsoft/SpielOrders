@@ -24,15 +24,15 @@ Order commands reserve provisional `--uuid <ORDER_ID>` targeting for GUI and scr
 
 ### Command surface
 
-`package list` owns Package collections so every `order` command keeps Order-root semantics. Vendor commands are Package-rooted because Vendors have no directories. There are no `create-order`, `create-vendor`, or Vendor Merge aliases.
+`package list` owns Package collections so every `order` command keeps Order-root semantics. Vendor commands are Package-rooted because Vendors have no directories. There are no `create-order` or `create-vendor` aliases.
 
-`package show` is the complete GUI-bootstrap read: one call carries everything the desktop needs to open a Package, including the four current Reusable Free-Entry Value lists. The core derives those lists from the loaded Package Index rather than scanning Order Directories or recomputing per dropdown. Materializing them in `index.json` would leave them derived data and would require the normal metadata-version change.
+`package show` is the complete GUI-bootstrap read: one call carries everything the desktop needs to open a Package, including the four current value lists. The core derives those lists from the loaded Package Index, which carries the kept values, rather than scanning Order Directories or recomputing per dropdown.
 
 `package readme` and `order readme` print only the conventional absolute path, whether or not the optional file exists, so humans can compose `cat`, `vi`, or another ordinary tool. The core provides typed UTF-8 reads and atomic writes for both README kinds because the GUI editor depends on them; it never generates their content.
 
 ### Assignment and collection semantics
 
-Options govern targeting, output, and execution; domain facts use canonical `field=value` assignments. Parsing splits on the first `=`, so a quoted value may contain further equals signs. Unknown and immutable fields are rejected. An empty value clears an optional scalar; blank required facts remain invalid. A CLI assignment of a new Reusable Free-Entry Value is itself the explicit confirmation that value requires, and mutation results distinguish reuse of an existing canonical spelling from introduction of a new one.
+Options govern targeting, output, and execution; domain facts use canonical `field=value` assignments. Parsing splits on the first `=`, so a quoted value may contain further equals signs. Unknown and immutable fields are rejected. An empty value clears an optional scalar; blank required facts remain invalid. An Order assignment accepts only a value the Package has: a value it lacks is refused by name unless `--add-values` on `add-order`, `adopt-order`, or `order edit` asks that every such value be added in the same change. Mutation results distinguish reuse of an existing canonical spelling from a newly added value.
 
 Every command's assignments form one order-independent, fully validated, atomic mutation. An edit entering `ordered` without `date_ordered` takes today's local date; an explicit `date_ordered` in the same mutation overrides it, so historical correction needs no second edit.
 
@@ -40,9 +40,9 @@ Order Items and Vendor Contacts have no IDs and use one-based positions. `add` a
 
 A bare `item` token opens one Item group on the command line, and the assignments after it belong to that Item until the next `item` or the end of the line. It is a decided third token class beside options and assignments, not an implementation detail of one command. `adopt-order` is the one command that takes it, because adoption is the one mutation that may carry Items at creation.
 
-Vendor Names are the ordinary Vendor selectors, resolved by the established trimmed, case-insensitive package-unique comparison; machine responses always retain Vendor IDs. `vendor hide` stops offering a Vendor for new use and `vendor unhide` offers it again; neither is rejected on reference grounds, and the record and ID survive either way. `vendor delete` removes a Vendor and its Contacts only when no Order references it, and otherwise refuses with `vendor_referenced`, one entry per referencing Order. Resolution ignores visibility. Vendor lists offer only active Vendors until `--all` asks for every Vendor with its visibility. Front ends request the appropriate visibility through the library's list interface rather than implementing their own filter; the desktop Vendors table requests the complete list for its show/hide control.
+Vendor Names are the ordinary Vendor selectors, resolved by the established trimmed, case-insensitive package-unique comparison; machine responses always retain Vendor IDs. `vendor hide` stops offering a Vendor for new use and `vendor unhide` offers it again; neither is rejected on reference grounds, and the record and ID survive either way. `vendor delete` removes a Vendor and its Contacts; while Orders reference it, it refuses with `vendor_referenced`, one entry per referencing Order, unless `--replacement` names the Vendor they reference instead or `--clear` leaves them with none. `vendor merge` merges Vendors into the `--keep` Vendor. Resolution ignores visibility. Vendor lists offer only active Vendors until `--all` asks for every Vendor with its visibility. Front ends request the appropriate visibility through the library's list interface rather than implementing their own filter; the desktop Vendors table requests the complete list for its show/hide control.
 
-Vendor Merge is absent from the product and the core contract; [Define Vendor identity and historical semantics](004-vendor-identity-history.md) owns what duplicate reconciliation may do instead.
+`value add`, `value rename`, `value merge`, and `value delete` change one kind of value, named as `package values` names it, with `--project` for an Order Group; a deletion takes `--replacement` or `--clear` as `vendor delete` does. Each mutation that can change Orders reports how many as `orders`. [Define Vendor identity and historical semantics](004-vendor-identity-history.md) owns what merging and duplicate reconciliation may do.
 
 ### Removal and mutation boundaries
 

@@ -29,6 +29,7 @@ mod package_index_rebuild;
 mod package_index_replacement_failure;
 mod package_initialization;
 mod package_paths;
+mod package_values;
 mod plan_evidence;
 mod read_entry_points;
 mod readme_read;

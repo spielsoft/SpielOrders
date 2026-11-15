@@ -14,7 +14,8 @@ the installed default resources without requiring a Package.
 `spielorders add-order --root "$package" title="Laser components"` creates a new
 Order directory with today's local date, status `in_preparation`, and no Items or Vendor.
 Supply explicit facts to override defaults. Use `package list vendors` and `package values`
-to find existing shared spellings. IDs come from SpielOrders, not inferred names.
+to find existing shared spellings; a value the Package lacks needs `--add-values`. IDs come
+from SpielOrders, not inferred names.
 
 For an existing eligible direct child of the configured Orders Directory:
 

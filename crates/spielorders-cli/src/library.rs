@@ -343,6 +343,12 @@ pub(crate) fn report(
     if let Some(vendor) = spielorders_report_vendor(report) {
         data.insert("vendor".to_owned(), self::vendor(&vendor));
     }
+    if let Some(values) = spielorders_report_values(report) {
+        data.insert(
+            "values".to_owned(),
+            rows(&values, SPIELORDERS_VALUE_FIELD_VALUE),
+        );
+    }
     data.insert(
         "final_path".to_owned(),
         path(spielorders_report_final_path(report)),

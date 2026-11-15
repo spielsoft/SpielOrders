@@ -2,22 +2,25 @@
 //! re-checks every piece of evidence its plan was made against before its first write.
 
 use crate::interface::{
-    OptionalPathBytes, PathBytes, SPIELORDERS_CHANGE_FACT, SPIELORDERS_CHANGE_NEW_IDENTITY,
-    SPIELORDERS_CHANGE_RECORD_REMOVED, SPIELORDERS_CHANGE_ROW_ADDED, SPIELORDERS_CHANGE_ROW_MOVED,
-    SPIELORDERS_CHANGE_ROW_REMOVED, SPIELORDERS_DRAFT_KIND_ORDER, SPIELORDERS_FAILURE_PANICKED,
-    SPIELORDERS_FAMILY_OPERATION, SPIELORDERS_ORDER_FIELD_ORDER_GROUP,
-    SPIELORDERS_ORDER_FIELD_ORDERER, SPIELORDERS_ORDER_FIELD_ORDERING_INSTITUTION,
-    SPIELORDERS_ORDER_FIELD_PROJECT, SPIELORDERS_REPORT_COMMITTED, SPIELORDERS_REPORT_UNCHANGED,
-    SPIELORDERS_RESULT_BAD_ARGUMENT, SPIELORDERS_RESULT_INTERNAL, SPIELORDERS_REUSE_NEW,
-    SPIELORDERS_REUSE_REUSED, SPIELORDERS_SEVERITY_ERROR, SPIELORDERS_VENDOR_FIELD_HIDDEN,
-    SPIELORDERS_VENDOR_FIELD_NAME, SpielordersConstant, SpielordersDraft, SpielordersEntries,
-    SpielordersOrder, SpielordersPackage, SpielordersReadme, SpielordersResult, SpielordersVendor,
-    Text,
+    OptionalPathBytes, OptionalText, PathBytes, SPIELORDERS_CHANGE_FACT,
+    SPIELORDERS_CHANGE_NEW_IDENTITY, SPIELORDERS_CHANGE_RECORD_REMOVED,
+    SPIELORDERS_CHANGE_ROW_ADDED, SPIELORDERS_CHANGE_ROW_MOVED, SPIELORDERS_CHANGE_ROW_REMOVED,
+    SPIELORDERS_DRAFT_KIND_ORDER, SPIELORDERS_FAILURE_PANICKED, SPIELORDERS_FAMILY_OPERATION,
+    SPIELORDERS_ORDER_FIELD_ORDER_GROUP, SPIELORDERS_ORDER_FIELD_ORDERER,
+    SPIELORDERS_ORDER_FIELD_ORDERING_INSTITUTION, SPIELORDERS_ORDER_FIELD_PROJECT,
+    SPIELORDERS_REPORT_COMMITTED, SPIELORDERS_REPORT_UNCHANGED, SPIELORDERS_RESULT_BAD_ARGUMENT,
+    SPIELORDERS_RESULT_INTERNAL, SPIELORDERS_REUSE_NEW, SPIELORDERS_REUSE_REUSED,
+    SPIELORDERS_SEVERITY_ERROR, SPIELORDERS_VENDOR_FIELD_HIDDEN, SPIELORDERS_VENDOR_FIELD_NAME,
+    SpielordersConstant, SpielordersDraft, SpielordersEntries, SpielordersList, SpielordersOrder,
+    SpielordersPackage, SpielordersReadme, SpielordersResult, SpielordersVendor, Text,
     call::{Session, deliver, fallible, put, quietly, settle},
     draft::{Origin, SpielordersDraftData},
     entries::{EMPTY, Entry, Subject, c_text},
     library::member,
+    list::value_list,
+    package::query,
     records::{ReadmeScope, contact_facts, document_facts, item_facts, path_text, vendor_facts},
+    text::texts,
 };
 use crate::{
     Change, ChangeResult, OrderRef, Plan, Report, Scope, VendorRef, package::ReusableValue,
@@ -422,7 +425,8 @@ pub extern "C" fn spielorders_vendor_plan_hidden(
 
 /// Plans deleting `vendor` and its Contacts. Refuses with
 /// SPIELORDERS_FAILURE_VENDOR_REFERENCED, one entry per referencing Order, while any
-/// healthy Order references it; hiding is how a Vendor in use stops being offered.
+/// readable reference in a supported Order names it, including a damaged Order; hiding
+/// is how a Vendor in use stops being offered.
 #[unsafe(no_mangle)]
 pub extern "C" fn spielorders_vendor_plan_delete(
     vendor: &SpielordersVendor,
@@ -435,6 +439,7 @@ pub extern "C" fn spielorders_vendor_plan_delete(
         let change = Change::DeleteVendor {
             root: vendor.root(),
             vendor: VendorRef::Id(read.vendor.vendor_id.to_string()),
+            in_use: crate::InUse::Refuse,
         };
         let result = planned(
             &change,
@@ -456,6 +461,265 @@ pub extern "C" fn spielorders_vendor_plan_delete(
             },
         );
         deliver(result, plan)
+    })
+}
+
+/// The value kind an Order field constant names, for the four value fields.
+fn value_kind(
+    field: SpielordersConstant,
+) -> Result<crate::model::ReusableValueKind, SpielordersResult> {
+    use crate::model::ReusableValueKind;
+    Ok(match field {
+        SPIELORDERS_ORDER_FIELD_ORDERER => ReusableValueKind::Orderer,
+        SPIELORDERS_ORDER_FIELD_ORDERING_INSTITUTION => ReusableValueKind::OrderingInstitution,
+        SPIELORDERS_ORDER_FIELD_PROJECT => ReusableValueKind::Project,
+        SPIELORDERS_ORDER_FIELD_ORDER_GROUP => ReusableValueKind::OrderGroup,
+        _ => return Err(SPIELORDERS_RESULT_BAD_ARGUMENT),
+    })
+}
+
+/// `text` as UTF-8, or BAD_ARGUMENT.
+fn utf8(text: Text<'_>) -> Result<String, SpielordersResult> {
+    text.to_str()
+        .map(str::to_owned)
+        .ok_or(SPIELORDERS_RESULT_BAD_ARGUMENT)
+}
+
+/// `project` for an Order Group (NULL or "" for the Orders with no Project), or none for
+/// another field.
+fn value_project(
+    field: SpielordersConstant,
+    project: OptionalText<'_>,
+) -> Result<Option<String>, SpielordersResult> {
+    let project = query(project)?;
+    Ok(
+        (field == SPIELORDERS_ORDER_FIELD_ORDER_GROUP && !project.trim().is_empty())
+            .then_some(project),
+    )
+}
+
+/// Plans `change` on the values of `package`, a plan whose changes are its Order count.
+fn value_plan(
+    package: &SpielordersPackage,
+    change: impl FnOnce(PathBuf) -> Result<Change, SpielordersResult>,
+    subject: Subject,
+    token: u64,
+    plan: &mut Option<Box<SpielordersPlan>>,
+    entries: &mut Vec<Entry>,
+) -> SpielordersResult {
+    let root = package.root().to_path_buf();
+    let result = change(root.clone())
+        .and_then(|change| planned(&change, root, subject, token, entries, |_| Vec::new()));
+    deliver(result, plan)
+}
+
+/// Plans keeping `value` among the values of `field` (SPIELORDERS_ORDER_FIELD_ORDERER,
+/// _ORDERING_INSTITUTION, _PROJECT, or _ORDER_GROUP), used by an Order or not. An Order
+/// Group belongs to `project`, or to the Orders with no Project for NULL or "". A value
+/// the Package already has plans no change. Refuses SPIELORDERS_FAILURE_BLANK_VALUE for a
+/// blank value and _UNKNOWN_VALUE for a Project the Package lacks.
+#[unsafe(no_mangle)]
+pub extern "C" fn spielorders_package_plan_add_value(
+    package: &SpielordersPackage,
+    field: SpielordersConstant,
+    project: OptionalText<'_>,
+    value: Text<'_>,
+    token: u64,
+    plan: &mut Option<Box<SpielordersPlan>>,
+    outcome: Option<&mut Option<Box<SpielordersEntries>>>,
+) -> SpielordersResult {
+    fallible(outcome, |entries| {
+        let change = |root| {
+            Ok(Change::AddValue {
+                root,
+                kind: value_kind(field)?,
+                project: value_project(field, project)?,
+                value: utf8(value)?,
+            })
+        };
+        value_plan(package, change, Subject::Order, token, plan, entries)
+    })
+}
+
+/// Plans respelling the value `value` of `field` as `to` in every Order that uses it;
+/// renaming onto another value the Package has merges the two under `to`.
+/// spielorders_plan_order_count is how many Orders change. Refuses
+/// SPIELORDERS_FAILURE_UNKNOWN_VALUE for a value the Package lacks and _BLANK_VALUE for a
+/// blank `to`. `field` and `project` are as for spielorders_package_plan_add_value.
+#[unsafe(no_mangle)]
+pub extern "C" fn spielorders_package_plan_rename_value(
+    package: &SpielordersPackage,
+    field: SpielordersConstant,
+    project: OptionalText<'_>,
+    value: Text<'_>,
+    to: Text<'_>,
+    token: u64,
+    plan: &mut Option<Box<SpielordersPlan>>,
+    outcome: Option<&mut Option<Box<SpielordersEntries>>>,
+) -> SpielordersResult {
+    fallible(outcome, |entries| {
+        let change = |root| {
+            Ok(Change::RenameValue {
+                root,
+                kind: value_kind(field)?,
+                project: value_project(field, project)?,
+                value: utf8(value)?,
+                to: utf8(to)?,
+            })
+        };
+        value_plan(package, change, Subject::Order, token, plan, entries)
+    })
+}
+
+/// Plans making the `count` values of `field` at `values` one value spelled `keep`, which
+/// every Order using one of them then uses; a Project's groups go with it.
+/// spielorders_plan_order_count is how many Orders change. Refuses
+/// SPIELORDERS_FAILURE_UNKNOWN_VALUE for a value the Package lacks. `field` and `project`
+/// are as for spielorders_package_plan_add_value.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn spielorders_package_plan_merge_values(
+    package: &SpielordersPackage,
+    field: SpielordersConstant,
+    project: OptionalText<'_>,
+    values: Option<std::ptr::NonNull<Text<'_>>>,
+    count: i64,
+    keep: Text<'_>,
+    token: u64,
+    plan: &mut Option<Box<SpielordersPlan>>,
+    outcome: Option<&mut Option<Box<SpielordersEntries>>>,
+) -> SpielordersResult {
+    fallible(outcome, |entries| {
+        let change = |root| {
+            Ok(Change::MergeValues {
+                root,
+                kind: value_kind(field)?,
+                project: value_project(field, project)?,
+                values: texts(values, count)
+                    .ok_or(SPIELORDERS_RESULT_BAD_ARGUMENT)?
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+                keep: utf8(keep)?,
+            })
+        };
+        value_plan(package, change, Subject::Order, token, plan, entries)
+    })
+}
+
+/// Plans taking the value `value` of `field` out of the Package. `replacement` says what
+/// each Order using it uses instead: another value the Package has, "" for none, or NULL
+/// to refuse with SPIELORDERS_FAILURE_VALUE_IN_USE, one entry per Order, while any does.
+/// A deleted Project's groups go with its Orders. spielorders_plan_order_count is how many
+/// Orders change. Refuses _UNKNOWN_VALUE for a value or replacement the Package lacks.
+/// `field` and `project` are as for spielorders_package_plan_add_value.
+#[unsafe(no_mangle)]
+pub extern "C" fn spielorders_package_plan_delete_value(
+    package: &SpielordersPackage,
+    field: SpielordersConstant,
+    project: OptionalText<'_>,
+    value: Text<'_>,
+    replacement: OptionalText<'_>,
+    token: u64,
+    plan: &mut Option<Box<SpielordersPlan>>,
+    outcome: Option<&mut Option<Box<SpielordersEntries>>>,
+) -> SpielordersResult {
+    fallible(outcome, |entries| {
+        let change = |root| {
+            Ok(Change::DeleteValue {
+                root,
+                kind: value_kind(field)?,
+                project: value_project(field, project)?,
+                value: utf8(value)?,
+                in_use: in_use(replacement, str::to_owned)?,
+            })
+        };
+        value_plan(package, change, Subject::Order, token, plan, entries)
+    })
+}
+
+/// What `replacement` says of Orders using a deleted value: NULL refuses, "" clears, and
+/// any other text names the replacement.
+fn in_use<T>(
+    replacement: OptionalText<'_>,
+    named: impl FnOnce(&str) -> T,
+) -> Result<crate::InUse<T>, SpielordersResult> {
+    Ok(match replacement.as_c_str() {
+        None => crate::InUse::Refuse,
+        Some(text) => match text.to_str().map_err(|_| SPIELORDERS_RESULT_BAD_ARGUMENT)? {
+            text if text.trim().is_empty() => crate::InUse::Clear,
+            text => crate::InUse::Replace(named(text)),
+        },
+    })
+}
+
+/// Plans merging the `count` Vendors whose Vendor IDs are at `vendor_ids` into the Vendor
+/// `keep` names by ID: every Order referencing one of them references `keep`, which gains
+/// their Contacts, and the others are deleted. spielorders_plan_order_count is how many
+/// Orders change. Refuses SPIELORDERS_FAILURE_UNKNOWN_VENDOR_ID for an ID the Package lacks.
+/// Refuses _VENDOR_REFERENCED when a damaged Order still references a removed Vendor,
+/// because its record cannot safely be rewritten.
+#[unsafe(no_mangle)]
+pub extern "C" fn spielorders_package_plan_merge_vendors(
+    package: &SpielordersPackage,
+    vendor_ids: Option<std::ptr::NonNull<Text<'_>>>,
+    count: i64,
+    keep: Text<'_>,
+    token: u64,
+    plan: &mut Option<Box<SpielordersPlan>>,
+    outcome: Option<&mut Option<Box<SpielordersEntries>>>,
+) -> SpielordersResult {
+    fallible(outcome, |entries| {
+        let change = |root| {
+            Ok(Change::MergeVendors {
+                root,
+                vendors: texts(vendor_ids, count)
+                    .ok_or(SPIELORDERS_RESULT_BAD_ARGUMENT)?
+                    .into_iter()
+                    .map(|id| VendorRef::Id(id.to_owned()))
+                    .collect(),
+                keep: VendorRef::Id(utf8(keep)?),
+            })
+        };
+        value_plan(package, change, Subject::Vendor, token, plan, entries)
+    })
+}
+
+/// Plans deleting `vendor` and its Contacts. `replacement` says what each Order
+/// referencing it references instead: another Vendor by Vendor ID, "" for none, or NULL to
+/// refuse as spielorders_vendor_plan_delete does. spielorders_plan_order_count is how many
+/// Orders change. A damaged Order's readable reference still refuses _VENDOR_REFERENCED:
+/// correct that record before deleting the Vendor it references.
+#[unsafe(no_mangle)]
+pub extern "C" fn spielorders_vendor_plan_delete_replacing(
+    vendor: &SpielordersVendor,
+    replacement: OptionalText<'_>,
+    token: u64,
+    plan: &mut Option<Box<SpielordersPlan>>,
+    outcome: Option<&mut Option<Box<SpielordersEntries>>>,
+) -> SpielordersResult {
+    fallible(outcome, |entries| {
+        let root = vendor.root();
+        let result = in_use(replacement, |id| VendorRef::Id(id.to_owned())).and_then(|in_use| {
+            let change = Change::DeleteVendor {
+                root: root.clone(),
+                vendor: VendorRef::Id(vendor.data().read.vendor.vendor_id.to_string()),
+                in_use,
+            };
+            planned(&change, root, Subject::Vendor, token, entries, |_| {
+                Vec::new()
+            })
+        });
+        deliver(result, plan)
+    })
+}
+
+/// How many Order records committing `plan` writes: the Orders a value change, merge, or
+/// replacement changes, or the one Order a save writes.
+#[unsafe(no_mangle)]
+pub extern "C" fn spielorders_plan_order_count(plan: &SpielordersPlan) -> i64 {
+    quietly(-1, || {
+        i64::try_from(plan.data.plan.order_count()).unwrap_or(-1)
     })
 }
 
@@ -719,6 +983,7 @@ struct SpielordersReportData {
     kind: SpielordersConstant,
     order: Option<SpielordersOrder>,
     vendor: Option<SpielordersVendor>,
+    values: Option<Vec<crate::canonical::ReusableValueProjection>>,
     final_path: CString,
 }
 
@@ -770,7 +1035,15 @@ fn refreshed(report: &Report, root: &std::path::Path, subject: Subject) -> Spiel
                 .result
                 .ok()
                 .map(SpielordersVendor::of)
+        })
+        .or_else(|| match result {
+            ChangeResult::Values(result) => result.vendor.clone().map(SpielordersVendor::of),
+            _ => None,
         });
+    let values = match result {
+        ChangeResult::Values(result) => result.values.clone(),
+        _ => None,
+    };
     let final_path = removed
         .or(written)
         .map(|path| path_text(&path))
@@ -779,6 +1052,7 @@ fn refreshed(report: &Report, root: &std::path::Path, subject: Subject) -> Spiel
         kind,
         order,
         vendor,
+        values,
         final_path,
     }
 }
@@ -858,8 +1132,8 @@ pub extern "C" fn spielorders_report_order(
     })
 }
 
-/// A fresh read of the Vendor the commit wrote, as a new handle the caller frees, or
-/// NULL when it wrote none.
+/// The Vendor the commit wrote or kept in a merge or replacement deletion, as a new
+/// handle the caller frees, or NULL when it wrote or kept none.
 #[unsafe(no_mangle)]
 pub extern "C" fn spielorders_report_vendor(
     report: &SpielordersReport,
@@ -870,6 +1144,23 @@ pub extern "C" fn spielorders_report_vendor(
             .vendor
             .as_ref()
             .map(|vendor| Box::new(SpielordersVendor::of(vendor.data().read.clone())))
+    })
+}
+
+/// The affected value list after the committed value change, as a new handle the caller
+/// frees, or NULL for another kind of change. Order Groups are scoped to the Project the
+/// change named. The list, including an empty one after deletion, retains this report's
+/// result even when the Package changes again.
+#[unsafe(no_mangle)]
+pub extern "C" fn spielorders_report_values(
+    report: &SpielordersReport,
+) -> Option<Box<SpielordersList>> {
+    quietly(None, || {
+        report
+            .data
+            .values
+            .clone()
+            .map(|values| Box::new(value_list(values)))
     })
 }
 

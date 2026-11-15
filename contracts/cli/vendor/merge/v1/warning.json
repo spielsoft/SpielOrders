@@ -1,0 +1,58 @@
+{
+  "contract": "spielorders.vendor.merge",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "root": "<PACKAGE_ROOT>"
+  },
+  "data": {
+    "outcome": "committed_with_warning",
+    "committed": true,
+    "operations": [
+      {
+        "kind": "replace_vendor_record",
+        "path": "<PACKAGE_ROOT>/.spielorders/vendors.json"
+      },
+      {
+        "kind": "refresh_package_index",
+        "path": "<PACKAGE_ROOT>/.spielorders/index.json"
+      }
+    ],
+    "changes": [],
+    "vendor": {
+      "name": "Tarnwick",
+      "phone": "+1 555 0123",
+      "email": "sales@example.com",
+      "website": "https://example.com",
+      "address": "100 Example Avenue\nAnytown, ST 00000",
+      "purchasing_notes": "Quote required above $5000.",
+      "vendor_id": "<ID-1>",
+      "hidden": "false",
+      "contacts": [
+        {
+          "position": 1,
+          "name": "Katherine Johnson",
+          "role": "Accounts",
+          "phone": null,
+          "email": "accounts@example.com"
+        }
+      ]
+    },
+    "final_path": null,
+    "orders": 0
+  },
+  "diagnostics": [
+    {
+      "code": "index_refresh_failed",
+      "severity": "warning",
+      "message": "Index refresh failed",
+      "field": null,
+      "reason": null,
+      "position": null,
+      "path": ".spielorders/index.json",
+      "before": null,
+      "after": null
+    }
+  ],
+  "error": null
+}

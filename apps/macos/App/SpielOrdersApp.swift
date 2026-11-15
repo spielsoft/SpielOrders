@@ -311,16 +311,25 @@ private struct ApplicationCommands: Commands {
 
     func performUndo() {
         guard historyAvailable else { return }
-        NSApp.sendAction(Selector(("undo:")), to: nil, from: nil)
+        let native = { _ = NSApp.sendAction(Selector(("undo:")), to: nil, from: nil) }
+        if undoManager === model.undoManager { model.undo(native) } else { native() }
     }
 
     func performRedo() {
         guard historyAvailable else { return }
-        NSApp.sendAction(Selector(("redo:")), to: nil, from: nil)
+        let native = { _ = NSApp.sendAction(Selector(("redo:")), to: nil, from: nil) }
+        if undoManager === model.undoManager { model.redo(native) } else { native() }
     }
 
+    /// Nothing is undone while work is under way. The window's history applies its actions
+    /// through the library, so it also waits until the Package can be browsed.
     private var historyAvailable: Bool {
-        !model.busy && (undoManager !== model.removals || model.canBrowseRecords)
+        !model.busy && (undoManager !== model.undoManager || model.canBrowseRecords)
+    }
+
+    /// The Package window's Undo history is the model's, so it survives selection changes.
+    func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? {
+        model.undoManager
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -337,7 +346,6 @@ private struct ApplicationCommands: Commands {
         }
         guard model.busy || model.dirty else {
             model.closePackage()
-            sender.undoManager?.removeAllActions()
             return false
         }
         closePending = true
@@ -347,9 +355,6 @@ private struct ApplicationCommands: Commands {
             if approved { model.closePackage() }
             model.navigationPending = false
             closePending = false
-            if approved {
-                sender.undoManager?.removeAllActions()
-            }
             await model.dialogs.finishExit(showNotices: true)
         }
         return false

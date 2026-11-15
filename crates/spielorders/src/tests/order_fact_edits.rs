@@ -88,7 +88,7 @@ fn title_edit_plan_reports_complete_facts_and_writes_nothing() {
         "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
         Assignments::new()
             .assign("title", "Laser components")
-            .assign("orderer", "Ada Lovelace"),
+            .introduce("orderer", "Ada Lovelace"),
     );
     let order_path = directory.join(".spielorders/order.json");
     let index_path = root.join(".spielorders/index.json");
@@ -438,7 +438,7 @@ fn one_rejected_assignment_leaves_the_whole_order_untouched() {
         "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
         Assignments::new()
             .assign("title", "Laser components")
-            .assign("orderer", "Ada Lovelace"),
+            .introduce("orderer", "Ada Lovelace"),
     );
     let order_path = directory.join(".spielorders/order.json");
     let index_path = root.join(".spielorders/index.json");
@@ -643,11 +643,11 @@ fn fully_populated_order(label: &str) -> (TemporaryTree, PathBuf, String) {
                     .assign("date_ordered", "2026-08-22")
                     .assign("status", "hold")
                     .assign("vendor", "Tarnwick")
-                    .assign("orderer", "Ada Lovelace")
-                    .assign("ordering_institution", "Example Institute")
+                    .introduce("orderer", "Ada Lovelace")
+                    .introduce("ordering_institution", "Example Institute")
                     .assign("currency", "USD")
-                    .assign("project", "Telescope")
-                    .assign("order_group", "Summer build"),
+                    .introduce("project", "Telescope")
+                    .introduce("order_group", "Summer build"),
                 vec![
                     Assignments::new()
                         .assign("description", "Mirror mount")
@@ -735,11 +735,11 @@ fn every_optional_scalar_clears_explicitly_without_disturbing_the_rest() {
         &directory,
         Assignments::new()
             .assign("vendor", "")
-            .assign("orderer", "")
-            .assign("ordering_institution", "")
+            .introduce("orderer", "")
+            .introduce("ordering_institution", "")
             .assign("currency", "")
-            .assign("project", "")
-            .assign("order_group", ""),
+            .introduce("project", "")
+            .introduce("order_group", ""),
         &FixedCalendar::on(2026, 9, 1),
     );
     let document = result.document;
@@ -774,7 +774,7 @@ const REUSABLE: [(&str, &str, &str); 4] = [
 /// the populated Order uses.
 fn in_its_project(field: &str, assignments: Assignments) -> Assignments {
     if field == "order_group" {
-        assignments.assign("project", "Telescope")
+        assignments.introduce("project", "Telescope")
     } else {
         assignments
     }
@@ -973,7 +973,7 @@ fn a_no_op_assignment_set_reports_unchanged_without_replacing_canonical_bytes() 
             Assignments::new()
                 .assign("title", "  Laser components  ")
                 .assign("status", "hold")
-                .assign("project", "teleSCOPE"),
+                .introduce("project", "teleSCOPE"),
         ),
         &effects(&PlatformFileSystem).on(2026, 12, 25),
     )

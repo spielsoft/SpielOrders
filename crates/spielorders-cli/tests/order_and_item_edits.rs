@@ -104,6 +104,7 @@ fn an_edit_reports_reuse_and_introduction_for_each_category() {
             "order_group=Autumn build",
             // Cleared, so the category is absent.
             "orderer=",
+            "--add-values",
         ],
     ));
     let institution = change(&document, "fact", Some("ordering_institution"));
@@ -501,6 +502,7 @@ fn a_project_change_keeps_only_an_order_group_the_command_names() {
         &[
             "project=Weather station",
             &format!("order_group={}", group.as_str().unwrap()),
+            "--add-values",
         ],
     );
     assert_eq!(kept.status, Some(0), "{}", kept.stdout_text());
@@ -511,7 +513,7 @@ fn a_project_change_keeps_only_an_order_group_the_command_names() {
         "a named group survives the move"
     );
 
-    let cleared = edit(&directory, &["project=Shipping"]);
+    let cleared = edit(&directory, &["project=Shipping", "--add-values"]);
     assert_eq!(cleared.status, Some(0), "{}", cleared.stdout_text());
     assert_eq!(read(&directory)["project"], "Shipping");
     assert!(

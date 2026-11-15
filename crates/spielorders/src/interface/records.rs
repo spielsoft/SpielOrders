@@ -225,6 +225,7 @@ pub(crate) struct SpielordersOrderData {
     facts: Facts,
     items: Vec<Facts>,
     directory: CString,
+    aligned_name: CString,
 }
 
 impl SpielordersOrder {
@@ -246,12 +247,18 @@ impl SpielordersOrder {
             .map(|(item, total)| Facts::of(item_facts(item, total)))
             .collect();
         let directory = path_text(&read.order.paths.directory.absolute_path);
+        let aligned_name = c_text(
+            crate::alignment::aligned_name(&read.order.document, read.vendor.as_ref())
+                .unwrap_or_default()
+                .as_str(),
+        );
         Self {
             data: Box::new(SpielordersOrderData {
                 read,
                 facts,
                 items,
                 directory,
+                aligned_name,
             }),
         }
     }
@@ -300,6 +307,16 @@ pub extern "C" fn spielorders_order_directory(order: &SpielordersOrder) -> PathB
     quietly(PathBytes::new(EMPTY), || {
         PathBytes::new(&order.data.directory)
     })
+}
+
+/// The directory name aligning `order` gives it, from its facts and its Vendor's current
+/// Name; "" when its facts project none. A caller compares it with
+/// SPIELORDERS_ORDER_FIELD_DIRECTORY_NAME to learn whether the directory has drifted
+/// without planning an alignment, which can still be refused, for instance when another
+/// directory already has that name.
+#[unsafe(no_mangle)]
+pub extern "C" fn spielorders_order_aligned_name(order: &SpielordersOrder) -> Text<'_> {
+    quietly(Text::new(EMPTY), || Text::new(&order.data.aligned_name))
 }
 
 /// The README of `order`, read with it; always a handle the caller frees.

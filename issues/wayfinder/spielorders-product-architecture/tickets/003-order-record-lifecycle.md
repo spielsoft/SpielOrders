@@ -49,23 +49,31 @@ the Order is `In Preparation` or on `Hold`; month-level accuracy is sufficient. 
 Neither a fact edit nor that reset renames the Order Directory. [Define the SpielOrders
 package topology](002-package-topology.md) owns directory projection and alignment.
 
-### Reusable free-entry classifications
+### Reusable values
 
-Ordering Institution, Orderer, Project, and Order Group are optional Free-Entry Values,
-at most one from each category per Order, each suggesting values already used in the
-SpielOrder Package. An Order Group belongs to the Project of the Orders that use it: it
-is suggested, reused, and introduced among that Project's groups, or among the groups of
-Orders with no Project, and the same name under two Projects is two groups with no
-uniqueness check across them. Changing an Order's Project clears its group unless the new
-Project already has a group of that name or the same change names a different group.
+Ordering Institution, Orderer, Project, and Order Group are optional values, at most one
+from each category per Order. A Package's values are the ones `vendors.json` keeps beside
+the Vendors and the ones its healthy Orders use, so a Package whose record keeps none
+still has every value its Orders use. An Order accepts only an existing value; a new value
+is added deliberately, on its own or by the change that first uses it. An Order Group
+belongs to a Project, or to the Orders with no Project: it is chosen among that Project's
+groups, and the same name under two Projects is two groups with no uniqueness check across
+them. Changing an Order's Project clears its group unless the new Project already has a
+group of that name or the same change names a different group.
+
+Values compare trimmed and case-insensitively, and a kept spelling is preferred over an
+Order's. Renaming a value changes every Order that uses it, and renaming onto an existing
+value merges the two. Merging keeps one chosen spelling, which every affected Order then
+uses. Deleting a used value requires a replacement, or none, since every value field is
+optional, and every affected Order uses the replacement. A Project's Orders keep their
+groups when it is renamed, merged, replaced, or cleared, and those groups then belong to
+the resulting Project, or to the Orders with no Project. Each of these changes reports how
+many Orders it changes.
 
 Ordering Institution names the institution through which the Order is placed. Orderer is
 a recognition and search aid, not an application account or purchasing actor. Project
 names the principal scientific or administrative effort. Order Group is an intentionally
-user-defined grouping within a Project with no prescribed meaning. The groups are derived
-from the Orders that use them, so a Project or group exists while an Order uses it; adding
-unused values, replacing a used value, and merging spellings would store them as the
-Vendor records are stored.
+user-defined grouping within a Project with no prescribed meaning.
 
 ### Lifecycle
 

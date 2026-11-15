@@ -72,17 +72,23 @@ import SpielOrdersKit
         didSet { if vendorSheet == nil { dialogs.dismissVendor() } }
     }
     var vendorChoices: [String] = []
+    /// All Vendor names, including hidden ones, which must not be offered as new Vendors.
+    var knownVendors: [String] = []
     /// The current values of each reusable-value fact, offered as suggestions and listed by
     /// the value destinations.
     var reusableValues: [Int32: [ReusableValue]] = [:]
     /// The Package's Projects with their Order Groups, listed by the Projects destination.
     var projects: [ProjectGroups] = []
+    /// The rows selected in the Orderers, Institutions, or Projects table.
+    var valueSelection: Set<ValueItem> = []
+    /// The value a table row names in place: a new one, or one being renamed.
+    var naming: ValueItem?
     var library = PackageSession()
     private let preferences = UserDefaults.standard
     var folder: AuthorizedFolder?
     let recents = RecentPackages()
-    /// Remove Order's Undo and Redo, kept apart from the editors' history; see `RemovedOrder`.
-    let removals = UndoManager()
+    /// The window's one Undo history; see `RecordChange`.
+    let undoManager = UndoManager()
     var work: OwnedOperation?
     var committing = false
     var continuingSave = false
@@ -224,6 +230,8 @@ import SpielOrdersKit
             return
         }
         discardEditors()
+        valueSelection = []
+        naming = nil
         self.destination = destination
         refreshLookup()
     }
@@ -383,7 +391,7 @@ import SpielOrdersKit
                 library = candidate
                 root = selected.url
                 reloadReason = nil
-                removals.removeAllActions()
+                undoManager.removeAllActions()
                 discardEditors()
                 contents.stop()
                 let findings = initialized.notices + (await candidate.findings)
@@ -490,7 +498,11 @@ import SpielOrdersKit
                 library = candidate
                 root = selected.url
                 reloadReason = nil
-                if !preserveSelection { removals.removeAllActions() }
+                if preserveSelection {
+                    forgetEdits()
+                } else {
+                    undoManager.removeAllActions()
+                }
                 discardEditors()
                 if let packageReadme { showReadme(packageReadme, of: nil) }
                 canBrowseRecords = !diagnosticOnly
@@ -777,6 +789,8 @@ import SpielOrdersKit
                 }
                 if action == .remove, let directory = disposition.finalDirectory {
                     offerRestore(RemovedOrder(id: row.id, directory: directory))
+                } else {
+                    endRedo()
                 }
                 if disposition.requiresReopen {
                     requireReload(Notice(disposition.summary, details: disposition.message))
@@ -828,7 +842,7 @@ import SpielOrdersKit
 
     /// Release the settled active session and its active restoration bookmark.
     func closePackage() {
-        removals.removeAllActions()
+        undoManager.removeAllActions()
         discardEditors()
         library = PackageSession()
         folder = nil
@@ -847,8 +861,11 @@ import SpielOrdersKit
         inspection = nil
         vendorDetails = nil
         vendorChoices = []
+        knownVendors = []
         reusableValues = [:]
         projects = []
+        valueSelection = []
+        naming = nil
         canBrowseRecords = false
         warnings = [:]
         reloadReason = nil

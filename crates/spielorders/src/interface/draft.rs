@@ -719,9 +719,10 @@ pub extern "C" fn spielorders_draft_row_set(
     })
 }
 
-/// Confirms the value `field` now holds as a new reusable value. `field` is
+/// Asks that saving add the value `field` now holds to the Package's values where the
+/// Package lacks it; without this, a value the Package lacks is refused. `field` is
 /// SPIELORDERS_ORDER_FIELD_ORDERER, _ORDERING_INSTITUTION, _PROJECT, or _ORDER_GROUP and
-/// `row` is -1. Changing the field again withdraws the confirmation.
+/// `row` is -1. Changing the field again withdraws the request.
 #[unsafe(no_mangle)]
 pub extern "C" fn spielorders_draft_confirm(
     draft: &mut SpielordersDraft,

@@ -1,0 +1,35 @@
+{
+  "contract": "spielorders.value.merge",
+  "contract_version": 1,
+  "ok": false,
+  "context": {
+    "root": "<PACKAGE_ROOT>"
+  },
+  "data": null,
+  "diagnostics": [
+    {
+      "code": "vendor_name_duplicate",
+      "severity": "error",
+      "message": "Vendor name duplicate",
+      "field": null,
+      "reason": null,
+      "position": null,
+      "path": ".spielorders/vendors.json",
+      "before": null,
+      "after": null
+    }
+  ],
+  "error": {
+    "code": "damaged_package",
+    "detail": {
+      "severity": "error",
+      "message": "Damaged package",
+      "field": null,
+      "reason": null,
+      "position": null,
+      "path": ".",
+      "before": null,
+      "after": null
+    }
+  }
+}

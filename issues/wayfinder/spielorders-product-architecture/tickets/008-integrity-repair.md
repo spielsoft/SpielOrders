@@ -34,7 +34,7 @@ The diagnosis and repair core is built; the core crate's public surface is the r
 
 ### Vendor and identity failures
 
-- A malformed or internally inconsistent `vendors.json`, including duplicate Vendor IDs or package-duplicate Vendor Names, damages the package because the aggregate Vendor set cannot be trusted. Vendor Merge is never inferred as repair.
+- A malformed or internally inconsistent `vendors.json`, including duplicate Vendor IDs or package-duplicate Vendor Names, damages the package because the aggregate Vendor set cannot be trusted. A Vendor merge is never inferred as repair.
 - An Unresolved Vendor Reference damages only its Order. Explicit repair requires choosing an existing Vendor, deliberately creating a specified Vendor, or clearing the reference. Directory names, contact text, other Orders, and Supporting Material are never evidence for an inferred replacement.
 - Every Order Directory sharing a duplicate Order ID is a Damaged Order. Explicit repair requires the user to designate the one Order that retains the existing ID. Each remaining directory must be moved outside the Orders Directory using ordinary filesystem management or explicitly adopted as a new Order with a newly generated immutable Order ID. SpielOrders never chooses the survivor or regenerates IDs automatically.
 

@@ -113,18 +113,15 @@ extension PackageSession {
         defer { spielorders_readme_free(readme) }
         return .healthy(OrderDetails(readmeText: String(cString: spielorders_readme_text(readme)),
                                      readmeState: spielorders_readme_state(readme), notices: notices,
-                                     drifted: drifted(order, token: cancellation.token)))
+                                     drifted: drifted(order)))
     }
 
-    /// The library plans no operation to align an Order whose directory already has its
-    /// projected name. An alignment it refuses is not offered either.
-    private func drifted(_ order: UnsafeMutablePointer<SpielordersOrder>, token: UInt64) -> Bool {
-        var plan: UnsafeMutablePointer<SpielordersPlan>?
-        defer { spielorders_plan_free(plan) }
-        guard spielorders_order_plan_align(order, token, &plan, nil) == SPIELORDERS_RESULT_OK, let plan else {
-            return false
-        }
-        return spielorders_plan_operation_count(plan) > 0
+    /// Whether the directory name differs from the name aligning the Order would give it. An
+    /// Order whose facts project no name is not offered alignment.
+    private func drifted(_ order: UnsafeMutablePointer<SpielordersOrder>) -> Bool {
+        let aligned = String(cString: spielorders_order_aligned_name(order))
+        let directory = String(cString: spielorders_order_field(order, SPIELORDERS_ORDER_FIELD_DIRECTORY_NAME))
+        return !aligned.isEmpty && aligned != directory
     }
 
     func readOrder(_ row: OrderRow, token: UInt64) throws -> (LibraryHandle<SpielordersOrder>, [LibraryEntry]) {

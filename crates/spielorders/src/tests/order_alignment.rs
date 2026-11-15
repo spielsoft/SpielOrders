@@ -54,7 +54,7 @@ fn drifted_order(
         input.0 = input.0.assign("vendor", vendor);
     }
     if let Some(orderer) = orderer {
-        input.0 = input.0.assign("orderer", orderer);
+        input.0 = input.0.introduce("orderer", orderer);
     }
     let plan = crate::plan(
         &adoption(root, &directory, &input),
@@ -175,7 +175,7 @@ fn surrounded_drifted_order(label: &str) -> (TemporaryTree, PathBuf, String) {
                     .assign("date_ordered", "2026-08-22")
                     .assign("status", "hold")
                     .assign("vendor", "Tarnwick")
-                    .assign("orderer", "Ada Lovelace"),
+                    .introduce("orderer", "Ada Lovelace"),
                 Vec::new(),
             ),
         ),
@@ -839,7 +839,7 @@ fn a_different_order_left_at_the_source_path_is_refused_though_it_is_still_a_dir
                     .assign("date_ordered", "2026-08-22")
                     .assign("status", "hold")
                     .assign("vendor", "Tarnwick")
-                    .assign("orderer", "Ada Lovelace"),
+                    .introduce("orderer", "Ada Lovelace"),
                 Vec::new(),
             ),
         ),

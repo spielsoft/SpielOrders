@@ -234,54 +234,72 @@ import XCTest
         defer { try? FileManager.default.removeItem(at: root) }
         let app = launch(root)
         newOrder(in: app)
-        let vendor = app.buttons["order.editor.vendor"]
-        XCTAssertTrue(vendor.waitForExistence(timeout: 10))
-        vendor.click()
-        app.buttons["vendor.chooser.new"].click()
+        let vendor = app.comboBoxes["order.editor.vendor"]
+        beginNewVendor(named: "Optics Supplier", in: app)
         let name = element("vendor.sheet.name", in: app)
         XCTAssertTrue(name.waitForExistence(timeout: 10))
-        replace(name, with: "Optics Supplier", in: app)
+        XCTAssertEqual(name.value as? String, "Optics Supplier")
         app.typeKey(.return, modifierFlags: .command)
-        wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Optics Supplier"), object: vendor)], timeout: 10)
-        vendor.click()
-        let search = app.searchFields["vendor.chooser.search"]
-        XCTAssertTrue(search.waitForExistence(timeout: 5))
-        search.click()
-        search.typeText("12345")
-        XCTAssertEqual(search.value as? String, "12345")
-        search.typeKey(.return, modifierFlags: [])
-        XCTAssertTrue(search.exists)
-        app.typeKey(.escape, modifierFlags: [])
-        XCTAssertTrue(search.waitForNonExistence(timeout: 5))
-        wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Optics Supplier"), object: vendor)], timeout: 10)
-        vendor.click()
-        app.buttons["vendor.chooser.clear"].click()
-        wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "None"), object: vendor)], timeout: 10)
-        XCTAssertEqual(try ordersDirectory(root), [])
-        vendor.click()
-        search.click()
-        search.typeText("supp")
-        search.typeKey(.return, modifierFlags: [])
         wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Optics Supplier"), object: vendor)], timeout: 10)
 
-        vendor.click()
-        app.buttons["vendor.chooser.new"].click()
+        // Typing filters the list; the text that names no Vendor offers to add it last.
+        replace(vendor, with: "supp", in: app)
+        XCTAssertTrue(vendor.textFields["Optics Supplier"].waitForExistence(timeout: 5))
+        XCTAssertTrue(vendor.textFields["New Vendor “supp”…"].exists)
+        vendor.textFields["Optics Supplier"].click()
+        wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Optics Supplier"), object: vendor)], timeout: 10)
+
+        // Clearing the text chooses no Vendor.
+        replace(vendor, with: "", in: app)
+        app.typeKey(.delete, modifierFlags: [])
+        app.typeKey(.tab, modifierFlags: [])
+        wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", ""), object: vendor)], timeout: 10)
+        XCTAssertEqual(try ordersDirectory(root), [])
+
+        // Text that names no Vendor is refused where it was typed, and nothing is created.
+        replace(vendor, with: "Nobody", in: app)
+        app.typeKey(.tab, modifierFlags: [])
+        element("editor.create", in: app).click()
+        XCTAssertTrue(app.buttons["order.editor.vendor.problem"].waitForExistence(timeout: 10))
+        XCTAssertEqual(try ordersDirectory(root), [])
+
+        beginNewVendor(named: "Vacuum Supplier", in: app)
         XCTAssertTrue(name.waitForExistence(timeout: 10))
-        replace(name, with: "Vacuum Supplier", in: app)
         app.typeKey(.return, modifierFlags: .command)
         wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Vacuum Supplier"), object: vendor)], timeout: 10)
-        vendor.click()
-        search.click()
-        search.typeText("supp")
-        search.typeKey(.downArrow, modifierFlags: [])
-        search.typeKey(.upArrow, modifierFlags: [])
-        search.typeKey(.return, modifierFlags: [])
-        wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Optics Supplier"), object: vendor)], timeout: 10)
-        vendor.click()
-        search.click()
-        search.typeKey(.downArrow, modifierFlags: [])
-        search.typeKey(.return, modifierFlags: [])
-        wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Vacuum Supplier"), object: vendor)], timeout: 10)
+    }
+
+    func testNewValueFromChooser() throws {
+        let root = try makePackage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try addOrder(in: root, title: "Coils", project: "Greenhouse", group: "Misting")
+        let app = launch(root)
+        app.tables["orders.table"].staticTexts.matching(NSPredicate(format: "value == %@", "Coils")).firstMatch.click()
+        let orderer = app.comboBoxes["order.editor.orderer"]
+        XCTAssertTrue(orderer.waitForExistence(timeout: 10))
+        replace(orderer, with: "Ada", in: app)
+        let new = orderer.textFields["New Orderer “Ada”…"]
+        XCTAssertTrue(new.waitForExistence(timeout: 5))
+        new.click()
+        // The value is added only after the confirmation.
+        let cancel = app.sheets.buttons["order.editor.addValue.cancel"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+        cancel.click()
+        XCTAssertEqual(orderer.value as? String, "")
+        replace(orderer, with: "Ada", in: app)
+        orderer.textFields["New Orderer “Ada”…"].click()
+        app.sheets.buttons["order.editor.addValue.confirm"].click()
+        wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Ada"), object: orderer)], timeout: 10)
+
+        // A group added from the field belongs to the Order's Project.
+        let group = app.comboBoxes["order.editor.order_group"]
+        replace(group, with: "Cooling", in: app)
+        group.textFields["New Group “Cooling”…"].click()
+        app.sheets.buttons["order.editor.addValue.confirm"].click()
+        wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Cooling"), object: group)], timeout: 10)
+        showDestination("projects", in: app)
+        let cooling = app.descendants(matching: .any).matching(identifier: "projects.row.Greenhouse/Cooling.orders").firstMatch
+        XCTAssertTrue(cooling.waitForExistence(timeout: 10))
     }
 
     func testContactEditing() throws {
@@ -291,8 +309,7 @@ import XCTest
         let originalVendors = try Data(contentsOf: vendorsFile)
         let app = launch(root)
         newOrder(in: app)
-        app.buttons["order.editor.vendor"].click()
-        app.buttons["vendor.chooser.new"].click()
+        beginNewVendor(named: "Contact supplier", in: app)
         let add = app.buttons["vendor.sheet.contacts.add"]
         XCTAssertTrue(add.waitForExistence(timeout: 10))
         add.click()
@@ -314,8 +331,7 @@ import XCTest
         let title = element("order.editor.title", in: app)
         XCTAssertTrue(title.waitForExistence(timeout: 10))
         replace(title, with: "Order draft", in: app)
-        app.buttons["order.editor.vendor"].click()
-        app.buttons["vendor.chooser.new"].click()
+        beginNewVendor(named: "Vendor draft", in: app)
         let name = element("vendor.sheet.name", in: app)
         XCTAssertTrue(name.waitForExistence(timeout: 10))
         replace(name, with: "Vendor draft", in: app)
@@ -365,8 +381,7 @@ import XCTest
         let title = element("order.editor.title", in: app)
         XCTAssertTrue(title.waitForExistence(timeout: 10))
         replace(title, with: "Keep this Order", in: app)
-        app.buttons["order.editor.vendor"].click()
-        app.buttons["vendor.chooser.new"].click()
+        beginNewVendor(named: "Vendor draft", in: app)
         let name = element("vendor.sheet.name", in: app)
         XCTAssertTrue(name.waitForExistence(timeout: 10))
         replace(name, with: "Discard this Vendor", in: app)
@@ -417,8 +432,7 @@ import XCTest
         replace(title, with: "Uncreated Order", in: app)
         let vendorName = element("vendor.sheet.name", in: app)
         for discard in [false, true] {
-            app.buttons["order.editor.vendor"].click()
-            app.buttons["vendor.chooser.new"].click()
+            beginNewVendor(named: "Untouched supplier", in: app)
             XCTAssertTrue(vendorName.waitForExistence(timeout: 10))
             app.typeKey("q", modifierFlags: .command)
             XCTAssertTrue(vendorName.waitForNonExistence(timeout: 5))

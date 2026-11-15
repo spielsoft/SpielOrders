@@ -31,18 +31,15 @@ struct RecordStateBadge: View {
         model.reloadReason?.summary ?? "Reload the Package before editing."
     }
 
-    /// Every problem the refused save located, with where it is; each field and cell is also
-    /// marked, but a hidden column or an unshown fact is not.
+    /// Every problem the refused save located, in plain words, with the row it is in; each
+    /// field and cell is also marked, but a hidden column or an unshown fact is not.
     private var problems: [String] {
         let row = editor.kind == .order ? "Item" : "Contact"
-        return editor.problems.map { problem in
-            let field = RecordFieldLabel.of(problem.field)
-            if problem.row >= 0 {
-                return "\(row) \(problem.row + 1), \(field): \(problem.message)"
-            }
-            return field.isEmpty ? problem.message : "\(field): \(problem.message)"
+        let lines = editor.problems.map { problem in
+            let statement = problem.statement(for: RecordFieldLabel.of(problem.field))
+            return problem.row >= 0 ? "\(row) \(problem.row + 1): \(statement)" : statement
         }
-        .filter { $0 != editor.failure?.summary }
+        return Notice.list(lines).map(\.summary).filter { $0 != editor.failure?.summary }
     }
 }
 

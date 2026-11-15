@@ -88,8 +88,21 @@ import Testing
     #expect(host.fittingSize.height == bounds.upperBound)
 }
 
+@Test @MainActor func readmeTextSpelling() throws {
+    var text = "Caf\u{e9}"
+    let binding = Binding(get: { text }, set: { text = $0 })
+    let host = NSHostingView(rootView: editor(binding))
+    let window = hostingWindow(host)
+    defer { window.close() }
+    let native = try #require(nativeTextView(in: host))
+    text = "Cafe\u{301}"
+    host.rootView = editor(binding)
+    host.layoutSubtreeIfNeeded()
+    #expect(native.string.utf8.elementsEqual(text.utf8))
+}
+
 @Test(arguments: ["Package README", "Order README"]) @MainActor
-func markdownUndo(label: String) throws {
+func markdownInput(label: String) throws {
     var text = ""
     let host = NSHostingView(rootView: editor(Binding(get: { text }, set: { text = $0 }), label: label,
                                               identifier: "markdown.editor"))
@@ -98,19 +111,12 @@ func markdownUndo(label: String) throws {
     let native = try #require(nativeTextView(in: host))
     window.makeFirstResponder(native)
     let markdown = "# Heading\n**Bold** and `code` [link](https://example.invalid)\n"
-    let undo = try #require(native.undoManager)
-    undo.beginUndoGrouping()
     native.insertText(markdown, replacementRange: NSRange(location: 0, length: 0))
-    undo.endUndoGrouping()
     #expect(text == markdown)
-    undo.undo()
-    #expect(native.string == "")
-    #expect(text == "")
-    undo.redo()
-    #expect(text == markdown)
+    #expect(native.string == markdown)
 }
 
-@Test @MainActor func documentUndo() throws {
+@Test @MainActor func documentText() throws {
     var text = ""
     let binding = Binding(get: { text }, set: { text = $0 })
     let first = NSHostingView(rootView: editor(binding, label: "Order README", identifier: "order.readme.editor"))
@@ -127,5 +133,4 @@ func markdownUndo(label: String) throws {
     let current = try #require(nativeTextView(in: next))
     window.makeFirstResponder(current)
     #expect(current.string == "")
-    #expect(try #require(current.undoManager).canUndo == false)
 }

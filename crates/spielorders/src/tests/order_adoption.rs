@@ -186,11 +186,11 @@ fn dry_run_is_complete_and_has_no_filesystem_or_identity_effect() {
             .assign("date_ordered", "2020-01-02")
             .assign("status", "hold")
             .assign("vendor", "Nethermoor")
-            .assign("orderer", " Ada ")
-            .assign("ordering_institution", " Example Institute ")
+            .introduce("orderer", " Ada ")
+            .introduce("ordering_institution", " Example Institute ")
             .assign("currency", "USD")
-            .assign("project", " Clock ")
-            .assign("order_group", " Legacy "),
+            .introduce("project", " Clock ")
+            .introduce("order_group", " Legacy "),
         vec![
             Assignments::new()
                 .assign("description", " Flange ")
@@ -217,6 +217,7 @@ fn dry_run_is_complete_and_has_no_filesystem_or_identity_effect() {
             "commit_order_record",
             "remove_staging",
             "remove_staging",
+            "replace_vendor_record",
             "refresh_package_index",
         ]
     );
@@ -721,7 +722,7 @@ fn reusable_value_outcome_change_after_planning_rejects_before_identity_or_write
             .assign("title", "Legacy")
             .assign("date_ordered", "2020-05-06")
             .assign("status", "complete")
-            .assign("orderer", "Ada"),
+            .introduce("orderer", "Ada"),
         Vec::new(),
     );
     let plan = crate::plan(
@@ -736,7 +737,7 @@ fn reusable_value_outcome_change_after_planning_rejects_before_identity_or_write
             tree.path(),
             Assignments::new()
                 .assign("title", "Intervening")
-                .assign("orderer", "ADA"),
+                .introduce("orderer", "ADA"),
         ),
         &effects(&PlatformFileSystem).on(2026, 8, 26),
     )

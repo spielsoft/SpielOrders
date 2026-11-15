@@ -1,0 +1,53 @@
+{
+  "contract": "spielorders.value.rename",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "root": "<PACKAGE_ROOT>"
+  },
+  "data": {
+    "outcome": "committed_with_warning",
+    "committed": true,
+    "operations": [
+      {
+        "kind": "replace_order_record",
+        "path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace/.spielorders/order.json"
+      },
+      {
+        "kind": "replace_order_record",
+        "path": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/order.json"
+      },
+      {
+        "kind": "replace_vendor_record",
+        "path": "<PACKAGE_ROOT>/.spielorders/vendors.json"
+      },
+      {
+        "kind": "refresh_package_index",
+        "path": "<PACKAGE_ROOT>/.spielorders/index.json"
+      }
+    ],
+    "changes": [],
+    "values": [
+      {
+        "value": "Telescope array",
+        "usage_count": "2"
+      }
+    ],
+    "final_path": null,
+    "orders": 2
+  },
+  "diagnostics": [
+    {
+      "code": "index_refresh_failed",
+      "severity": "warning",
+      "message": "Index refresh failed",
+      "field": null,
+      "reason": null,
+      "position": null,
+      "path": ".spielorders/index.json",
+      "before": null,
+      "after": null
+    }
+  ],
+  "error": null
+}

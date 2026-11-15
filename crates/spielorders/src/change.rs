@@ -27,7 +27,7 @@ use crate::{
         plan_package_initialization,
     },
     metadata::{OrderDocument, Vendor},
-    mutation::{MutationReport, PlannedOperation},
+    mutation::{MutationReport, OperationKind, PlannedOperation},
     operations::refuse_linked_root,
     order_edits::{OrderEditPlan, OrderEditResult, commit_order_edit, plan_order_save},
     order_reads::read_order,
@@ -42,6 +42,11 @@ use crate::{
     repair::{RepairPlan, RepairScope, commit_repair, plan_repair},
     repair_cases::{RepairAction, RepairResolution},
     restoration::{OrderRestorePlan, OrderRestoreResult, commit_order_restore, plan_order_restore},
+    search::ReusableValueKind,
+    value_changes::{
+        InUse, ValueChangePlan, ValueChangeResult, ValueRequest, commit_value_change,
+        plan_value_change,
+    },
     vendor_reads::read_vendor,
     vendors::{
         VendorMutationPlan, VendorMutationResult, commit_vendor_mutation, plan_vendor_creation,
@@ -50,8 +55,8 @@ use crate::{
 };
 use std::path::{Path, PathBuf};
 
-/// One canonical `field=value` assignment. `confirmed` is the caller's explicit
-/// confirmation of a genuinely new Reusable Free-Entry Value.
+/// One canonical `field=value` assignment. `confirmed` asks that the value be added to the
+/// Package's values where the Package lacks it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Assignment {
     pub(crate) field: String,
@@ -70,13 +75,14 @@ impl Assignments {
         Self::default()
     }
 
-    /// Assigns `value`, reusing an existing canonical spelling or clearing.
+    /// Assigns `value`, reusing an existing canonical spelling or clearing; a value the
+    /// Package lacks is refused.
     pub fn assign(self, field: impl Into<String>, value: impl Into<String>) -> Self {
         self.with(field.into(), value.into(), false)
     }
 
-    /// Assigns `value` and confirms it as a genuinely new Reusable Free-Entry Value. A
-    /// field that is not one refuses the confirmation.
+    /// Assigns `value`, adding it to the Package's values where the Package lacks it. A
+    /// field that holds no such value refuses the request.
     pub fn introduce(self, field: impl Into<String>, value: impl Into<String>) -> Self {
         self.with(field.into(), value.into(), true)
     }
@@ -229,10 +235,53 @@ pub enum Change {
         vendor: VendorRef,
         hidden: bool,
     },
-    /// Removes a Vendor no healthy Order references, with its Contacts.
+    /// Removes a Vendor and its Contacts. `in_use` says what each Order referencing it
+    /// references instead: refused while one does, another Vendor, or none.
     DeleteVendor {
         root: PathBuf,
         vendor: VendorRef,
+        in_use: InUse<VendorRef>,
+    },
+    /// Every Order referencing one of `vendors` references `keep` instead, which gains
+    /// their Contacts; the others are deleted.
+    MergeVendors {
+        root: PathBuf,
+        vendors: Vec<VendorRef>,
+        keep: VendorRef,
+    },
+    /// Keeps `value` among the Package's values of `kind`; an Order Group belongs to
+    /// `project`, or to the Orders with no Project for `None`.
+    AddValue {
+        root: PathBuf,
+        kind: ReusableValueKind,
+        project: Option<String>,
+        value: String,
+    },
+    /// Respells `value` as `to` in every Order that uses it; renaming onto another existing
+    /// value merges the two under `to`.
+    RenameValue {
+        root: PathBuf,
+        kind: ReusableValueKind,
+        project: Option<String>,
+        value: String,
+        to: String,
+    },
+    /// Makes `values` one value spelled `keep`, which every Order using one of them uses.
+    MergeValues {
+        root: PathBuf,
+        kind: ReusableValueKind,
+        project: Option<String>,
+        values: Vec<String>,
+        keep: String,
+    },
+    /// Takes `value` out of the Package; `in_use` says what each Order using it uses
+    /// instead.
+    DeleteValue {
+        root: PathBuf,
+        kind: ReusableValueKind,
+        project: Option<String>,
+        value: String,
+        in_use: InUse<String>,
     },
     /// An editor's whole draft of the Vendor `original`: `assignments` over its facts, and
     /// `contacts` as its complete ordered Contact list, one row per Contact. Every rule the
@@ -268,6 +317,11 @@ impl Change {
             | Self::CreateVendor { root, .. }
             | Self::SetVendorHidden { root, .. }
             | Self::DeleteVendor { root, .. }
+            | Self::MergeVendors { root, .. }
+            | Self::AddValue { root, .. }
+            | Self::RenameValue { root, .. }
+            | Self::MergeValues { root, .. }
+            | Self::DeleteValue { root, .. }
             | Self::RestoreOrder { root, .. }
             | Self::SaveVendor { root, .. } => root,
             Self::SaveOrder { order, .. }
@@ -296,6 +350,7 @@ enum PlanKind {
     RemoveOrder(Box<OrderRemovalPlan>),
     RestoreOrder(Box<OrderRestorePlan>),
     Vendor(Box<VendorMutationPlan>),
+    Values(Box<ValueChangePlan>),
     WriteReadme(Box<ReadmeWritePlan>),
     Repair(Box<RepairPlan>),
 }
@@ -313,6 +368,7 @@ pub enum ChangeResult {
     RemoveOrder(Box<OrderRemovalResult>),
     RestoreOrder(Box<OrderRestoreResult>),
     Vendor(Box<VendorMutationResult>),
+    Values(Box<ValueChangeResult>),
     WriteReadme,
     Repair,
 }
@@ -421,11 +477,31 @@ impl Plan {
             PlanKind::RemoveOrder(plan) => planned(&plan.operations),
             PlanKind::RestoreOrder(plan) => planned(&plan.operations),
             PlanKind::Vendor(plan) => planned(&plan.operations),
+            PlanKind::Values(plan) => planned(&plan.operations),
             PlanKind::WriteReadme(plan) => planned(&plan.operations),
             PlanKind::Repair(plan) => match &**plan {
                 RepairPlan::Artifact(plan) => planned(&plan.operations),
                 RepairPlan::Semantic(plan) => planned(&plan.operations),
             },
+        }
+    }
+
+    /// How many Order records committing this plan rewrites.
+    pub fn order_count(&self) -> usize {
+        match &self.0 {
+            PlanKind::Values(plan) => plan.order_count(),
+            _ => self
+                .operations()
+                .iter()
+                .filter(|(kind, _)| {
+                    [
+                        OperationKind::ReplaceOrderRecord.code(),
+                        OperationKind::WriteOrderRecord.code(),
+                        OperationKind::CommitOrderRecord.code(),
+                    ]
+                    .contains(&kind.as_str())
+                })
+                .count(),
         }
     }
 
@@ -478,6 +554,7 @@ variants!(PlanKind, PlanKind {
     RemoveOrder(OrderRemovalPlan),
     RestoreOrder(OrderRestorePlan),
     Vendor(VendorMutationPlan),
+    Values(ValueChangePlan),
     WriteReadme(ReadmeWritePlan),
     Repair(RepairPlan),
 });
@@ -490,6 +567,7 @@ variants!(ChangeResult, ChangeResult {
     RemoveOrder(OrderRemovalResult),
     RestoreOrder(OrderRestoreResult),
     Vendor(VendorMutationResult),
+    Values(ValueChangeResult),
 });
 
 impl From<PackageInitializationPlan> for PlanKind {
@@ -591,11 +669,112 @@ pub fn plan<E: Effects>(change: &Change, effects: &E) -> Answer<Plan> {
             }
             .map(Plan::of)
         }),
-        Change::DeleteVendor { root, vendor } => {
-            settled(vendor_id(root, vendor, filesystem), |id| {
-                plan_vendor_delete(root, &id, filesystem).map(Plan::of)
+        Change::DeleteVendor {
+            root,
+            vendor,
+            in_use,
+        } => settled(vendor_id(root, vendor, filesystem), |id| {
+            let in_use = match in_use {
+                InUse::Refuse => return plan_vendor_delete(root, &id, filesystem).map(Plan::of),
+                InUse::Replace(replacement) => {
+                    vendor_id(root, replacement, filesystem).map(InUse::Replace)
+                }
+                InUse::Clear => Ok(InUse::Clear),
+            };
+            settled(in_use, |in_use| {
+                plan_value_change(
+                    root,
+                    &ValueRequest::DeleteVendor { vendor: id, in_use },
+                    filesystem,
+                )
+                .map(Plan::of)
+            })
+        }),
+        Change::MergeVendors {
+            root,
+            vendors,
+            keep,
+        } => {
+            let resolved = vendors
+                .iter()
+                .map(|vendor| vendor_id(root, vendor, filesystem))
+                .collect::<Result<Vec<_>, _>>()
+                .and_then(|vendors| Ok((vendors, vendor_id(root, keep, filesystem)?)));
+            settled(resolved, |(vendors, keep)| {
+                plan_value_change(
+                    root,
+                    &ValueRequest::MergeVendors { vendors, keep },
+                    filesystem,
+                )
+                .map(Plan::of)
             })
         }
+        Change::AddValue {
+            root,
+            kind,
+            project,
+            value,
+        } => plan_value_change(
+            root,
+            &ValueRequest::Add {
+                kind: *kind,
+                project: project.clone(),
+                value: value.clone(),
+            },
+            filesystem,
+        )
+        .map(Plan::of),
+        Change::RenameValue {
+            root,
+            kind,
+            project,
+            value,
+            to,
+        } => plan_value_change(
+            root,
+            &ValueRequest::Replace {
+                kind: *kind,
+                project: project.clone(),
+                values: vec![value.clone()],
+                with: to.clone(),
+            },
+            filesystem,
+        )
+        .map(Plan::of),
+        Change::MergeValues {
+            root,
+            kind,
+            project,
+            values,
+            keep,
+        } => plan_value_change(
+            root,
+            &ValueRequest::Replace {
+                kind: *kind,
+                project: project.clone(),
+                values: values.clone(),
+                with: keep.clone(),
+            },
+            filesystem,
+        )
+        .map(Plan::of),
+        Change::DeleteValue {
+            root,
+            kind,
+            project,
+            value,
+            in_use,
+        } => plan_value_change(
+            root,
+            &ValueRequest::Delete {
+                kind: *kind,
+                project: project.clone(),
+                value: value.clone(),
+                in_use: in_use.clone(),
+            },
+            filesystem,
+        )
+        .map(Plan::of),
         Change::SaveVendor {
             root,
             assignments,
@@ -669,6 +848,7 @@ pub fn commit<E: Effects>(plan: Plan, effects: &E) -> Answer<Report> {
         PlanKind::Vendor(plan) => {
             commit_vendor_mutation(*plan, &new_uuid, filesystem).map(Report::of)
         }
+        PlanKind::Values(plan) => commit_value_change(*plan, filesystem).map(Report::of),
         PlanKind::WriteReadme(plan) => commit_readme_write(*plan, filesystem)
             .map(|report| Report::with(report, |()| ChangeResult::WriteReadme)),
         PlanKind::Repair(plan) => commit_repair(*plan, &new_uuid, filesystem)

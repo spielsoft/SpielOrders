@@ -21,12 +21,28 @@ Item positions are one-based. Description, Quantity, and Unit Price are required
 Catalog Number and `notes` are optional. `notes` holds multiline remarks tied to that one
 Item, such as a specification, quote reference, or permitted substitution; keep remarks
 about the whole Order in its README. `order item list` shows the ordered collection.
-Assigning `orderer`, `ordering_institution`, `project`, or `order_group` reuses an
-existing value that matches case-insensitively, keeping its stored spelling, and otherwise
-introduces the new value; the response reports each as `reused` or `new`. An Order Group
-belongs to its Project: it is reused or introduced among that Project's groups, so the
-same name under two Projects is two groups. Changing an Order's Project clears its group
+Assigning `orderer`, `ordering_institution`, `project`, or `order_group` accepts only a
+value the Package has, matched case-insensitively and stored in its existing spelling. A
+value the Package lacks is refused by name; add it first, or pass `--add-values` to
+`add-order`, `adopt-order`, or `order edit` to add every such value in the same change. The
+response reports each value as `reused` or `new`. An Order Group belongs to its Project: it
+is chosen among that Project's groups, so the same name under two Projects is two groups. Changing an Order's Project clears its group
 unless the new Project already has a group of that name or the same command assigns one.
+
+`value add`, `rename`, `merge`, and `delete` change a kind's values; every Order using a
+changed value follows it, and the response's `orders` is how many Orders changed. An
+`order_group` command takes `--project` for the Project the group belongs to. Renaming
+onto an existing value merges the two. Deleting a used value needs `--replacement VALUE`
+or `--clear`. A Project's groups go with its Orders.
+
+```sh
+spielorders value add orderer "Emmy Noether" --root "$package"
+spielorders value add orderer "E. Noether" --root "$package"
+spielorders value merge orderer "Emmy Noether" "E. Noether" --keep "Emmy Noether" --root "$package" --dry-run
+spielorders value delete orderer "E. Noether" --replacement "Emmy Noether" --root "$package"
+spielorders value add project "Clock" --root "$package"
+spielorders value rename project "Clock" "Telescope" --root "$package"
+```
 
 `order readme` reads or writes the README as its help describes; `order validate`
 checks the scoped Order. `order align` explicitly aligns its directory name with its

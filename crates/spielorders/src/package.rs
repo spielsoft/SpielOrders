@@ -50,6 +50,7 @@ pub(crate) fn index_semantics_are_valid(index: &IndexDocument) -> bool {
     let vendors = VendorsDocument {
         schema_version: Version1,
         vendors: index.vendors.clone(),
+        values: index.values.clone(),
     };
     let normalized_index = PackageMetadata::new(&orders, &vendors)
         .with_index(index)
@@ -213,11 +214,13 @@ impl<'a> PackageMetadata<'a> {
                 }
             }
             normalize_vendors(&mut index.vendors);
+            crate::values::normalize(&mut index.values);
         }
 
         if failures.is_empty() {
             let mut vendors = self.vendors.clone();
             normalize_vendors(&mut vendors.vendors);
+            crate::values::normalize(&mut vendors.values);
             Ok(ValidatedPackageMetadata { vendors, index })
         } else {
             Err(failures)

@@ -8,7 +8,7 @@ use crate::{
         preserve_file,
     },
     filesystem::staging_path,
-    metadata::{IndexDocument, VendorsDocument, Version1, VersionDocument},
+    metadata::{IndexDocument, StoredValues, VendorsDocument, Version1, VersionDocument},
     mutation::{CommitFailure, MutationReport},
     operations::{FailedOperation, FailedPath, refuse_linked_root},
     paths::{
@@ -226,6 +226,7 @@ pub(crate) fn plan_package_initialization<F: FileSystem>(
         let vendors = VendorsDocument {
             schema_version: Version1,
             vendors: Vec::new(),
+            values: StoredValues::default(),
         }
         .to_json_bytes()
         .expect("empty version 1 Vendors serialization is infallible");
@@ -233,6 +234,7 @@ pub(crate) fn plan_package_initialization<F: FileSystem>(
             schema_version: Version1,
             orders: Vec::new(),
             vendors: Vec::new(),
+            values: StoredValues::default(),
         }
         .to_json_bytes()
         .expect("empty version 1 Package Index serialization is infallible");

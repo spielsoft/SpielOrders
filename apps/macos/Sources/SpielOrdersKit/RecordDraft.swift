@@ -4,6 +4,8 @@ import Foundation
 /// One problem a refused save located in a draft.
 public struct DraftProblem: Sendable {
     let code: Int32
+    /// Why an assignment was refused: a `SPIELORDERS_REASON_*` constant, or -1.
+    let reason: Int32
     /// A `SPIELORDERS_*_FIELD_*` constant, or -1 when the problem is about the whole draft.
     public let field: Int32
     /// The zero-based row, or -1 for the record's own facts.
@@ -13,6 +15,7 @@ public struct DraftProblem: Sendable {
 
     init(code: Int32, field: Int32, row: Int, message: String) {
         self.code = code
+        reason = -1
         self.field = field
         self.row = row
         self.message = message
@@ -21,6 +24,7 @@ public struct DraftProblem: Sendable {
 
     init(_ entry: LibraryEntry) {
         code = entry.code
+        reason = entry.reason
         field = entry.field
         row = Int(entry.row)
         message = entry.message
@@ -32,10 +36,6 @@ public struct DraftProblem: Sendable {
 public struct SaveRefusal: Error, LocalizedError, Sendable {
     private let result: Int32
     public let problems: [DraftProblem]
-    /// The reusable-value facts the library asks the user to confirm as new values.
-    public var unconfirmedFields: [Int32] {
-        problems.filter { $0.code == SPIELORDERS_FAILURE_UNCONFIRMED_REUSABLE_VALUE }.map(\.field)
-    }
     public var stale: Bool {
         problems.contains { [SPIELORDERS_FAILURE_PRECONDITIONS_CHANGED, SPIELORDERS_FAILURE_PLAN_EVIDENCE_UNCONFIRMED].contains($0.code) }
     }
@@ -153,7 +153,8 @@ public final class RecordDraft: @unchecked Sendable {
         }
     }
 
-    /// Confirms the value `field` now holds as a new reusable value.
+    /// Asks that saving add the value `field` now holds to the Package's values; without it,
+    /// the library refuses a value the Package lacks. Setting the field again withdraws it.
     public func confirm(_ field: Int32) throws {
         try withDraft { draft in
             var outcome: UnsafeMutablePointer<SpielordersEntries>?
@@ -168,11 +169,10 @@ public final class RecordDraft: @unchecked Sendable {
 }
 
 /// One current value of a reusable-value fact, such as an Orderer.
-public struct ReusableValue: Sendable, Identifiable {
+public struct ReusableValue: Sendable {
     public let name: String
     /// How many Orders use the value, as the library counts them.
     public let orderCount: Int
-    public var id: String { name }
 }
 
 /// A Project, or the Orders with no Project, with its Order Groups.

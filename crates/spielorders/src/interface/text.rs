@@ -81,6 +81,19 @@ impl<'a> OptionalText<'a> {
     }
 }
 
+/// The `count` texts a C caller passed as an array beginning at `first`, each as UTF-8;
+/// `None` for a negative count, a NULL array of some, or a text that is not UTF-8.
+pub(crate) fn texts<'a>(first: Option<NonNull<Text<'a>>>, count: i64) -> Option<Vec<&'a str>> {
+    let count = usize::try_from(count).ok()?;
+    if count == 0 {
+        return Some(Vec::new());
+    }
+    // SAFETY: the header's contract is that a non-NULL `first` points at `count` texts
+    // valid for the call.
+    let texts = unsafe { std::slice::from_raw_parts(first?.as_ptr(), count) };
+    texts.iter().map(|text| text.to_str()).collect()
+}
+
 impl<'a> From<&'a CStr> for OptionalText<'a> {
     fn from(text: &'a CStr) -> Self {
         Self::new(text)

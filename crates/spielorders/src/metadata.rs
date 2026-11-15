@@ -234,6 +234,12 @@ pub struct NonBlankString(String);
 text_deref!(NonBlankString);
 
 impl NonBlankString {
+    /// `text` trimmed, or `None` where nothing is left.
+    pub(crate) fn trimmed(text: &str) -> Option<Self> {
+        let text = text.trim();
+        (!text.is_empty()).then(|| Self(text.to_owned()))
+    }
+
     pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
@@ -481,6 +487,38 @@ pub struct VersionDocument {
 pub struct VendorsDocument {
     pub schema_version: Version1,
     pub vendors: Vec<Vendor>,
+    /// Omitted while the Package keeps no value.
+    #[serde(default, skip_serializing_if = "StoredValues::is_empty")]
+    pub values: StoredValues,
+}
+
+/// The Ordering Institutions, Orderers, Projects, and Order Groups a Package keeps, used
+/// by an Order or not.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoredValues {
+    pub ordering_institutions: Vec<NonBlankString>,
+    pub orderers: Vec<NonBlankString>,
+    pub projects: Vec<StoredProject>,
+    /// The Order Groups of Orders with no Project.
+    pub order_groups: Vec<NonBlankString>,
+}
+
+impl StoredValues {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.ordering_institutions.is_empty()
+            && self.orderers.is_empty()
+            && self.projects.is_empty()
+            && self.order_groups.is_empty()
+    }
+}
+
+/// One kept Project and the Order Groups that belong to it.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoredProject {
+    pub name: NonBlankString,
+    pub order_groups: Vec<NonBlankString>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -567,6 +605,8 @@ pub struct IndexDocument {
     pub schema_version: Version1,
     pub orders: Vec<IndexOrder>,
     pub vendors: Vec<Vendor>,
+    #[serde(default, skip_serializing_if = "StoredValues::is_empty")]
+    pub values: StoredValues,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

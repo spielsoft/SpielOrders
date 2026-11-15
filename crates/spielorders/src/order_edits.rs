@@ -14,9 +14,13 @@ use crate::{
     Answer, Failure,
     answer::DraftFailure,
     canonical::{CurrentPackageCandidate, HealthyOrder, load_package},
-    filesystem::{DestinationExpectation, replace_validated_file_expecting},
+    filesystem::{
+        DestinationExpectation, FileReplacement, replace_validated_file_expecting,
+        replace_validated_files,
+    },
     metadata::{
-        Currency, DateOrdered, OrderDocument, OrderItem, OrderStatus, Vendor, order_shape_field,
+        Currency, DateOrdered, OrderDocument, OrderItem, OrderStatus, StoredValues, Vendor,
+        order_shape_field,
     },
     mutation::{
         IndexRefresh, MutationReport, Never, OperationKind, PlannedOperation, RejectedAssignment,
@@ -58,15 +62,11 @@ enum AssignmentIntent {
     Introduce,
 }
 
-/// The accepted facts of one canonical assignment set naming an Order with no record yet.
-///
-/// **Intent is not read here.** [`Assignments::introduce`] is an *edit's* explicit
-/// confirmation of a genuinely new Reusable Free-Entry Value; creating or adopting an Order
-/// reports reuse versus introduction for each of the four categories instead of requiring
-/// a confirmation, so an assignment is itself the confirmation and the two intents name the
-/// same thing.
+/// The accepted facts of one canonical assignment set naming an Order with no record yet,
+/// and the fields whose value [`Assignments::introduce`] asks to be added.
 pub(crate) struct NewOrderFacts {
     entries: Vec<(String, String)>,
+    introduced: Vec<String>,
 }
 
 impl NewOrderFacts {
@@ -80,11 +80,21 @@ impl NewOrderFacts {
             return Err(unholdable);
         }
         Ok(Self {
+            introduced: accepted
+                .iter()
+                .filter(|(_, _, intent)| *intent == AssignmentIntent::Introduce)
+                .map(|(field, _, _)| field.clone())
+                .collect(),
             entries: accepted
                 .into_iter()
                 .map(|(field, value, _)| (field, value))
                 .collect(),
         })
+    }
+
+    /// The fields whose value this set asks to be added where the Package lacks it.
+    pub fn introduced(&self) -> Vec<String> {
+        self.introduced.clone()
     }
 
     /// The values of every required fact, or every one this set did not name.
@@ -206,6 +216,8 @@ pub struct OrderEditPlan {
     prior_document: OrderDocument,
     pub(crate) vendor: Option<Vendor>,
     pub(crate) reusable_values: ReusableValues,
+    /// The new values this edit adds to those the Package keeps.
+    additions: StoredValues,
     pub(crate) operations: Vec<PlannedOperation>,
 }
 
@@ -385,17 +397,24 @@ fn order_record_plan(
 
     let order_path = order.paths.order.absolute_path.clone();
     let vendor = resolved_vendor(facts.vendor_id(), package);
-    let operations = if facts.document == prior_document {
-        Vec::new()
-    } else {
-        vec![
-            PlannedOperation::new(OperationKind::ReplaceOrderRecord, order.paths.order.clone()),
-            PlannedOperation::new(
-                OperationKind::RefreshPackageIndex,
-                package.context.index.clone(),
-            ),
-        ]
-    };
+    let additions = crate::values::additions(&reusable_values);
+    let mut operations = Vec::new();
+    if facts.document != prior_document {
+        operations.push(PlannedOperation::new(
+            OperationKind::ReplaceOrderRecord,
+            order.paths.order.clone(),
+        ));
+        if !additions.is_empty() {
+            operations.push(PlannedOperation::new(
+                OperationKind::ReplaceVendorRecord,
+                package.context.vendors.clone(),
+            ));
+        }
+        operations.push(PlannedOperation::new(
+            OperationKind::RefreshPackageIndex,
+            package.context.index.clone(),
+        ));
+    }
     Ok(OrderEditPlan {
         root: package.context.root.absolute_path.clone(),
         directory: order.paths.directory.clone(),
@@ -404,6 +423,7 @@ fn order_record_plan(
         prior_document,
         vendor,
         reusable_values,
+        additions,
         operations,
     })
 }
@@ -422,6 +442,41 @@ fn resolved_vendor(vendor_id: Option<&str>, package: &CurrentPackageCandidate) -
         .iter()
         .find(|vendor| vendor.vendor_id.as_str() == vendor_id)
         .cloned()
+}
+
+/// Refuses each value of a new Order that the Package lacks and that `introduced` does
+/// not ask to be added, naming every one.
+pub(crate) fn refuse_unconfirmed(
+    values: &ReusableValues,
+    introduced: &[String],
+) -> Result<(), Failure> {
+    let mut unconfirmed = [
+        ("orderer", &values.orderer),
+        ("ordering_institution", &values.ordering_institution),
+        ("project", &values.project),
+        ("order_group", &values.order_group),
+    ]
+    .into_iter()
+    .filter_map(|(field, value)| match value {
+        ReusableValue::New(proposed) if !introduced.iter().any(|named| named == field) => {
+            Some(Failure::UnconfirmedReusableValue {
+                field: field.to_owned(),
+                proposed: proposed.clone(),
+            })
+        }
+        _ => None,
+    })
+    .collect::<Vec<_>>();
+    match unconfirmed.len() {
+        0 => Ok(()),
+        1 => Err(unconfirmed.remove(0)),
+        _ => Err(Failure::InvalidDraft(
+            unconfirmed
+                .into_iter()
+                .map(|failure| DraftFailure { row: None, failure })
+                .collect(),
+        )),
+    }
 }
 
 /// Canonicalizes every Reusable Free-Entry Value the resulting Order carries and
@@ -498,9 +553,9 @@ fn canonicalize_reusable(
 ) -> ReusableValue {
     let groups;
     let projections = match field {
-        "orderer" => &package.orderers,
-        "ordering_institution" => &package.ordering_institutions,
-        "project" => &package.projects,
+        "orderer" => &package.projections.orderers,
+        "ordering_institution" => &package.projections.ordering_institutions,
+        "project" => &package.projections.projects,
         _ => {
             groups = package.order_groups_of(project);
             &groups
@@ -795,40 +850,67 @@ fn commit_edit<F: FileSystem>(
                 .and_then(|document| document.validate().ok())
                 .is_some_and(|projected| projected.order() == &plan.prior_document)
         };
-        replace_validated_file_expecting(
-            &plan.order_path,
-            &candidate,
-            DestinationExpectation::Equivalent(&still_holds_the_revalidated_order),
-            filesystem,
-            |_| Ok::<(), Never>(()),
-        )
+        if let Some(values) =
+            crate::values::ValuesWrite::prepare(&current, &plan.additions, filesystem)?
+        {
+            let observed = filesystem
+                .read(&plan.order_path)
+                .map_err(|_| preconditions_changed(&plan, plan.order_path.clone()))?;
+            if !still_holds_the_revalidated_order(&observed) {
+                return Err(preconditions_changed(&plan, plan.order_path.clone()));
+            }
+            let replacements = [
+                FileReplacement::observed(&plan.order_path, &candidate, &observed),
+                values.replacement(),
+            ];
+            replace_validated_files(&replacements, filesystem, |_, _| Ok::<(), Never>(())).map_err(
+                |error| {
+                    Failure::of_replacements(
+                        &plan.root,
+                        &[plan.order_path.as_path(), values.path()],
+                        error,
+                    )
+                },
+            )
+        } else {
+            replace_validated_file_expecting(
+                &plan.order_path,
+                &candidate,
+                DestinationExpectation::Equivalent(&still_holds_the_revalidated_order),
+                filesystem,
+                |_| Ok::<(), Never>(()),
+            )
+            .map_err(|error| Failure::of_replacement(&plan.root, &plan.order_path, error))
+        }
     };
-    if let Err(error) = replacement {
-        return Err(Failure::of_replacement(&plan.root, &plan.order_path, error));
-    }
+    replacement?;
 
     let refresh = IndexRefresh::after_commit(&plan.root, filesystem);
-    Ok(refresh.report(OrderEditResult {
-        directory: plan.directory.clone(),
-    }))
+    Ok(MutationReport::committed(
+        OrderEditResult {
+            directory: plan.directory.clone(),
+        },
+        refresh.warning().into_iter().collect(),
+    ))
 }
 
 /// Re-canonicalizes every planned Reusable Free-Entry Value against current Package
 /// state so a concurrently introduced canonical spelling cannot commit stale text.
 fn reusable_values_still_current(plan: &OrderEditPlan, current: &CurrentPackageCandidate) -> bool {
     REUSABLE_FIELDS.iter().all(|field| {
-        let planned = match *field {
+        let text = match *field {
             "orderer" => plan.facts.orderer(),
             "ordering_institution" => plan.facts.ordering_institution(),
             "project" => plan.facts.project(),
             _ => plan.facts.order_group(),
         };
-        match canonicalize_reusable(field, planned, plan.facts.project(), current) {
-            ReusableValue::Absent => planned.is_none(),
-            ReusableValue::Reused(value) | ReusableValue::New(value) => {
-                planned == Some(value.as_str())
-            }
-        }
+        let planned = match *field {
+            "orderer" => &plan.reusable_values.orderer,
+            "ordering_institution" => &plan.reusable_values.ordering_institution,
+            "project" => &plan.reusable_values.project,
+            _ => &plan.reusable_values.order_group,
+        };
+        canonicalize_reusable(field, text, plan.facts.project(), current) == *planned
     })
 }
 

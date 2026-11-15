@@ -2353,7 +2353,8 @@ fn an_order_group_belongs_to_the_project_of_the_orders_that_use_it() {
     );
     assert_eq!(
         project_groups(&package, Some("Telescope")),
-        [pair("Vacuum", "2")]
+        [pair("2026 Rebuild", "0"), pair("Vacuum", "2")],
+        "a group the Package keeps stays when no Order uses it"
     );
 
     // A group named in the edit is judged in the new Project, and a new one there needs
@@ -3135,5 +3136,547 @@ fn a_refused_guidance_refresh_restores_earlier_replacements() {
         tree(&directory.0),
         before,
         "local files and later work survive"
+    );
+}
+
+/// Merging values through the interface names them as an array, plans how many Orders
+/// change, and leaves every one of them on the kept spelling.
+#[test]
+fn merging_values_counts_and_changes_every_order_using_them() {
+    let root = initialized("merge-values");
+    let cell = classified_order(&root.0, "Cell", "AbC", "");
+    let oven = classified_order(&root.0, "Oven", "Ab_C", "");
+    let lamp = classified_order(&root.0, "Lamp", "ab_c", "");
+    let package = open(&root.0);
+    let (abc, ab_c, keep) = (c("AbC"), c("Ab_C"), c("AbC"));
+    let values = [Text::new(&abc), Text::new(&ab_c)];
+    let mut plan = None;
+    let mut outcome = None;
+    assert_eq!(
+        spielorders_package_plan_merge_values(
+            &package,
+            SPIELORDERS_ORDER_FIELD_PROJECT,
+            OptionalText::null(),
+            std::ptr::NonNull::new(values.as_ptr().cast_mut()),
+            2,
+            Text::new(&keep),
+            0,
+            &mut plan,
+            Some(&mut outcome),
+        ),
+        SPIELORDERS_RESULT_OK,
+        "{:?}",
+        located(&outcome)
+    );
+    let plan = plan.unwrap();
+    assert_eq!(spielorders_plan_order_count(&plan), 2);
+    assert_eq!(
+        spielorders_report_kind(&commit(&plan)),
+        SPIELORDERS_REPORT_COMMITTED
+    );
+
+    let package = open(&root.0);
+    for directory in [&cell, &oven, &lamp] {
+        assert_eq!(
+            string(spielorders_order_field(
+                &read_order(&package, directory),
+                SPIELORDERS_ORDER_FIELD_PROJECT
+            )),
+            "AbC"
+        );
+    }
+
+    let gone = c("Ab_C");
+    let mut refused = None;
+    let mut outcome = None;
+    assert_ne!(
+        spielorders_package_plan_delete_value(
+            &package,
+            SPIELORDERS_ORDER_FIELD_PROJECT,
+            OptionalText::null(),
+            Text::new(&gone),
+            OptionalText::null(),
+            0,
+            &mut refused,
+            Some(&mut outcome),
+        ),
+        SPIELORDERS_RESULT_OK
+    );
+    assert_eq!(codes(&outcome), ["unknown_value"]);
+}
+
+/// An Order's aligned name is the directory name aligning it gives, read without planning
+/// the alignment: its own name until a fact it projects changes.
+#[test]
+fn an_orders_aligned_name_tells_whether_its_directory_has_drifted() {
+    let root = initialized("aligned-name");
+    let directory = created_order(&root.0, "Laser components", &[]);
+    let package = open(&root.0);
+    let order = read_order(&package, &directory);
+    assert_eq!(
+        string(spielorders_order_aligned_name(&order)),
+        string(spielorders_order_field(
+            &order,
+            SPIELORDERS_ORDER_FIELD_DIRECTORY_NAME
+        ))
+    );
+
+    let mut draft = order_draft(&order);
+    set(&mut draft, SPIELORDERS_ORDER_FIELD_TITLE, "Mirror mounts");
+    commit(&plan_draft(&draft).unwrap());
+    let package = open(&root.0);
+    let order = read_order(&package, &directory);
+    let aligned = string(spielorders_order_aligned_name(&order));
+    assert!(aligned.ends_with("_Mirror_mounts"), "{aligned}");
+    assert_ne!(
+        aligned,
+        string(spielorders_order_field(
+            &order,
+            SPIELORDERS_ORDER_FIELD_DIRECTORY_NAME
+        ))
+    );
+}
+
+#[test]
+fn an_order_save_refuses_a_value_deleted_after_planning() {
+    for field in [
+        SPIELORDERS_ORDER_FIELD_ORDERER,
+        SPIELORDERS_ORDER_FIELD_ORDERING_INSTITUTION,
+        SPIELORDERS_ORDER_FIELD_PROJECT,
+        SPIELORDERS_ORDER_FIELD_ORDER_GROUP,
+    ] {
+        let root = initialized("deleted-planned-value");
+        let directory = created_order(&root.0, "Lenses", &[]);
+        let package = open(&root.0);
+        let value = c("Ada");
+        let mut addition = None;
+        assert_eq!(
+            spielorders_package_plan_add_value(
+                &package,
+                field,
+                OptionalText::null(),
+                Text::new(&value),
+                0,
+                &mut addition,
+                None,
+            ),
+            SPIELORDERS_RESULT_OK
+        );
+        commit(&addition.unwrap());
+        let order = read_order(&package, &directory);
+        let mut draft = order_draft(&order);
+        set(&mut draft, field, "Ada");
+        let plan = plan_draft(&draft).unwrap();
+        let mut deletion = None;
+        assert_eq!(
+            spielorders_package_plan_delete_value(
+                &package,
+                field,
+                OptionalText::null(),
+                Text::new(&value),
+                OptionalText::null(),
+                0,
+                &mut deletion,
+                None,
+            ),
+            SPIELORDERS_RESULT_OK
+        );
+        commit(&deletion.unwrap());
+        let before = tree(&root.0);
+        let mut report = None;
+        let mut outcome = None;
+        assert_eq!(
+            spielorders_plan_commit(&plan, &mut report, Some(&mut outcome)),
+            SPIELORDERS_RESULT_REFUSED,
+            "a deleted field value must not be recreated by a stale plan"
+        );
+        assert!(report.is_none());
+        assert_eq!(codes(&outcome), ["preconditions_changed"]);
+        assert_eq!(tree(&root.0), before);
+    }
+}
+
+#[test]
+fn a_vendor_merge_preserves_every_contact_row_in_order() {
+    let root = initialized("merge-contact-rows");
+    let package = open(&root.0);
+    let vendor = |name: &str, contacts: &[&str]| {
+        let mut draft = new_draft(&package, spielorders_package_new_vendor_draft);
+        set(&mut draft, SPIELORDERS_VENDOR_FIELD_NAME, name);
+        for (row, name) in contacts.iter().enumerate() {
+            let row = i64::try_from(row).unwrap();
+            assert_eq!(
+                spielorders_draft_row_insert(&mut draft, row, None),
+                SPIELORDERS_RESULT_OK
+            );
+            set_row(&mut draft, row, SPIELORDERS_CONTACT_FIELD_NAME, name);
+        }
+        let report = commit(&plan_draft(&draft).unwrap());
+        let vendor = spielorders_report_vendor(&report).unwrap();
+        string(spielorders_vendor_field(
+            &vendor,
+            SPIELORDERS_VENDOR_FIELD_VENDOR_ID,
+        ))
+    };
+    let kept = c(&vendor("First supplier", &["Accounts"]));
+    let other = c(&vendor(
+        "Second supplier",
+        &["Accounts", "Accounts", "Sales"],
+    ));
+    let ids = [Text::new(&other)];
+    let mut plan = None;
+    assert_eq!(
+        spielorders_package_plan_merge_vendors(
+            &package,
+            std::ptr::NonNull::new(ids.as_ptr().cast_mut()),
+            1,
+            Text::new(&kept),
+            0,
+            &mut plan,
+            None,
+        ),
+        SPIELORDERS_RESULT_OK
+    );
+    let report = commit(&plan.unwrap());
+    let saved = spielorders_report_vendor(&report).expect("the merged Vendor is returned");
+    assert_eq!(spielorders_vendor_contact_count(&saved), 4);
+    let package = open(&root.0);
+    let mut vendor = None;
+    assert_eq!(
+        spielorders_package_read_vendor(
+            &package,
+            SPIELORDERS_VENDOR_SELECTOR_ID,
+            Text::new(&kept),
+            0,
+            &mut vendor,
+            None,
+        ),
+        SPIELORDERS_RESULT_OK
+    );
+    let vendor = vendor.unwrap();
+    let contacts = (0..spielorders_vendor_contact_count(&vendor))
+        .map(|row| {
+            string(spielorders_vendor_contact_field(
+                &vendor,
+                row,
+                SPIELORDERS_CONTACT_FIELD_NAME,
+            ))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(contacts, ["Accounts", "Accounts", "Accounts", "Sales"]);
+}
+
+#[test]
+fn adding_a_value_with_an_order_is_one_canonical_change() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut outcomes = Vec::new();
+    for route in ["create", "edit", "adopt"] {
+        let root = initialized("atomic-order-value");
+        let package = open(&root.0);
+        let mut draft = match route {
+            "create" => new_draft(&package, spielorders_package_new_order_draft),
+            "edit" => {
+                let directory = created_order(&root.0, "Original lenses", &[]);
+                order_draft(&read_order(&package, &directory))
+            }
+            _ => {
+                let directory = root.0.join("Orders/Legacy");
+                fs::create_dir(&directory).unwrap();
+                fs::write(directory.join("quote.txt"), "Original supporting text").unwrap();
+                let directory = c_path(&directory);
+                let mut draft = None;
+                assert_eq!(
+                    spielorders_package_adoption_draft(
+                        &package,
+                        PathBytes::new(&directory),
+                        0,
+                        &mut draft,
+                        None,
+                    ),
+                    SPIELORDERS_RESULT_OK
+                );
+                let mut draft = draft.unwrap();
+                set(
+                    &mut draft,
+                    SPIELORDERS_ORDER_FIELD_DATE_ORDERED,
+                    "2026-11-13",
+                );
+                set(&mut draft, SPIELORDERS_ORDER_FIELD_STATUS, "ordered");
+                draft
+            }
+        };
+        set(&mut draft, SPIELORDERS_ORDER_FIELD_TITLE, "Lenses");
+        set(&mut draft, SPIELORDERS_ORDER_FIELD_ORDERER, "Ada");
+        assert_eq!(
+            spielorders_draft_confirm(&mut draft, SPIELORDERS_ORDER_FIELD_ORDERER, -1, None),
+            SPIELORDERS_RESULT_OK
+        );
+        let plan = plan_draft(&draft).unwrap();
+        let metadata = root.0.join(".spielorders");
+        fs::set_permissions(&metadata, fs::Permissions::from_mode(0o555)).unwrap();
+        let before = tree(&root.0);
+        let mut report = None;
+        let mut outcome = None;
+        let result = spielorders_plan_commit(&plan, &mut report, Some(&mut outcome));
+        fs::set_permissions(&metadata, fs::Permissions::from_mode(0o755)).unwrap();
+        outcomes.push((route, result, report.is_none(), tree(&root.0) == before));
+    }
+    assert_eq!(
+        outcomes,
+        [
+            ("create", SPIELORDERS_RESULT_REFUSED, true, true),
+            ("edit", SPIELORDERS_RESULT_REFUSED, true, true),
+            ("adopt", SPIELORDERS_RESULT_REFUSED, true, true),
+        ]
+    );
+}
+
+#[test]
+fn value_change_reports_retain_their_affected_scope_after_another_commit() {
+    let root = initialized("value-result-snapshot");
+    let package = open(&root.0);
+    let mut plan = None;
+    assert_eq!(
+        spielorders_package_plan_add_value(
+            &package,
+            SPIELORDERS_ORDER_FIELD_ORDERER,
+            OptionalText::null(),
+            Text::new(c"Ada"),
+            0,
+            &mut plan,
+            None,
+        ),
+        SPIELORDERS_RESULT_OK
+    );
+    let added = commit(&plan.unwrap());
+    let mut plan = None;
+    assert_eq!(
+        spielorders_package_plan_delete_value(
+            &package,
+            SPIELORDERS_ORDER_FIELD_ORDERER,
+            OptionalText::null(),
+            Text::new(c"Ada"),
+            OptionalText::null(),
+            0,
+            &mut plan,
+            None,
+        ),
+        SPIELORDERS_RESULT_OK
+    );
+    let deleted = commit(&plan.unwrap());
+    let original = spielorders_report_values(&added).expect("the added values are returned");
+    assert_eq!(spielorders_list_count(&original), 1);
+    assert_eq!(
+        string(spielorders_list_field(
+            &original,
+            0,
+            SPIELORDERS_VALUE_FIELD_VALUE
+        )),
+        "Ada"
+    );
+    assert_eq!(
+        spielorders_list_count(
+            &spielorders_report_values(&deleted).expect("an empty scope is a result")
+        ),
+        0
+    );
+}
+
+#[test]
+fn destructive_vendor_changes_keep_references_in_damaged_orders_resolvable() {
+    for damage in ["date", "shape", "duplicate"] {
+        for action in ["delete", "clear", "replace", "merge"] {
+            let root = initialized("damaged-vendor-reference");
+            let package = open(&root.0);
+            for name in ["First", "Kept", "Unrelated"] {
+                let mut draft = new_draft(&package, spielorders_package_new_vendor_draft);
+                set(&mut draft, SPIELORDERS_VENDOR_FIELD_NAME, name);
+                commit(&plan_draft(&draft).unwrap());
+            }
+            let directory = created_order(&root.0, "Damaged sample", &[]);
+            let package = open(&root.0);
+            let mut draft = order_draft(&read_order(&package, &directory));
+            set(&mut draft, SPIELORDERS_ORDER_FIELD_VENDOR, "First");
+            commit(&plan_draft(&draft).unwrap());
+            let record = directory.join(".spielorders/order.json");
+            let mut document: serde_json::Value =
+                serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();
+            match damage {
+                "date" => document["date_ordered"] = serde_json::json!("2026-02-30"),
+                "shape" => document["title"] = serde_json::json!(42),
+                "duplicate" => {
+                    let duplicate = root.0.join("Orders/duplicate");
+                    fs::create_dir_all(duplicate.join(".spielorders")).unwrap();
+                    fs::copy(&record, duplicate.join(".spielorders/order.json")).unwrap();
+                }
+                _ => unreachable!(),
+            }
+            fs::write(&record, serde_json::to_vec(&document).unwrap()).unwrap();
+            let before_order = fs::read(&record).unwrap();
+            let vendors = root.0.join(".spielorders/vendors.json");
+            let before_vendors = fs::read(&vendors).unwrap();
+            let package = open(&root.0);
+            let first = vendor_named(&package, "First").unwrap();
+            let kept = vendor_named(&package, "Kept").unwrap();
+            let first_id = c(&string(spielorders_vendor_field(
+                &first,
+                SPIELORDERS_VENDOR_FIELD_VENDOR_ID,
+            )));
+            let kept_id = c(&string(spielorders_vendor_field(
+                &kept,
+                SPIELORDERS_VENDOR_FIELD_VENDOR_ID,
+            )));
+            let mut plan = None;
+            let mut outcome = None;
+            let result = match action {
+                "delete" => {
+                    spielorders_vendor_plan_delete(&first, 0, &mut plan, Some(&mut outcome))
+                }
+                "clear" => spielorders_vendor_plan_delete_replacing(
+                    &first,
+                    OptionalText::new(c""),
+                    0,
+                    &mut plan,
+                    Some(&mut outcome),
+                ),
+                "replace" => spielorders_vendor_plan_delete_replacing(
+                    &first,
+                    OptionalText::new(&kept_id),
+                    0,
+                    &mut plan,
+                    Some(&mut outcome),
+                ),
+                "merge" => {
+                    let mut ids = [Text::new(&first_id)];
+                    spielorders_package_plan_merge_vendors(
+                        &package,
+                        std::ptr::NonNull::new(ids.as_mut_ptr()),
+                        1,
+                        Text::new(&kept_id),
+                        0,
+                        &mut plan,
+                        Some(&mut outcome),
+                    )
+                }
+                _ => unreachable!(),
+            };
+            assert_eq!(result, SPIELORDERS_RESULT_REFUSED, "{damage}: {action}");
+            assert!(plan.is_none());
+            assert!(
+                codes(&outcome)
+                    .iter()
+                    .any(|code| code == "vendor_referenced")
+            );
+            assert_eq!(fs::read(&record).unwrap(), before_order);
+            assert_eq!(fs::read(&vendors).unwrap(), before_vendors);
+
+            // Damage in an Order that does not reference a deleted Vendor is no reason
+            // to prevent that unrelated deletion.
+            let unrelated = vendor_named(&package, "Unrelated").unwrap();
+            let mut plan = None;
+            assert_eq!(
+                spielorders_vendor_plan_delete(&unrelated, 0, &mut plan, None),
+                SPIELORDERS_RESULT_OK
+            );
+            commit(&plan.unwrap());
+        }
+    }
+}
+
+#[test]
+fn vendor_deletion_rechecks_new_damaged_references_before_writing() {
+    let root = initialized("late-damaged-vendor-reference");
+    let package = open(&root.0);
+    let mut draft = new_draft(&package, spielorders_package_new_vendor_draft);
+    set(&mut draft, SPIELORDERS_VENDOR_FIELD_NAME, "First");
+    commit(&plan_draft(&draft).unwrap());
+    let package = open(&root.0);
+    let first = vendor_named(&package, "First").unwrap();
+    let mut deletion = None;
+    assert_eq!(
+        spielorders_vendor_plan_delete(&first, 0, &mut deletion, None),
+        SPIELORDERS_RESULT_OK
+    );
+    let directory = created_order(&root.0, "Late sample", &[]);
+    let package = open(&root.0);
+    let mut draft = order_draft(&read_order(&package, &directory));
+    set(&mut draft, SPIELORDERS_ORDER_FIELD_VENDOR, "First");
+    commit(&plan_draft(&draft).unwrap());
+    let record = directory.join(".spielorders/order.json");
+    let mut document: serde_json::Value =
+        serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();
+    document["date_ordered"] = serde_json::json!("2026-02-30");
+    fs::write(&record, serde_json::to_vec(&document).unwrap()).unwrap();
+    let before = fs::read(root.0.join(".spielorders/vendors.json")).unwrap();
+    let mut report = None;
+    let mut outcome = None;
+    assert_eq!(
+        spielorders_plan_commit(&deletion.unwrap(), &mut report, Some(&mut outcome)),
+        SPIELORDERS_RESULT_REFUSED
+    );
+    assert!(report.is_none());
+    assert!(
+        codes(&outcome)
+            .iter()
+            .any(|code| code == "preconditions_changed")
+    );
+    assert_eq!(
+        fs::read(root.0.join(".spielorders/vendors.json")).unwrap(),
+        before
+    );
+}
+
+#[test]
+fn value_matching_agrees_with_adding_an_existing_spelling() {
+    for (left, right, expected) in [
+        ("Café", "Cafe\u{301}", false),
+        ("Café", " CAFÉ ", true),
+        ("Straße", "STRASSE", true),
+    ] {
+        let root = initialized("value-matching");
+        let package = open(&root.0);
+        let left = c(left);
+        let right = c(right);
+        let mut plan = None;
+        assert_eq!(
+            spielorders_package_plan_add_value(
+                &package,
+                SPIELORDERS_ORDER_FIELD_ORDERER,
+                OptionalText::null(),
+                Text::new(&left),
+                0,
+                &mut plan,
+                None,
+            ),
+            SPIELORDERS_RESULT_OK
+        );
+        commit(&plan.unwrap());
+        let mut plan = None;
+        assert_eq!(
+            spielorders_package_plan_add_value(
+                &package,
+                SPIELORDERS_ORDER_FIELD_ORDERER,
+                OptionalText::null(),
+                Text::new(&right),
+                0,
+                &mut plan,
+                None,
+            ),
+            SPIELORDERS_RESULT_OK
+        );
+        let report = commit(&plan.unwrap());
+        assert_eq!(
+            spielorders_report_kind(&report) == SPIELORDERS_REPORT_UNCHANGED,
+            expected
+        );
+        assert_eq!(
+            spielorders_value_matches(Text::new(&left), Text::new(&right)) == 1,
+            expected
+        );
+    }
+    let invalid = CString::new([0xff]).unwrap();
+    assert_eq!(
+        spielorders_value_matches(Text::new(&invalid), Text::new(c"Ada")),
+        0
     );
 }

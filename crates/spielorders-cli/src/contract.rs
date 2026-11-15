@@ -90,6 +90,16 @@ pub(crate) enum ResponseContract {
     VendorUnhide,
     /// `spielorders vendor delete`
     VendorDelete,
+    /// `spielorders vendor merge`
+    VendorMerge,
+    /// `spielorders value add`
+    ValueAdd,
+    /// `spielorders value rename`
+    ValueRename,
+    /// `spielorders value merge`
+    ValueMerge,
+    /// `spielorders value delete`
+    ValueDelete,
     /// `spielorders vendor contact add`
     VendorContactAdd,
     /// `spielorders vendor contact edit`
@@ -151,6 +161,11 @@ impl ResponseContract {
             Self::VendorHide => "spielorders.vendor.hide",
             Self::VendorUnhide => "spielorders.vendor.unhide",
             Self::VendorDelete => "spielorders.vendor.delete",
+            Self::VendorMerge => "spielorders.vendor.merge",
+            Self::ValueAdd => "spielorders.value.add",
+            Self::ValueRename => "spielorders.value.rename",
+            Self::ValueMerge => "spielorders.value.merge",
+            Self::ValueDelete => "spielorders.value.delete",
             Self::VendorContactAdd => "spielorders.vendor.contact.add",
             Self::VendorContactEdit => "spielorders.vendor.contact.edit",
             Self::VendorContactMove => "spielorders.vendor.contact.move",
@@ -197,6 +212,8 @@ impl ResponseContract {
             Self::VendorHide => 1,
             Self::VendorUnhide => 1,
             Self::VendorDelete => 1,
+            Self::VendorMerge => 1,
+            Self::ValueAdd | Self::ValueRename | Self::ValueMerge | Self::ValueDelete => 1,
             Self::VendorContactAdd => 1,
             Self::VendorContactEdit => 1,
             Self::VendorContactMove => 1,

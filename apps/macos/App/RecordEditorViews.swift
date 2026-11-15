@@ -56,6 +56,10 @@ struct OrderEditorView: View {
     private struct GroupQuery: Equatable {
         let project: String
         let revision: Int
+
+        static func == (left: Self, right: Self) -> Bool {
+            left.revision == right.revision && left.project.utf8.elementsEqual(right.project.utf8)
+        }
     }
 
     private var heading: String {
@@ -100,10 +104,10 @@ struct OrderEditorView: View {
         return !text.isFieldEditor || text.delegate is NSSearchField
     }
 
-    /// Suggesting fields take focus themselves, from their focus serial.
+    /// Choosers take focus themselves, from their focus serial.
     private func focusRequestedField() {
         guard let request = editor.focusRequest, request.row < 0,
-              OrderFieldControl(request.field) != .suggesting else { return }
+              OrderFieldControl(request.field) != .chooser else { return }
         focus = request.field
     }
 
@@ -117,8 +121,7 @@ struct OrderEditorView: View {
         case .text: textField(field)
         case .date: dateField
         case .status: statusPicker
-        case .vendor: vendorPicker
-        case .suggesting: suggesting(field)
+        case .chooser: chooser(field)
         }
     }
 
@@ -137,21 +140,38 @@ struct OrderEditorView: View {
         }
     }
 
-    private func suggesting(_ field: Int32) -> some View {
-        checked(field) {
-            SuggestingField(label: RecordFieldLabel.of(field), identifier: identifier(field),
-                            text: binding(field), choices: choices(field),
-                            commit: editor.finishField, focused: { editor.trackFocus(field, row: -1) },
-                            focusSerial: serial(field), problem: FieldProblem.blank(editor, field))
+    private func chooser(_ field: Int32) -> some View {
+        checked(field, fixes: additions(field)) {
+            ValueChooser(label: RecordFieldLabel.of(field), identifier: identifier(field),
+                         kind: ValueChooser.kind(of: field), value: editor.field(field), values: choices(field),
+                         knownValues: field == SPIELORDERS_ORDER_FIELD_VENDOR ? model.knownVendors : choices(field),
+                         choose: { text in
+                             editor.set(field, text)
+                             editor.finishField()
+                         },
+                         add: { text in model.addValue(text, at: field, in: editor) },
+                         focused: { editor.trackFocus(field, row: -1) },
+                         focusSerial: serial(field), problem: FieldProblem.blank(editor, field))
                 .frame(minWidth: 200, maxWidth: .infinity)
         }
     }
 
+    /// New Orderer “text”… beside the field's problem, when the Package lacks the value it holds.
+    private func additions(_ field: Int32) -> [NoticeAction] {
+        let text = editor.field(field)
+        guard !text.isEmpty, editor.problems(at: field).contains(where: \.lacksValue) else { return [] }
+        let title = "New \(ValueChooser.kind(of: field)) “\(text)”…"
+        return [NoticeAction(title, identifier: "\(identifier(field)).add") { [model, editor] in
+            model.addValue(text, at: field, in: editor)
+        }]
+    }
+
     private func choices(_ field: Int32) -> [String] {
-        if field == SPIELORDERS_ORDER_FIELD_ORDER_GROUP {
-            return groups
+        switch field {
+        case SPIELORDERS_ORDER_FIELD_ORDER_GROUP: groups
+        case SPIELORDERS_ORDER_FIELD_VENDOR: model.vendorChoices
+        default: model.reusableValues[field]?.map(\.name) ?? []
         }
-        return model.reusableValues[field]?.map(\.name) ?? []
     }
 
     private var dateField: some View {
@@ -170,16 +190,6 @@ struct OrderEditorView: View {
         }
     }
 
-    private var vendorPicker: some View {
-        let field = SPIELORDERS_ORDER_FIELD_VENDOR
-        return checked(field) {
-            VendorPicker(text: binding(field, finishing: true), choices: model.vendorChoices,
-                         identifier: identifier(field), newVendor: model.beginVendorSheet)
-                .frame(minWidth: 200, maxWidth: .infinity)
-                .focused($focus, equals: field)
-        }
-    }
-
     /// A choice finishes its field as it is made; typing finishes when the field is left.
     private func binding(_ field: Int32, finishing: Bool = false) -> Binding<String> {
         Binding(get: { editor.field(field) }, set: {
@@ -188,8 +198,10 @@ struct OrderEditorView: View {
         })
     }
 
-    private func checked<Content: View>(_ field: Int32, @ViewBuilder _ content: () -> Content) -> some View {
-        MarkedField(model: model, editor: editor, field: field, identifier: identifier(field), content: content())
+    private func checked<Content: View>(_ field: Int32, fixes: [NoticeAction] = [],
+                                        @ViewBuilder _ content: () -> Content) -> some View {
+        MarkedField(model: model, editor: editor, field: field, identifier: identifier(field), fixes: fixes,
+                    content: content())
     }
 }
 
@@ -296,6 +308,7 @@ struct VendorEditorView: View {
         let identifier = "\(prefix).\(RecordFieldLabel.key(field))"
         let text = Binding(get: { editor.field(field) }, set: { editor.set(field, $0) })
         return MarkedField(model: model, editor: editor, field: field, identifier: identifier,
+                           fixes: merging(field, identifier: identifier),
                            content: TextField("", text: text, prompt: FieldProblem.prompt(editor, field),
                                               axis: lines > 1 ? .vertical : .horizontal)
                                .lineLimit(lines...max(lines, lines * 2))
@@ -303,6 +316,16 @@ struct VendorEditorView: View {
                                .focused($focus, equals: field)
                                .accessibilityLabel(RecordFieldLabel.of(field))
                                .accessibilityIdentifier(identifier))
+    }
+}
+
+extension VendorEditorView {
+    /// Merge Vendors… beside a Name another Vendor already has.
+    fileprivate func merging(_ field: Int32, identifier: String) -> [NoticeAction] {
+        guard !inSheet, !editor.isNew, editor.problems(at: field).contains(where: \.nameTaken) else { return [] }
+        return [NoticeAction("Merge Vendors…", identifier: "\(identifier).merge") { [model, editor] in
+            model.offerVendorMerge(editor)
+        }]
     }
 }
 
@@ -403,10 +426,12 @@ struct MarkedField<Content: View>: View {
     let field: Int32
     /// The control's identifier, which the marks extend.
     let identifier: String
+    /// What fixes this field's problem, before what fixes the record's.
+    var fixes: [NoticeAction] = []
     let content: Content
 
     var body: some View {
-        let problems = editor.problems(at: field).map(\.message)
+        let problems = editor.statements(at: field)
         HStack(spacing: 4) {
             content.overlay {
                 if !problems.isEmpty {
@@ -417,7 +442,7 @@ struct MarkedField<Content: View>: View {
             }
             if !problems.isEmpty {
                 ProblemBadge(level: .problem, title: RecordFieldLabel.of(field), lines: problems,
-                             actions: model.repairs(for: editor), label: "\(RecordFieldLabel.of(field)) problem",
+                             actions: fixes + model.repairs(for: editor), label: "\(RecordFieldLabel.of(field)) problem",
                              identifier: "\(identifier).problem")
             }
             if let consequence = editor.consequences[field] {

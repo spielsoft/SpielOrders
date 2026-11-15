@@ -41,6 +41,8 @@ mod restoration;
 mod search;
 mod semantic_repair;
 mod supporting_material;
+mod value_changes;
+mod values;
 mod vendor_reads;
 mod vendors;
 
@@ -69,6 +71,7 @@ pub(crate) use reads::{diagnose, open, read_order, read_readme, read_vendor, val
 pub(crate) use supporting_material::{
     ProviderReport, SupportingMaterialSnapshot, search_supporting_material,
 };
+pub(crate) use value_changes::InUse;
 pub(crate) use vendor_reads::VendorRead;
 
 /// The data a caller reads: records, projections, findings and the repairs they offer,

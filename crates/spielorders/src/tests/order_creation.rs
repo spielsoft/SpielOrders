@@ -173,11 +173,11 @@ fn fully_supplied_plan_resolves_vendor_and_reusable_values_into_normalized_facts
         .assign("title", " Laser / components ")
         .assign("date_ordered", "2026-07-19")
         .assign("vendor", "Tarnwick")
-        .assign("orderer", " Ada Lovelace ")
-        .assign("ordering_institution", " Example Institute ")
+        .introduce("orderer", " Ada Lovelace ")
+        .introduce("ordering_institution", " Example Institute ")
         .assign("currency", "USD")
-        .assign("project", " Telescope ")
-        .assign("order_group", " Summer build ");
+        .introduce("project", " Telescope ")
+        .introduce("order_group", " Summer build ");
 
     let plan = crate::plan(
         &create_order(PathBuf::from(root), input.clone()),
@@ -833,7 +833,7 @@ fn a_commit_is_refused_when_a_value_it_reported_as_new_became_reusable() {
             PathBuf::from(root),
             Assignments::new()
                 .assign("title", "Laser components")
-                .assign("orderer", "Ada Lovelace"),
+                .introduce("orderer", "Ada Lovelace"),
         ),
         &effects(&PlatformFileSystem).on(2026, 8, 22),
     )
@@ -854,7 +854,7 @@ fn a_commit_is_refused_when_a_value_it_reported_as_new_became_reusable() {
             PathBuf::from(root),
             Assignments::new()
                 .assign("title", "Mounts")
-                .assign("orderer", "ada lovelace"),
+                .introduce("orderer", "ada lovelace"),
         ),
         &effects(&PlatformFileSystem).on(2026, 8, 22),
     )

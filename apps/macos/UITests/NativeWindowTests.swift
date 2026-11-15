@@ -611,6 +611,10 @@ import CSpielOrders
         cancel.click()
         XCTAssertTrue(order.waitForExistence(timeout: 10))
         XCTAssertEqual(try directories().count, 1)
+        // A cancelled review changes nothing, so Redo Remove Order stays.
+        app.menuBars.menuBarItems["Edit"].click()
+        XCTAssertTrue(app.menuBars.menuItems["Redo Remove Order"].isEnabled)
+        app.typeKey(.escape, modifierFlags: [])
         app.typeKey("q", modifierFlags: .command)
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
     }

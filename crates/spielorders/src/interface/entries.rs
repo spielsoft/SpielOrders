@@ -325,6 +325,24 @@ impl Entry {
                     }),
                 );
             }
+            Failure::UnknownValue { field, value } => {
+                let mut entry = at(Self::coded(SPIELORDERS_FAMILY_FAILURE, code, None), field);
+                entry.after = c_text(value.as_str());
+                entries.push(entry);
+            }
+            Failure::BlankValue { field } => {
+                entries.push(at(
+                    Self::coded(SPIELORDERS_FAMILY_FAILURE, code, None),
+                    field,
+                ));
+            }
+            Failure::ValueInUse { field, orders, .. } => {
+                entries.extend(orders.iter().map(|order| {
+                    let mut entry = at(Self::coded(SPIELORDERS_FAMILY_FAILURE, code, None), field);
+                    entry.path = relative(order);
+                    entry
+                }));
+            }
             Failure::UnconfirmedReusableValue { field, proposed } => {
                 let mut entry = at(Self::coded(SPIELORDERS_FAMILY_FAILURE, code, None), field);
                 entry.after = c_text(proposed.as_str());

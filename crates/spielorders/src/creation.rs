@@ -6,7 +6,7 @@ use crate::{
     answer::DraftFailure,
     canonical::{CurrentPackageCandidate, load_package},
     evidence::EvidenceFingerprint,
-    metadata::{OrderDocument, OrderItem, OrderStatus, Vendor},
+    metadata::{OrderDocument, OrderItem, OrderStatus, StoredValues, Vendor},
     mutation::{
         CleanupFailure, CommitFailure, IndexRefresh, MutationReport, OperationKind,
         PlannedOperation,
@@ -54,6 +54,8 @@ pub(crate) struct OrderCreationInput {
     currency: Option<String>,
     project: Option<String>,
     order_group: Option<String>,
+    /// The fields whose new value this Order's change adds to the Package.
+    introduced: Vec<String>,
     items: Vec<OrderItem>,
 }
 
@@ -69,6 +71,7 @@ impl OrderCreationInput {
             currency: None,
             project: None,
             order_group: None,
+            introduced: Vec::new(),
             items: Vec::new(),
         }
     }
@@ -97,6 +100,7 @@ impl OrderCreationInput {
         input.currency = facts.optional("currency");
         input.project = facts.optional("project");
         input.order_group = facts.optional("order_group");
+        input.introduced = facts.introduced();
         Ok(input)
     }
 
@@ -134,6 +138,8 @@ pub struct OrderCreationPlan {
     pub(crate) facts: PlannedOrderFacts,
     pub(crate) vendor: Option<Vendor>,
     pub(crate) reusable_values: ReusableValues,
+    /// The new values this change adds to those the Package keeps.
+    additions: StoredValues,
     evidence: EvidenceFingerprint,
     pub(crate) operations: Vec<PlannedOperation>,
 }
@@ -190,12 +196,12 @@ pub(crate) fn plan_order_creation<F: FileSystem>(
             })
             .transpose()?;
         let vendor_id = vendor.map(|vendor| vendor.vendor_id.as_str());
-        let project = canonical_reusable(input.project.as_deref(), &package.projects);
+        let project = canonical_reusable(input.project.as_deref(), &package.projections.projects);
         let reusable_values = ReusableValues {
-            orderer: canonical_reusable(input.orderer.as_deref(), &package.orderers),
+            orderer: canonical_reusable(input.orderer.as_deref(), &package.projections.orderers),
             ordering_institution: canonical_reusable(
                 input.ordering_institution.as_deref(),
-                &package.ordering_institutions,
+                &package.projections.ordering_institutions,
             ),
             order_group: canonical_reusable(
                 input.order_group.as_deref(),
@@ -203,6 +209,8 @@ pub(crate) fn plan_order_creation<F: FileSystem>(
             ),
             project,
         };
+        crate::order_edits::refuse_unconfirmed(&reusable_values, &input.introduced)?;
+        let additions = crate::values::additions(&reusable_values);
         let mut candidate = json!({
             "schema_version": 1,
             "package_root": package_root_locator,
@@ -303,12 +311,20 @@ pub(crate) fn plan_order_creation<F: FileSystem>(
                 staging_directory.join("README.md"),
             ),
             operation(&root, OperationKind::CommitDirectory, directory.clone()),
-            operation(
-                &root,
-                OperationKind::RefreshPackageIndex,
-                package.context.index.absolute_path.clone(),
-            ),
         ];
+        let mut operations = operations;
+        if !additions.is_empty() {
+            operations.push(operation(
+                &root,
+                OperationKind::ReplaceVendorRecord,
+                package.context.vendors.absolute_path.clone(),
+            ));
+        }
+        operations.push(operation(
+            &root,
+            OperationKind::RefreshPackageIndex,
+            package.context.index.absolute_path.clone(),
+        ));
 
         Ok(OrderCreationPlan {
             vendor: vendor.cloned(),
@@ -319,6 +335,7 @@ pub(crate) fn plan_order_creation<F: FileSystem>(
                 document: order.clone(),
             },
             reusable_values,
+            additions,
             evidence: creation_evidence(&package, order),
             operations,
         })
@@ -363,17 +380,17 @@ fn creation_evidence(
         (
             "orderer",
             document.orderer.as_deref(),
-            package.orderers.clone(),
+            package.projections.orderers.clone(),
         ),
         (
             "ordering_institution",
             document.ordering_institution.as_deref(),
-            package.ordering_institutions.clone(),
+            package.projections.ordering_institutions.clone(),
         ),
         (
             "project",
             document.project.as_deref(),
-            package.projects.clone(),
+            package.projections.projects.clone(),
         ),
         (
             "order_group",
@@ -446,6 +463,7 @@ pub(crate) fn commit_order_creation<F: FileSystem>(
         let candidate = order
             .to_json_bytes()
             .expect("a validated newest-version Order serializes deterministically");
+        let values = crate::values::ValuesWrite::prepare(&current, &plan.additions, filesystem)?;
         let metadata_directory = plan.staging_directory.absolute_path.join(".spielorders");
         let order_path = metadata_directory.join("order.json");
         let readme_path = plan.staging_directory.absolute_path.join("README.md");
@@ -517,6 +535,21 @@ pub(crate) fn commit_order_creation<F: FileSystem>(
                 filesystem,
             ));
         }
+        if let Some(values) = &values
+            && let Err(failure) = values.write(filesystem)
+        {
+            let cleanup = cleanup_owned(
+                &plan.root,
+                &plan.staging_directory.absolute_path,
+                &[readme_path.clone(), order_path.clone()],
+                filesystem,
+            );
+            return Err(crate::values::with_cleanup(
+                failure,
+                cleanup,
+                located(&plan.root, values.path().to_path_buf()),
+            ));
+        }
         match filesystem.rename_new_directory(
             &plan.staging_directory.absolute_path,
             &plan.directory.absolute_path,
@@ -524,21 +557,29 @@ pub(crate) fn commit_order_creation<F: FileSystem>(
             Ok(NewDirectoryRenameOutcome::Renamed) => {}
             Ok(NewDirectoryRenameOutcome::DestinationExists) => {
                 let path = plan.directory.absolute_path.clone();
-                return Err(commit_failure_with_cleanup(
+                let failure = commit_failure_with_cleanup(
                     &plan,
                     path,
                     &[readme_path, order_path],
                     filesystem,
-                ));
+                );
+                return Err(match &values {
+                    Some(values) => values.rollback(failure, filesystem),
+                    None => failure,
+                });
             }
             Err(_) => {
                 let failure_path = plan.staging_directory.absolute_path.clone();
-                return Err(commit_failure_with_cleanup(
+                let failure = commit_failure_with_cleanup(
                     &plan,
                     failure_path,
                     &[readme_path, order_path],
                     filesystem,
-                ));
+                );
+                return Err(match &values {
+                    Some(values) => values.rollback(failure, filesystem),
+                    None => failure,
+                });
             }
         }
 
@@ -551,9 +592,12 @@ pub(crate) fn commit_order_creation<F: FileSystem>(
         {
             refresh.unconfirmed();
         }
-        Ok(refresh.report(OrderCreationResult {
-            directory: plan.directory.clone(),
-        }))
+        Ok(MutationReport::committed(
+            OrderCreationResult {
+                directory: plan.directory.clone(),
+            },
+            refresh.warning().into_iter().collect(),
+        ))
     })
 }
 

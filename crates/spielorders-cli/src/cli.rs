@@ -90,11 +90,23 @@ impl Family {
             | Self::Validate { output, .. }
             | Self::Repair { output, .. } => output.mode(),
             Self::Package { command } => command.mode(),
+            Self::Value { command } => command.mode(),
             Self::Index { command } => command.mode(),
             Self::Order { command } => command.mode(),
             Self::Vendor { command } => command.mode(),
             Self::Search { command } => command.mode(),
             Self::Agent { command } => command.mode(),
+        }
+    }
+}
+
+impl ValueCommand {
+    fn mode(&self) -> Mode {
+        match self {
+            Self::Add { output, .. }
+            | Self::Rename { output, .. }
+            | Self::Merge { output, .. }
+            | Self::Delete { output, .. } => output.mode(),
         }
     }
 }
@@ -197,7 +209,8 @@ impl VendorCommand {
             | Self::Edit { output, .. }
             | Self::Hide { output, .. }
             | Self::Unhide { output, .. }
-            | Self::Delete { output, .. } => output.mode(),
+            | Self::Delete { output, .. }
+            | Self::Merge { output, .. } => output.mode(),
             Self::Contact { command } => command.mode(),
         }
     }
@@ -294,6 +307,9 @@ pub(crate) enum Family {
         target: PackageTarget,
 
         #[command(flatten)]
+        values: NewValues,
+
+        #[command(flatten)]
         execution: Execution,
 
         #[command(flatten)]
@@ -327,6 +343,9 @@ pub(crate) enum Family {
         target: PackageTarget,
 
         #[command(flatten)]
+        values: NewValues,
+
+        #[command(flatten)]
         execution: Execution,
 
         #[command(flatten)]
@@ -336,6 +355,12 @@ pub(crate) enum Family {
     Package {
         #[command(subcommand)]
         command: PackageCommand,
+    },
+    /// Add, rename, merge, or delete one of a Package's Ordering Institutions, Orderers,
+    /// Projects, or Order Groups. Every Order using a changed value follows it.
+    Value {
+        #[command(subcommand)]
+        command: ValueCommand,
     },
     // A first-level command with no subcommand, because there is one thing to ask of a
     // whole Package: whether it is valid, and what is wrong with it where it is not. It
@@ -572,11 +597,37 @@ pub(crate) enum VendorCommand {
     },
     /// Delete this Vendor and its Contacts.
     ///
-    /// Refused while any Order references the Vendor, listing those Orders; hide a Vendor
-    /// that is still in use instead. Deletion cannot be undone by another command.
+    /// Refused while any Order references the Vendor, listing those Orders, unless
+    /// `--replacement` or `--clear` says what they reference instead; hiding is the
+    /// alternative that keeps it. Deletion cannot be undone by another command.
     Delete {
         /// The Vendor Name.
         name: String,
+
+        #[command(flatten)]
+        in_use: InUse,
+
+        #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
+        execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
+    },
+    /// Merge Vendors into one.
+    ///
+    /// Every Order referencing one of them references the kept Vendor, which keeps its own
+    /// facts and gains the others' Contacts; the others are deleted.
+    Merge {
+        /// The Vendor Names to merge.
+        #[arg(required = true, num_args = 1..)]
+        names: Vec<String>,
+
+        /// The Name of the Vendor that is kept.
+        #[arg(long, value_name = "NAME")]
+        keep: String,
 
         #[command(flatten)]
         target: PackageTarget,
@@ -934,6 +985,9 @@ pub(crate) enum OrderCommand {
 
         #[command(flatten)]
         target: OrderTarget,
+
+        #[command(flatten)]
+        values: NewValues,
 
         #[command(flatten)]
         execution: Execution,
@@ -1352,6 +1406,17 @@ pub(crate) struct Execution {
     pub dry_run: bool,
 }
 
+/// Whether an Order mutation adds the values it names that the Package lacks.
+#[derive(Debug, Args)]
+pub(crate) struct NewValues {
+    /// Add each Orderer, Ordering Institution, Project, or Order Group this command names
+    /// that the Package does not have yet, in the same change.
+    ///
+    /// Without it, a value the Package lacks is refused by name.
+    #[arg(long)]
+    pub add_values: bool,
+}
+
 /// The SpielOrders Root a Package-level command acts on.
 ///
 /// One of the two targeting groups, and the difference between them is the whole rule:
@@ -1498,6 +1563,132 @@ pub(crate) enum IndexCommand {
         #[command(flatten)]
         output: OutputMode,
     },
+}
+
+// One command per action rather than per kind, because the four kinds differ only in
+// which list they change: the kind is the first operand, spelled as `package values`
+// spells it, and each action owns its own response contract.
+#[derive(Debug, Subcommand)]
+pub(crate) enum ValueCommand {
+    /// Keep a value, used by an Order or not.
+    ///
+    /// A value the Package already has, in any letter case, is left as it is.
+    Add {
+        /// Which kind of value.
+        kind: ValueKind,
+
+        /// The value.
+        value: String,
+
+        #[command(flatten)]
+        scope: ValueScope,
+
+        #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
+        execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
+    },
+    /// Respell a value in every Order that uses it.
+    ///
+    /// Renaming onto another value the Package has merges the two under the new spelling.
+    Rename {
+        /// Which kind of value.
+        kind: ValueKind,
+
+        /// The value as the Package has it, in any letter case.
+        value: String,
+
+        /// The new spelling.
+        to: String,
+
+        #[command(flatten)]
+        scope: ValueScope,
+
+        #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
+        execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
+    },
+    /// Make several values one value, which every Order using one of them then uses.
+    Merge {
+        /// Which kind of value.
+        kind: ValueKind,
+
+        /// The values to merge.
+        #[arg(required = true, num_args = 1..)]
+        values: Vec<String>,
+
+        /// The spelling the merged value keeps.
+        #[arg(long, value_name = "VALUE")]
+        keep: String,
+
+        #[command(flatten)]
+        scope: ValueScope,
+
+        #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
+        execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
+    },
+    /// Take a value out of the Package.
+    ///
+    /// Refused while an Order uses it, listing those Orders, unless `--replacement` or
+    /// `--clear` says what they use instead.
+    Delete {
+        /// Which kind of value.
+        kind: ValueKind,
+
+        /// The value.
+        value: String,
+
+        #[command(flatten)]
+        in_use: InUse,
+
+        #[command(flatten)]
+        scope: ValueScope,
+
+        #[command(flatten)]
+        target: PackageTarget,
+
+        #[command(flatten)]
+        execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
+    },
+}
+
+/// The Project whose Order Groups a value command changes.
+#[derive(Debug, Args)]
+pub(crate) struct ValueScope {
+    /// For `order_group`, the Project the group belongs to; without it, the groups of
+    /// Orders with no Project. Ignored for the other kinds.
+    #[arg(long, value_name = "PROJECT")]
+    pub project: Option<String>,
+}
+
+/// What Orders still using a deleted value or Vendor use instead.
+#[derive(Debug, Args)]
+pub(crate) struct InUse {
+    /// The existing value, or Vendor Name, every such Order uses instead.
+    #[arg(long, value_name = "VALUE")]
+    pub replacement: Option<String>,
+
+    /// Leave every such Order with none.
+    #[arg(long, conflicts_with = "replacement")]
+    pub clear: bool,
 }
 
 #[derive(Debug, Subcommand)]

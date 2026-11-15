@@ -604,6 +604,17 @@ pub extern "C" fn spielorders_package_values(
     })
 }
 
+/// 1 when `left` and `right` name the same reusable value: surrounding whitespace is
+/// ignored and Unicode letter case is folded. Canonically equivalent Unicode spellings
+/// are not otherwise normalized. Returns 0 for different values or invalid UTF-8.
+#[unsafe(no_mangle)]
+pub extern "C" fn spielorders_value_matches(left: Text<'_>, right: Text<'_>) -> i32 {
+    quietly(0, || match (left.to_str(), right.to_str()) {
+        (Some(left), Some(right)) => i32::from(crate::values::same_value(left, right)),
+        _ => 0,
+    })
+}
+
 /// How many rows `list` holds.
 #[unsafe(no_mangle)]
 pub extern "C" fn spielorders_list_count(list: &SpielordersList) -> i64 {
@@ -650,7 +661,9 @@ pub extern "C" fn spielorders_list_free(list: Option<Box<SpielordersList>>) {
 }
 
 /// One row per reusable value, with how many healthy Orders use it.
-fn value_list(values: Vec<crate::canonical::ReusableValueProjection>) -> SpielordersList {
+pub(super) fn value_list(
+    values: Vec<crate::canonical::ReusableValueProjection>,
+) -> SpielordersList {
     SpielordersList::of(
         values
             .into_iter()

@@ -253,10 +253,12 @@ impl Package {
         let package = &self.contents;
         package.answer(
             match kind {
-                ReusableValueKind::OrderingInstitution => &package.ordering_institutions,
-                ReusableValueKind::Orderer => &package.orderers,
-                ReusableValueKind::Project => &package.projects,
-                ReusableValueKind::OrderGroup => &package.order_groups,
+                ReusableValueKind::OrderingInstitution => {
+                    &package.projections.ordering_institutions
+                }
+                ReusableValueKind::Orderer => &package.projections.orderers,
+                ReusableValueKind::Project => &package.projections.projects,
+                ReusableValueKind::OrderGroup => &package.projections.order_groups,
             }
             .clone(),
         )

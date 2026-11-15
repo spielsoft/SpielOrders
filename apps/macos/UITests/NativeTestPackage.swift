@@ -38,6 +38,7 @@ func addOrder(in root: URL, title: String = "Lifecycle optics", date: String? = 
                  (SPIELORDERS_ORDER_FIELD_ORDER_GROUP, group)]
     for case let (field, value?) in facts {
         XCTAssertEqual(value.withCString { spielorders_draft_set(editing, field, $0, nil) }, SPIELORDERS_RESULT_OK)
+        XCTAssertEqual(spielorders_draft_confirm(editing, field, -1, nil), SPIELORDERS_RESULT_OK)
     }
     if let date {
         XCTAssertEqual(date.withCString { spielorders_draft_set(editing, SPIELORDERS_ORDER_FIELD_DATE_ORDERED, $0, nil) }, SPIELORDERS_RESULT_OK)
@@ -79,6 +80,19 @@ func addOrder(in root: URL, title: String = "Lifecycle optics", date: String? = 
 @MainActor func newOrder(in app: XCUIApplication) {
     fileMenu(in: app).click()
     app.menuBars.menuItems["New Order"].click()
+}
+
+/// Opens the Vendor sheet from the Order's Vendor chooser: types `name`, then chooses
+/// New Vendor “name”… from the chooser's list.
+@MainActor func beginNewVendor(named name: String, in app: XCUIApplication) {
+    let vendor = app.comboBoxes["order.editor.vendor"]
+    XCTAssertTrue(vendor.waitForExistence(timeout: 10))
+    vendor.click()
+    app.typeKey("a", modifierFlags: .command)
+    vendor.typeText(name)
+    let new = vendor.textFields["New Vendor “\(name)”…"]
+    XCTAssertTrue(new.waitForExistence(timeout: 5))
+    new.click()
 }
 
 /// Chooses a destination in the sidebar: `orders`, `vendors`, `orderers`, `institutions`,

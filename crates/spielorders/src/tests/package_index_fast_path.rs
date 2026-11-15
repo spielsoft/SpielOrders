@@ -203,6 +203,7 @@ fn current_index_derives_canonical_equivalent_totals_vendor_association_and_reus
     assert_eq!(
         package
             .contents
+            .projections
             .ordering_institutions
             .iter()
             .map(|entry| (entry.value.as_str(), entry.usage_count))
@@ -212,6 +213,7 @@ fn current_index_derives_canonical_equivalent_totals_vendor_association_and_reus
     assert_eq!(
         package
             .contents
+            .projections
             .orderers
             .iter()
             .map(|entry| entry.value.as_str())
@@ -221,6 +223,7 @@ fn current_index_derives_canonical_equivalent_totals_vendor_association_and_reus
     assert_eq!(
         package
             .contents
+            .projections
             .projects
             .iter()
             .map(|entry| entry.value.as_str())
@@ -230,6 +233,7 @@ fn current_index_derives_canonical_equivalent_totals_vendor_association_and_reus
     assert_eq!(
         package
             .contents
+            .projections
             .order_groups
             .iter()
             .map(|entry| entry.value.as_str())
@@ -773,6 +777,7 @@ fn two_order_current_filesystem(enumeration: &[&str]) -> ScriptedFileSystem {
             },
         ],
         vendors: Vec::new(),
+        values: None,
     };
     filesystem.put_file(
         "/package/.spielorders/index.json",

@@ -138,6 +138,7 @@ private func fill(_ draft: RecordDraft, row: Int, _ values: [Int32: String]) thr
     let created = try await session.newOrderDraft()
     try created.set(SPIELORDERS_ORDER_FIELD_TITLE, to: "Created")
     try created.set(SPIELORDERS_ORDER_FIELD_PROJECT, to: "Greenhouse")
+    try created.confirm(SPIELORDERS_ORDER_FIELD_PROJECT)
     _ = try await session.save(created, cancellation: LibraryCancellation())
     let row = try #require(try await listedOrders(session).first { $0.values[SPIELORDERS_ORDER_FIELD_TITLE] == "Existing" })
     let edit = try await session.orderDraft(row, cancellation: LibraryCancellation())
@@ -145,9 +146,9 @@ private func fill(_ draft: RecordDraft, row: Int, _ values: [Int32: String]) thr
     try edit.set(SPIELORDERS_ORDER_FIELD_ORDERER, to: "Ada")
     do {
         _ = try await session.save(edit, cancellation: LibraryCancellation())
-        Issue.record("An edit introducing new values must ask for confirmation")
+        Issue.record("An edit naming values the Package lacks must be refused")
     } catch let refusal as SaveRefusal {
-        #expect(Set(refusal.unconfirmedFields) == [SPIELORDERS_ORDER_FIELD_PROJECT, SPIELORDERS_ORDER_FIELD_ORDERER])
+        #expect(Set(refusal.problems.map(\.field)) == [SPIELORDERS_ORDER_FIELD_PROJECT, SPIELORDERS_ORDER_FIELD_ORDERER])
     }
     for field in [SPIELORDERS_ORDER_FIELD_PROJECT, SPIELORDERS_ORDER_FIELD_ORDERER] { try edit.confirm(field) }
     let saved = try #require(try await session.save(edit, cancellation: LibraryCancellation()).draft)
@@ -164,6 +165,7 @@ private func fill(_ draft: RecordDraft, row: Int, _ values: [Int32: String]) thr
         let draft = try await session.newOrderDraft()
         try draft.set(SPIELORDERS_ORDER_FIELD_TITLE, to: title)
         try draft.set(SPIELORDERS_ORDER_FIELD_ORDERER, to: orderer)
+        try draft.confirm(SPIELORDERS_ORDER_FIELD_ORDERER)
         _ = try await session.save(draft, cancellation: LibraryCancellation())
     }
     let orderers = try await session.values(SPIELORDERS_ORDER_FIELD_ORDERER)

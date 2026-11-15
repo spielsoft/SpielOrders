@@ -115,7 +115,9 @@ extension DesktopModel {
         switch destination {
         case .orders: newOrder()
         case .vendors: newVendor()
-        case .values, .projects, .packageReadme: break
+        case let .values(list): beginNaming(.new(list.scope))
+        case .projects: beginNaming(.new(.projects))
+        case .packageReadme: break
         }
     }
 
@@ -262,6 +264,51 @@ extension DesktopModel {
         }
     }
 
+    /// Shows the existing Order or Vendor `id` in its editor, wherever the window is, as Open
+    /// does from a list, then calls `shown` once the window is free again. A record that is
+    /// gone or can't be read is not shown, and `shown` still runs to say so.
+    func showRecord(_ kind: RecordDraft.Kind, id: String, then shown: @escaping @MainActor () -> Void) {
+        guard !busy, let retainedFolder = folder else { return }
+        let session = library
+        busy = true
+        let cancellation = LibraryCancellation()
+        work = OwnedOperation(kind: .read) { [self] in
+            defer {
+                busy = false
+                if !Task.isCancelled { shown() }
+                withExtendedLifetime(retainedFolder) {}
+            }
+            do {
+                let opened: OpenedRecord? = try await withTaskCancellationHandler {
+                    let source = try await listedSource(kind, id: id, session: session, cancellation: cancellation)
+                    guard let source else { return nil }
+                    return try await read(source, session: session, cancellation: cancellation)
+                } onCancel: { cancellation.request() }
+                try Task.checkCancellation()
+                if let opened { show(opened, focus: false) }
+            } catch {
+                // `shown` finds the record unshown and says why.
+            }
+        }
+    }
+
+    /// The editable record `id` as the Package lists it now, or nil when it is gone or damaged.
+    private func listedSource(_ kind: RecordDraft.Kind, id: String, session: PackageSession,
+                              cancellation: LibraryCancellation) async throws -> EditorSource? {
+        switch kind {
+        case .order:
+            let listed = try await session.orders(query: "", caseSensitive: false, sortField: orderSortField,
+                                                  descending: orderSortDescending, cancellation: cancellation)
+            guard let row = listed.rows.first(where: { $0.id == id }), row.damage == nil else { return nil }
+            return .order(row)
+        case .vendor:
+            let listed = try await session.vendors(query: "", caseSensitive: false, includeHidden: true,
+                                                   sortField: vendorSortField, descending: vendorSortDescending,
+                                                   cancellation: cancellation)
+            return listed.rows.first { $0.id == id }.map(EditorSource.vendor)
+        }
+    }
+
     private func read(_ source: EditorSource, session: PackageSession,
                       cancellation: LibraryCancellation) async throws -> OpenedRecord {
         switch source {
@@ -369,6 +416,7 @@ extension DesktopModel {
     private func makeEditor(_ draft: RecordDraft) -> RecordEditor {
         let editor = RecordEditor(draft)
         editor.window = dialogs.window
+        editor.onChange = { [weak self] change in self?.register(change) }
         editor.onFinish = { [weak self, weak editor] in
             guard let self, let editor else { return }
             if !editor.dirty {
@@ -387,6 +435,9 @@ extension DesktopModel {
             vendorChoices = try await session.vendors(query: "", caseSensitive: false, includeHidden: false,
                                                       sortField: SPIELORDERS_VENDOR_FIELD_NAME, descending: false,
                                                       cancellation: LibraryCancellation()).rows.map(\.name)
+            knownVendors = try await session.vendors(query: "", caseSensitive: false, includeHidden: true,
+                                                     sortField: SPIELORDERS_VENDOR_FIELD_NAME, descending: false,
+                                                     cancellation: LibraryCancellation()).rows.map(\.name)
             var values: [Int32: [ReusableValue]] = [:]
             for field in [SPIELORDERS_ORDER_FIELD_ORDERER, SPIELORDERS_ORDER_FIELD_ORDERING_INSTITUTION,
                           SPIELORDERS_ORDER_FIELD_PROJECT] {
@@ -394,13 +445,13 @@ extension DesktopModel {
             }
             reusableValues = values
         } catch {
-            // The fields still accept any value; they offer what was last read.
+            // The choosers offer what was last read; the library still judges each save.
         }
     }
 
     /// The Order Groups the editor suggests for an Order in `project`, or in none for "".
     func groupChoices(in project: String) async -> [String] {
-        // The field still accepts any group; it offers none until a read succeeds.
+        // The chooser offers no group until a read succeeds; the library still judges each save.
         (try? await library.groups(of: project).map(\.name)) ?? []
     }
 
@@ -432,7 +483,6 @@ extension DesktopModel {
 
     func discardEditors() {
         for editor in [orderEditor, vendorEditor, vendorSheet] { editor?.close() }
-        dialogs.window?.undoManager?.removeAllActions()
         orderEditor = nil
         vendorEditor = nil
         vendorSheet = nil
@@ -488,11 +538,12 @@ extension DesktopModel {
                     editor.requireReopen("The submitted change was saved. Later input is kept here. "
                         + "Choose File → Reload Package before continuing; it asks before discarding that input.")
                 }
-                editor.window?.undoManager?.removeAllActions()
             }
             guard creating || !saved.requiresReopen else { return }
             await refreshRecords(selectingOrder: editor.kind == .order ? saved.recordID : selectedOrderID,
                                  vendor: editor.kind == .vendor ? saved.recordID : selectedVendorID)
+            // A save may add a value or rename a Vendor that the choosers then offer.
+            await loadChoices(library)
             if creating, editor.kind == .order, canBrowseRecords, let row = orderContext {
                 do {
                     let text = try await library.readme(of: row, cancellation: LibraryCancellation())
@@ -514,22 +565,55 @@ extension DesktopModel {
         }
     }
 
-    func beginVendorSheet() {
-        if deferNavigation({ [self] in beginVendorSheet() }) { return }
+    /// New Vendor “name”… from an Order's Vendor field: the Vendor sheet, starting on `name`,
+    /// over the Order draft, which then uses the Vendor it creates.
+    func beginVendorSheet(named name: String) {
+        if deferNavigation({ [self] in beginVendorSheet(named: name) }) { return }
         guard !busy, orderEditor != nil, vendorSheet == nil else { return }
         let session = library
         busy = true
         work = OwnedOperation(kind: .read) { [self] in
             defer { busy = false }
             do {
-                let editor = makeEditor(try await session.newVendorDraft())
+                let draft = try await session.newVendorDraft()
+                try draft.set(SPIELORDERS_VENDOR_FIELD_NAME, to: name)
+                let editor = makeEditor(draft)
                 vendorSheet = editor
                 if !dialogs.presentVendor(editor, model: self) { vendorSheet = nil }
-            }
-            catch {
+            } catch {
                 alert("Couldn’t start a new Vendor", details: error.localizedDescription, identifier: "vendor.new")
             }
         }
+    }
+
+    /// New Orderer “text”… and its kin in an Order field: once confirmed, the field takes
+    /// `text` and its save adds it, so the Order and the new value are one guarded write. A new
+    /// Order adds it when it is created.
+    func addValue(_ text: String, at field: Int32, in editor: RecordEditor) {
+        guard field != SPIELORDERS_ORDER_FIELD_VENDOR else {
+            beginVendorSheet(named: text)
+            return
+        }
+        if deferNavigation({ [self] in addValue(text, at: field, in: editor) }) { return }
+        guard !busy else { return }
+        let kind = ValueChooser.kind(of: field)
+        let owner = field == SPIELORDERS_ORDER_FIELD_ORDER_GROUP ? groupOwner(editor) : ""
+        busy = true
+        Task {
+            let added = await confirm("Add “\(text)” as a new \(kind)?",
+                                      "It becomes one of the Package’s \(kind)s\(owner), offered to every Order.",
+                                      identifier: "order.editor.addValue", approve: "Add \(kind)")
+            busy = false
+            guard added, orderEditor === editor else { return }
+            editor.add(field, text)
+            editor.finishField()
+        }
+    }
+
+    /// Whose Order Groups a group added to `editor`'s Order joins, as a clause.
+    private func groupOwner(_ editor: RecordEditor) -> String {
+        let project = editor.field(SPIELORDERS_ORDER_FIELD_PROJECT)
+        return project.isEmpty ? " for Orders with no Project" : " in “\(project)”"
     }
 
     func cancelVendorSheet() {
@@ -558,8 +642,7 @@ extension DesktopModel {
         }
     }
 
-    /// Saves `editor`'s draft. A refusal for new reusable values asks to confirm them
-    /// and saves again; any other refusal keeps the draft and shows where it failed.
+    /// Saves `editor`'s draft. A refusal keeps the draft and shows where it failed.
     private func save(_ editor: RecordEditor, then committed: @escaping @MainActor (SavedRecord) async -> Void) {
         guard let retainedFolder = folder else { return }
         let session = library
@@ -591,37 +674,30 @@ extension DesktopModel {
                 continuingSave = wasContinuing
                 withExtendedLifetime(retainedFolder) {}
             }
-            var confirmed = false
-            while true {
-                do {
-                    let saved = try await session.save(editor.draft, cancellation: cancellation)
-                    await committed(saved)
-                    completed = true
-                    editor.warn(saved.warnings)
-                    if let group = saved.cleared[SPIELORDERS_ORDER_FIELD_ORDER_GROUP] {
-                        let project = saved.draft?.field(SPIELORDERS_ORDER_FIELD_PROJECT)
-                        noteClearedGroup(group, project: project, in: editor)
-                    }
-                    return
-                } catch let refusal as SaveRefusal {
-                    let fields = refusal.unconfirmedFields
-                    if !confirmed, !fields.isEmpty, refusal.problems.allSatisfy({ fields.contains($0.field) }),
-                       await confirmNewValues(fields.map { ($0, editor.draft.field($0)) }) {
-                        for field in fields { try? editor.draft.confirm(field) }
-                        confirmed = true
-                        continue
-                    }
-                    let explanation = refusal.stale
-                        ? "It changed on disk. Your input is kept; Revert shows the current version."
-                        : "Your input is kept. Correct the marked problems, then Retry."
-                    editor.refuse(refusal, failure: Notice(explanation, details: refusal.localizedDescription))
-                    return
-                } catch {
-                    let failure = Notice("Your input is kept. Retry, or reload the Package.",
-                                         details: error.localizedDescription)
-                    editor.refuse(.unavailable("The change couldn’t be written."), failure: failure)
-                    return
+            do {
+                let saved = try await session.save(editor.draft, cancellation: cancellation)
+                await committed(saved)
+                completed = true
+                editor.warn(saved.warnings)
+                if let group = saved.cleared[SPIELORDERS_ORDER_FIELD_ORDER_GROUP] {
+                    let project = saved.draft?.field(SPIELORDERS_ORDER_FIELD_PROJECT)
+                    noteClearedGroup(group, project: project, in: editor)
                 }
+            } catch let refusal as SaveRefusal {
+                let explanation = refusal.stale
+                    ? "It changed on disk. Your input is kept; Revert shows the current version."
+                    : "Your input is kept. Correct the marked problems, then Retry."
+                editor.refuse(refusal, failure: Notice(explanation, details: refusal.localizedDescription))
+                if editor === vendorEditor, !editor.isNew, refusal.problems.contains(where: \.nameTaken) {
+                    Task {
+                        await waitForWork()
+                        offerVendorMerge(editor)
+                    }
+                }
+            } catch {
+                let failure = Notice("Your input is kept. Retry, or reload the Package.",
+                                     details: error.localizedDescription)
+                editor.refuse(.unavailable("The change couldn’t be written."), failure: failure)
             }
         }
     }
@@ -636,13 +712,6 @@ extension DesktopModel {
         }
         let consequence = "Order Group cleared: \(owner) no group named “\(group)”."
         editor.note(consequence, at: SPIELORDERS_ORDER_FIELD_ORDER_GROUP)
-    }
-
-    private func confirmNewValues(_ values: [(Int32, String)]) async -> Bool {
-        await confirm("Add new values?",
-                values.map { "\(RecordFieldLabel.of($0.0)): \($0.1)" }.joined(separator: "\n")
-                    + "\nThe Package does not use these values yet.",
-                identifier: "order.editor.newValues", approve: "Add Values")
     }
 
     /// Lists Orders and Vendors again after a commit, keeping the given selections, and shows

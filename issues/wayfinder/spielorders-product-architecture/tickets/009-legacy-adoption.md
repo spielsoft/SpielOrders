@@ -27,16 +27,16 @@ SpielOrders performs no legacy filename-to-domain parser. The aligned naming con
 
 Summary records, the physical directory, aliases that point to it, retained audit material, and its documents are separate evidence sources. The agent may inspect them read-only and should prefer direct transaction or structured-record evidence over a projected basename. It reports provenance and contradictions rather than silently selecting whichever source is easiest. Missing optional facts remain absent. Missing or contradictory required Date Ordered or Order Title blocks that candidate until the human accepts a defensible value. Status is also explicit for adoption and may be any established Order Status; it is never inferred from document presence.
 
-Institution labels in summary records are proposed Ordering Institution values, not directories to adopt. Reusable Free-Entry Values follow their established trimmed, case-insensitive reuse rule. An agent first queries the Package's current canonical values and recommends reuse or an explicitly confirmed new value; SpielOrders does not retain a separate legacy-alias table.
+Institution labels in summary records are proposed Ordering Institution values, not directories to adopt. Reusable Free-Entry Values follow their established trimmed, case-insensitive reuse rule. An agent first queries the Package's current canonical values and recommends reuse or an explicitly added new value; SpielOrders does not retain a separate legacy-alias table.
 
-### Vendor reconciliation without Vendor Merge
+### Vendor reconciliation
 
 The agent may discover Vendor evidence in structured records, names, and Supporting Material, but the core sees only an explicit Vendor choice or no Vendor. Before proposing a Vendor, the agent obtains the existing Vendor list and compares the evidence with current Vendor identities and facts.
 
 - Reuse an existing Vendor only when the agent explicitly identifies it as the same real Vendor and supplies that existing association. Case and surrounding whitespace already reuse the canonical Vendor Name; broader spellings such as `Deltaparts`, `DeltaParts`, and `Delta-Parts`, or `Maplewood`, `Maplewood-Carr`, and `MaplewoodCar`, require evidence-backed agent judgment rather than automatic alias matching.
 - Propose a new Vendor only when the evidence identifies a distinct Vendor not already represented. Creation uses the ordinary `add-vendor` dry-run and mutation flow.
 - When no Vendor is established, omit the Vendor Reference. Never create `Unknown`, `Vendor Not Recorded`, or another placeholder Vendor.
-- When two proposed names appear to be duplicates, the agent resolves them before creation by selecting one existing/new canonical Vendor. SpielOrders never creates both and later merges them; Vendor Merge remains absent.
+- When two proposed names appear to be duplicates, the agent resolves them before creation by selecting one existing/new canonical Vendor. Creating both and merging them later is not part of adoption.
 
 Vendor Contacts and other shared facts are proposed only from evidence that supports Package-wide reuse. Order-specific quotes, correspondence, catalog data, and prices remain Supporting Material or Order Item facts rather than Vendor facts.
 

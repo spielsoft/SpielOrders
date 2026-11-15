@@ -191,13 +191,22 @@ fn healthy_order_projection_contains_complete_facts_totals_readme_vendor_and_reu
     assert!(package.contents.damaged_orders.is_empty());
     assert!(package.contents.diagnostic_groups.is_empty());
     assert_eq!(
-        package.contents.ordering_institutions[0].value,
+        package.contents.projections.ordering_institutions[0].value,
         "Example Institute"
     );
-    assert_eq!(package.contents.orderers[0].value, "Ada Lovelace");
-    assert_eq!(package.contents.projects[0].value, "Telescope");
-    assert_eq!(package.contents.order_groups[0].value, "Summer build");
-    assert_eq!(package.contents.order_groups[0].usage_count, 1);
+    assert_eq!(
+        package.contents.projections.orderers[0].value,
+        "Ada Lovelace"
+    );
+    assert_eq!(
+        package.contents.projections.projects[0].value,
+        "Telescope"
+    );
+    assert_eq!(
+        package.contents.projections.order_groups[0].value,
+        "Summer build"
+    );
+    assert_eq!(package.contents.projections.order_groups[0].usage_count, 1);
 }
 
 #[test]
@@ -808,10 +817,10 @@ fn healthy_order_sorting_drives_unicode_reusable_value_spelling_counts_and_order
         vec!["Alpha", "Zulu", "Newest path but older date"]
     );
     for values in [
-        package.contents.ordering_institutions,
-        package.contents.orderers,
-        package.contents.projects,
-        package.contents.order_groups,
+        package.contents.projections.ordering_institutions,
+        package.contents.projections.orderers,
+        package.contents.projections.projects,
+        package.contents.projections.order_groups,
     ] {
         assert_eq!(
             values

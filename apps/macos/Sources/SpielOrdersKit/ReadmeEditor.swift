@@ -1,9 +1,13 @@
 import AppKit
 import SwiftUI
 
-/// A plain-text Markdown editor with light highlighting and its own native Undo.
+/// A plain-text Markdown editor with light highlighting. Its text binding owns Undo, so
+/// the app can keep document-scoped changes in the window's shared history after navigation.
 public struct ReadmeEditor: NSViewRepresentable {
     @Binding private var text: String
+    /// Raw text is a view input, including a changed Unicode spelling that compares equal
+    /// as a Swift String. Height follows the same input.
+    private let shownText: [UInt8]
     private let isEditable: Bool
     private let label: String
     private let identifier: String
@@ -15,6 +19,7 @@ public struct ReadmeEditor: NSViewRepresentable {
     public init(text: Binding<String>, isEditable: Bool, label: String, identifier: String,
                 height: ClosedRange<CGFloat>?, onEnd: @escaping () -> Void) {
         _text = text
+        shownText = Array(text.wrappedValue.utf8)
         self.isEditable = isEditable
         self.label = label
         self.identifier = identifier
@@ -29,7 +34,7 @@ public struct ReadmeEditor: NSViewRepresentable {
         scroll.borderType = .bezelBorder
         let editor = scroll.documentView as! NSTextView
         editor.isRichText = false
-        editor.allowsUndo = true
+        editor.allowsUndo = false
         editor.isSelectable = true
         editor.isEditable = isEditable
         editor.isAutomaticQuoteSubstitutionEnabled = false
@@ -49,13 +54,11 @@ public struct ReadmeEditor: NSViewRepresentable {
         let editor = scroll.documentView as! NSTextView
         context.coordinator.text = $text
         context.coordinator.onEnd = onEnd
-        context.coordinator.editor = editor
         editor.isEditable = isEditable
         editor.setAccessibilityLabel(label)
         editor.setAccessibilityIdentifier(identifier)
-        if editor.string != text {
+        if !editor.string.utf8.elementsEqual(text.utf8) {
             editor.string = text
-            editor.undoManager?.removeAllActions()
             context.coordinator.highlight(editor)
         }
     }
@@ -64,7 +67,7 @@ public struct ReadmeEditor: NSViewRepresentable {
                              context: Context) -> CGSize? {
         guard let height, let width = proposal.width, width.isFinite else { return nil }
         let editor = scroll.documentView as! NSTextView
-        let fitted = Self.textHeight(text, in: editor, width: width)
+        let fitted = Self.textHeight(String(decoding: shownText, as: UTF8.self), in: editor, width: width)
         return CGSize(width: width, height: min(max(fitted, height.lowerBound), height.upperBound))
     }
 
@@ -83,28 +86,14 @@ public struct ReadmeEditor: NSViewRepresentable {
     @MainActor public final class Coordinator: NSObject, NSTextViewDelegate {
         fileprivate var text: Binding<String>
         fileprivate var onEnd: () -> Void
-        fileprivate weak var editor: NSTextView?
-        private let history = UndoManager()
         init(text: Binding<String>, onEnd: @escaping () -> Void) {
             self.text = text
             self.onEnd = onEnd
             super.init()
-            for name in [Notification.Name.NSUndoManagerDidUndoChange, .NSUndoManagerDidRedoChange] {
-                NotificationCenter.default.addObserver(self, selector: #selector(undoChanged(_:)), name: name, object: history)
-            }
-        }
-
-        public func undoManager(for view: NSTextView) -> UndoManager? { history }
-
-        @objc private func undoChanged(_ notification: Notification) {
-            guard let editor else { return }
-            text.wrappedValue = editor.string
-            highlight(editor)
         }
 
         public func textDidChange(_ notification: Notification) {
             guard let editor = notification.object as? NSTextView else { return }
-            self.editor = editor
             text.wrappedValue = editor.string
             highlight(editor)
         }

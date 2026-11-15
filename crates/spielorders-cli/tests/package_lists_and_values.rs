@@ -513,3 +513,115 @@ fn every_value_kind_is_iterated() {
         summary.stdout_text()
     );
 }
+
+/// A deleted value its Orders use is replaced in every one of them, and the count the
+/// response states is the Orders that changed; a replacement and `--clear` together are
+/// one command line asking for two things.
+#[test]
+fn deleting_a_used_value_with_a_replacement_changes_every_order_using_it() {
+    let (_tree, root) = crate::support::populated_package("value-delete-replacement");
+    let added = crate::support::Invocation::new(&["value", "add", "project", "Weather station"])
+        .rooted_at(&root)
+        .run();
+    assert_eq!(added.status, Some(0), "{}", added.stderr_text());
+
+    let deleted = crate::support::Invocation::new(&[
+        "value",
+        "delete",
+        "project",
+        "telescope",
+        "--replacement",
+        "weather STATION",
+        "--json",
+    ])
+    .rooted_at(&root)
+    .run();
+    let document = crate::support::response(&deleted);
+    assert_eq!(document["data"]["orders"], 2);
+    let values = crate::support::response(
+        &crate::support::Invocation::new(&["package", "values", "project", "--json"])
+            .rooted_at(&root)
+            .run(),
+    );
+    assert_eq!(
+        values["data"],
+        serde_json::json!([{ "value": "Weather station", "usage_count": "2" }])
+    );
+
+    let both = crate::support::Invocation::new(&[
+        "value",
+        "delete",
+        "project",
+        "Weather station",
+        "--replacement",
+        "Telescope",
+        "--clear",
+    ])
+    .rooted_at(&root)
+    .run();
+    assert_eq!(both.status, Some(2), "{}", both.stderr_text());
+}
+
+/// A committed value command carries its resulting scoped list, including an empty
+/// list after deleting the last value; a caller does not need a second read.
+#[test]
+fn value_mutations_return_the_resulting_values() {
+    let (_tree, root) = initialized_package("value-mutation-results");
+    for (command, expected) in [
+        (
+            vec!["value", "add", "orderer", "Emmy Noether"],
+            vec!["Emmy Noether"],
+        ),
+        (
+            vec!["value", "add", "orderer", "emmy noether"],
+            vec!["Emmy Noether"],
+        ),
+        (
+            vec!["value", "add", "orderer", "Ada Lovelace"],
+            vec!["Ada Lovelace", "Emmy Noether"],
+        ),
+        (
+            vec!["value", "rename", "orderer", "Ada Lovelace", "Grace Hopper"],
+            vec!["Emmy Noether", "Grace Hopper"],
+        ),
+        (
+            vec![
+                "value",
+                "merge",
+                "orderer",
+                "Emmy Noether",
+                "Grace Hopper",
+                "--keep",
+                "Grace Hopper",
+            ],
+            vec!["Grace Hopper"],
+        ),
+        (vec!["value", "delete", "orderer", "Grace Hopper"], vec![]),
+    ] {
+        let run = Invocation::new(&command)
+            .argument("--json")
+            .rooted_at(&root)
+            .run();
+        assert_eq!(run.status, Some(0), "{command:?}: {}", run.stdout_text());
+        let document = response(&run);
+        let expected = serde_json::Value::Array(
+            expected
+                .into_iter()
+                .map(|value| serde_json::json!({"value": value, "usage_count": "0"}))
+                .collect(),
+        );
+        assert_eq!(document["data"]["values"], expected, "{command:?}");
+    }
+    let planned = Invocation::new(&[
+        "value",
+        "add",
+        "orderer",
+        "Emmy Noether",
+        "--dry-run",
+        "--json",
+    ])
+    .rooted_at(&root)
+    .run();
+    assert_eq!(planned.status, Some(0));
+    assert!(response(&planned)["data"].get("values").is_none());
+}

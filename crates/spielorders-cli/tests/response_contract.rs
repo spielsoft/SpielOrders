@@ -267,6 +267,7 @@ fn every_recorded_cell_is_one_this_file_compares() {
         .chain(CONTACT_MUTATIONS)
         .chain(NEW_ORDER_MUTATIONS)
         .chain(RECORD_MUTATIONS)
+        .chain(VALUE_MUTATIONS)
     {
         compared.push((contract, mutations.clone()));
     }
@@ -1287,8 +1288,16 @@ fn mutation_run(
         MutationCell::Warning if contract == ResponseContract::VendorDelete => {
             package_with_an_unused_vendor_and_a_blocked_index_refresh(label)
         }
-        MutationCell::Success if contract == ResponseContract::VendorDelete => {
+        MutationCell::Success
+            if matches!(
+                contract,
+                ResponseContract::VendorDelete | ResponseContract::VendorMerge
+            ) =>
+        {
             package_with_an_unused_vendor(label)
+        }
+        MutationCell::Warning if contract == ResponseContract::VendorMerge => {
+            package_with_an_unused_vendor_and_a_blocked_index_refresh(label)
         }
         MutationCell::Warning => match contract {
             ResponseContract::AddVendor => initialized_package_with_a_blocked_index_refresh(label),
@@ -1351,6 +1360,68 @@ fn mutation_command(contract: ResponseContract, cell: MutationCell) -> Vec<&'sta
             vec!["vendor", "delete", "Tarnwick"]
         }
         (ResponseContract::VendorDelete, _) => vec!["vendor", "delete", "Elderglass Optics"],
+        // A Name the Package has no Vendor for, refused before anything is merged.
+        (ResponseContract::VendorMerge, MutationCell::Rejected) => {
+            vec![
+                "vendor", "merge", "Tarnwick", "Nonesuch", "--keep", "Tarnwick",
+            ]
+        }
+        (ResponseContract::VendorMerge, _) => vec![
+            "vendor",
+            "merge",
+            "Tarnwick",
+            "Elderglass Optics",
+            "--keep",
+            "Tarnwick",
+        ],
+        // A Project the Package lacks, named as the home of a new group.
+        (ResponseContract::ValueAdd, MutationCell::Rejected) => {
+            vec![
+                "value",
+                "add",
+                "order_group",
+                "Vacuum",
+                "--project",
+                "Weather station",
+            ]
+        }
+        (ResponseContract::ValueAdd, _) => vec!["value", "add", "orderer", "Emmy Noether"],
+        (ResponseContract::ValueRename, MutationCell::Rejected) => {
+            vec!["value", "rename", "orderer", "Nobody", "Somebody"]
+        }
+        (ResponseContract::ValueRename, _) => vec![
+            "value",
+            "rename",
+            "project",
+            "Telescope",
+            "Telescope array",
+        ],
+        (ResponseContract::ValueMerge, MutationCell::Rejected) => {
+            vec![
+                "value",
+                "merge",
+                "orderer",
+                "Nobody",
+                "--keep",
+                "Ada Lovelace",
+            ]
+        }
+        (ResponseContract::ValueMerge, _) => vec![
+            "value",
+            "merge",
+            "project",
+            "Telescope",
+            "--keep",
+            "TeleScope",
+        ],
+        // A value its Orders still use, named without a replacement: the refusal that
+        // lists them.
+        (ResponseContract::ValueDelete, MutationCell::Rejected) => {
+            vec!["value", "delete", "project", "Telescope"]
+        }
+        (ResponseContract::ValueDelete, _) => {
+            vec!["value", "delete", "project", "Telescope", "--clear"]
+        }
         (ResponseContract::VendorUnhide, MutationCell::Rejected) => {
             vec!["vendor", "unhide", "Copperwick"]
         }
@@ -1439,12 +1510,22 @@ fn mutation_command(contract: ResponseContract, cell: MutationCell) -> Vec<&'sta
     }
 }
 
-const VENDOR_MUTATIONS: [ResponseContract; 5] = [
+const VENDOR_MUTATIONS: [ResponseContract; 6] = [
     ResponseContract::AddVendor,
     ResponseContract::VendorEdit,
     ResponseContract::VendorHide,
     ResponseContract::VendorUnhide,
     ResponseContract::VendorDelete,
+    ResponseContract::VendorMerge,
+];
+
+/// The four changes to a Package's values, recorded with the Vendor mutations because
+/// they replace the same documents.
+const VALUE_MUTATIONS: [ResponseContract; 4] = [
+    ResponseContract::ValueAdd,
+    ResponseContract::ValueRename,
+    ResponseContract::ValueMerge,
+    ResponseContract::ValueDelete,
 ];
 
 /// Each mutation of a Vendor record, in each of its cells, against its recorded bytes.
@@ -1463,7 +1544,11 @@ const VENDOR_MUTATIONS: [ResponseContract; 5] = [
 /// `docs/development/traceability.md`.
 #[test]
 fn every_vendor_and_contact_mutation_matches_its_golden_fixtures() {
-    for contract in VENDOR_MUTATIONS.into_iter().chain(CONTACT_MUTATIONS) {
+    for contract in VENDOR_MUTATIONS
+        .into_iter()
+        .chain(CONTACT_MUTATIONS)
+        .chain(VALUE_MUTATIONS)
+    {
         for cell in MUTATION_CELLS {
             let label = format!("golden-{}-{}", contract.name(), cell.name());
             let (_tree, root, run) = mutation_run(contract, cell, &label);
@@ -1816,7 +1901,10 @@ fn new_order_run(
     for assignment in new_order_assignments(contract, cell) {
         run = run.argument(assignment);
     }
-    run = run.argument("--json").rooted_at(&root);
+    run = run
+        .argument("--add-values")
+        .argument("--json")
+        .rooted_at(&root);
     (tree, root, run)
 }
 
@@ -2131,7 +2219,7 @@ fn record_mutation_run(
 
 fn record_mutation_command(contract: ResponseContract, cell: MutationCell) -> Vec<&'static str> {
     match (contract, cell) {
-        // A reuse under a different spelling, an introduction, a clearing, and the entry
+        // A reuse under a different spelling, an added value, a clearing, and the entry
         // into `ordered` that applies today's date — the fullest shape this report has.
         (ResponseContract::OrderEdit, MutationCell::Success) => vec![
             "order",
@@ -2140,6 +2228,7 @@ fn record_mutation_command(contract: ResponseContract, cell: MutationCell) -> Ve
             "ordering_institution=example institute",
             "order_group=Autumn build",
             "orderer=",
+            "--add-values",
         ],
         // A Date Ordered the record cannot hold, named. The two creating commands refuse
         // the same value under the same code, and record a different cell — a rejected

@@ -1,0 +1,49 @@
+{
+  "contract": "spielorders.value.add",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "root": "<PACKAGE_ROOT>"
+  },
+  "data": {
+    "outcome": "committed_with_warning",
+    "committed": true,
+    "operations": [
+      {
+        "kind": "replace_vendor_record",
+        "path": "<PACKAGE_ROOT>/.spielorders/vendors.json"
+      },
+      {
+        "kind": "refresh_package_index",
+        "path": "<PACKAGE_ROOT>/.spielorders/index.json"
+      }
+    ],
+    "changes": [],
+    "values": [
+      {
+        "value": "Ada Lovelace",
+        "usage_count": "2"
+      },
+      {
+        "value": "Emmy Noether",
+        "usage_count": "0"
+      }
+    ],
+    "final_path": null,
+    "orders": 0
+  },
+  "diagnostics": [
+    {
+      "code": "index_refresh_failed",
+      "severity": "warning",
+      "message": "Index refresh failed",
+      "field": null,
+      "reason": null,
+      "position": null,
+      "path": ".spielorders/index.json",
+      "before": null,
+      "after": null
+    }
+  ],
+  "error": null
+}

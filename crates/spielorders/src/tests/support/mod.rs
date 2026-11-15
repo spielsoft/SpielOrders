@@ -567,6 +567,8 @@ pub struct Index {
     pub schema_version: u8,
     pub orders: Vec<IndexedOrder>,
     pub vendors: Vec<Vendor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<crate::metadata::StoredValues>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
@@ -581,6 +583,8 @@ pub struct IndexedOrder {
 pub struct Vendors {
     pub schema_version: u8,
     pub vendors: Vec<Vendor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<crate::metadata::StoredValues>,
 }
 
 /// A managed JSON document's one deterministic spelling: pretty-printed in field order,

@@ -13,6 +13,24 @@ use crate::support::{
     package_with_a_blocked_index_refresh, populated_package, response,
 };
 
+/// Merging carries the kept Vendor's facts and combined Contacts, not only a write
+/// count that forces the caller to read again.
+#[test]
+fn merging_vendors_returns_the_kept_vendor_and_contacts() {
+    let (_tree, root) = populated_package("vendor-merge-result");
+    let kept = crate::support::hidden_vendor_id(&root);
+    let run = Invocation::new(&["vendor", "merge", "Tarnwick", "--keep", "Nethermoor", "--json"])
+        .rooted_at(&root)
+        .run();
+    assert_eq!(run.status, Some(0), "{}", run.stdout_text());
+    let document = response(&run);
+    let vendor = &document["data"]["vendor"];
+    assert_eq!(vendor["vendor_id"], kept);
+    assert_eq!(vendor["name"], "Nethermoor");
+    assert_eq!(vendor["contacts"][0]["name"], "Katherine Johnson");
+    assert_eq!(document["data"]["orders"], 1);
+}
+
 /// The two `add-vendor` forms are one command line spelled two ways, and combining them
 /// is a usage error.
 ///

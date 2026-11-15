@@ -12,7 +12,7 @@ public struct ReadmeDraft: Sendable {
         self.saved = saved
     }
 
-    public var unsaved: Bool { text != saved }
+    public var unsaved: Bool { !text.utf8.elementsEqual(saved.utf8) }
     public var saving: Bool { submitted != nil }
 
     /// Begins saving the current text: the text to write, or nil when nothing is unsaved or
@@ -28,7 +28,7 @@ public struct ReadmeDraft: Sendable {
     public mutating func save(_ refreshed: String?) {
         guard let submitted else { return }
         let written = refreshed ?? submitted
-        if text == submitted { text = written }
+        if text.utf8.elementsEqual(submitted.utf8) { text = written }
         saved = written
         self.submitted = nil
     }

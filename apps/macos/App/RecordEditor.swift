@@ -22,8 +22,10 @@ import SpielOrdersKit
     private(set) var consequences: [Int32: String] = [:]
     private var needsReopen = false
     var onFinish: (() -> Void)?
-    private var undoPending = false
-    private var changeRegistered = false
+    /// Records a change to an existing record in the window's Undo history.
+    var onChange: ((RecordChange) -> Void)?
+    /// The history's change that the next committed save completes.
+    private var change: RecordChange?
     private var saving = false
     private var submitted: RecordValues?
     private var submittedTotal = ""
@@ -67,22 +69,16 @@ import SpielOrdersKit
 
     func field(_ field: Int32) -> String {
         _ = revision
-        for value in input.reversed() {
-            switch value {
-            case let .value(key, nil, text) where key == field: return text
-            case let .restore(values): return values.fields[field] ?? ""
-            default: continue
-            }
-        }
+        if let value = input.last(where: { $0.field == field && $0.row == nil }) { return value.text }
         if let submitted { return submitted.fields[field] ?? "" }
         return draft.field(field)
     }
 
     func set(_ field: Int32, _ text: String) {
-        if submitted != nil { buffer(.value(field: field, row: nil, text: text)); return }
+        if submitted != nil { buffer(Input(field: field, row: nil, text: text)); return }
         // Naming the same value still carries intent to the library, for example keeping
         // an Order Group while changing Project. It need not redraw unchanged text.
-        guard self.field(field) != text else {
+        guard !self.field(field).utf8.elementsEqual(text.utf8) else {
             do { try draft.set(field, to: text) } catch { NSSound.beep() }
             return
         }
@@ -90,49 +86,53 @@ import SpielOrdersKit
         if saving { inputChanged = true }
     }
 
+    /// Sets `field` to `text` and asks that saving add it to the Package's values, so the
+    /// record and the new value are written together.
+    func add(_ field: Int32, _ text: String) {
+        if submitted != nil {
+            buffer(Input(field: field, row: nil, text: text, adds: true))
+            return
+        }
+        apply {
+            try draft.set(field, to: text)
+            try draft.confirm(field)
+        }
+        if saving { inputChanged = true }
+    }
+
     var rowCount: Int {
         _ = revision
-        for value in input.reversed() {
-            if case let .restore(values) = value { return values.rows.count }
-        }
         return submitted?.rows.count ?? draft.rowCount
     }
 
     func rowField(_ row: Int, _ field: Int32) -> String {
         _ = revision
-        for value in input.reversed() {
-            switch value {
-            case let .value(key, index, text) where index == row && key == field: return text
-            case let .restore(values): return values.rows.indices.contains(row) ? values.rows[row][field] ?? "" : ""
-            default: continue
-            }
-        }
+        if let value = input.last(where: { $0.field == field && $0.row == row }) { return value.text }
         if let submitted { return submitted.rows.indices.contains(row) ? submitted.rows[row][field] ?? "" : "" }
         return draft.rowField(row, field)
     }
 
     var total: String {
         _ = revision
-        if input.contains(where: {
-            switch $0 {
-            case .value(_, nil, _): false
-            default: true
-            }
-        }) { return "" }
+        if input.contains(where: { $0.row != nil }) { return "" }
         if submitted != nil { return submittedTotal }
         return draft.total
     }
 
     func setRow(_ row: Int, _ field: Int32, _ text: String) {
-        guard rowField(row, field) != text else { return }
-        if submitted != nil { buffer(.value(field: field, row: row, text: text)); return }
+        guard !rowField(row, field).utf8.elementsEqual(text.utf8) else { return }
+        if submitted != nil { buffer(Input(field: field, row: row, text: text)); return }
         apply { try draft.setRow(row, field, to: text) }
         if saving { inputChanged = true }
     }
 
-    private enum Input {
-        case value(field: Int32, row: Int?, text: String)
-        case restore(RecordValues)
+    /// A value typed while a save settles, applied once it has.
+    private struct Input {
+        let field: Int32
+        let row: Int?
+        let text: String
+        /// Whether saving adds `text` to the Package's values.
+        var adds = false
     }
 
     private func buffer(_ value: Input) {
@@ -160,10 +160,12 @@ import SpielOrdersKit
         input = []
         let before = RecordValues(draft)
         for value in pending {
-            switch value {
-            case let .value(field, row?, text): setRow(row, field, text)
-            case let .value(field, nil, text): set(field, text)
-            case let .restore(values): apply(rows: true) { try values.apply(to: draft) }
+            if let row = value.row {
+                setRow(row, value.field, value.text)
+            } else if value.adds {
+                add(value.field, value.text)
+            } else {
+                set(value.field, value.text)
             }
         }
         inputChanged = RecordValues(draft) != before
@@ -183,7 +185,7 @@ import SpielOrdersKit
         apply(rows: true) { try draft.insertRow(at: row) }
         selectedRows = [row]
         focusRequest = (draft.rowFields[0], row, (focusRequest?.serial ?? 0) + 1)
-        if isNew { registerUndo(previous) }
+        if isNew { registerStagedUndo(previous) }
     }
 
     func removeSelection() {
@@ -191,7 +193,7 @@ import SpielOrdersKit
         for row in selectedRows.sorted(by: >) where row < draft.rowCount { remove(at: row) }
         selectedRows = []
         focusRequest = nil
-        if isNew { registerUndo(previous) }
+        if isNew { registerStagedUndo(previous) }
         finishField()
     }
 
@@ -204,15 +206,13 @@ import SpielOrdersKit
         var wanted = order.filter { !sources.contains($0) }
         wanted.insert(contentsOf: sources, at: destination)
         guard order != wanted else { return }
-        undoManager?.beginUndoGrouping()
-        defer { undoManager?.endUndoGrouping() }
         for (target, original) in wanted.enumerated() {
             guard let current = order.firstIndex(of: original), current != target else { continue }
             moveRow(from: current, to: target)
             order.insert(order.remove(at: current), at: target)
         }
         selectedRows = IndexSet(integersIn: destination..<(destination + sources.count))
-        if isNew { registerUndo(previous) }
+        if isNew { registerStagedUndo(previous) }
         finishField()
     }
 
@@ -238,6 +238,11 @@ import SpielOrdersKit
     /// Problems located at `field` of `row` (-1 for the record's own facts).
     func problems(at field: Int32, row: Int = -1) -> [DraftProblem] {
         problems.filter { $0.field == field && $0.row == row }
+    }
+
+    /// The problems located at `field` of `row`, each stated in plain words for that field.
+    func statements(at field: Int32, row: Int = -1) -> [String] {
+        problems(at: field, row: row).map { $0.statement(for: RecordFieldLabel.of(field)) }
     }
 
     /// Keeps the input a save refused, with where `refusal` located its problems and `failure`
@@ -281,31 +286,45 @@ import SpielOrdersKit
 
     func finishField() {
         if saving { finishPending = true; return }
-        if !dirty { undoPending = false; changeRegistered = false }
+        // Input returned to the saved record completes its change without a save.
+        if !dirty { complete() }
         onFinish?()
     }
 
+    /// Starts the history's change for the edit about to be saved, unless one is waiting.
     private func registerChange() {
-        guard !changeRegistered, !undoPending else { return }
-        registerUndo(baseline)
-        changeRegistered = true
+        guard change == nil, let id = draft.recordID else { return }
+        let change = RecordChange(kind: kind, id: id, values: baseline)
+        self.change = change
+        onChange?(change)
     }
 
-    private func registerUndo(_ values: RecordValues) {
-        undoManager?.registerUndo(withTarget: self) { $0.restore(values) }
+    /// Applies `values`, which Undo or Redo restores, through the same automatic save as an
+    /// edit; `change`, the history's way back, completes once they are saved.
+    func restore(_ values: RecordValues, completing change: RecordChange) {
+        self.change = change
+        replace(with: values)
+    }
+
+    /// The waiting change now names the values the record holds.
+    private func complete() {
+        change?.committed = baseline
+        change = nil
+    }
+
+    /// Undo of a row change to a record not yet created, which stays staged in the editor.
+    private func registerStagedUndo(_ values: RecordValues) {
+        undoManager?.registerUndo(withTarget: self) { $0.restoreStaged(values) }
         undoManager?.setActionName(kind == .order ? "Edit Order" : "Edit Vendor")
     }
 
-    private func restore(_ values: RecordValues) {
-        registerUndo(RecordValues(self))
-        if submitted != nil {
-            buffer(.restore(values))
-            rowsRevision &+= 1
-        } else {
-            apply(rows: true) { try values.apply(to: draft) }
-        }
-        undoPending = true
-        changeRegistered = false
+    private func restoreStaged(_ values: RecordValues) {
+        registerStagedUndo(RecordValues(self))
+        replace(with: values)
+    }
+
+    private func replace(with values: RecordValues) {
+        apply(rows: true) { try values.apply(to: draft) }
         problems = []
         failure = nil
         needsReopen = false
@@ -316,9 +335,10 @@ import SpielOrdersKit
     func saved(_ draft: RecordDraft?) {
         if let draft { self.draft = draft }
         baseline = RecordValues(self.draft)
+        // Creating the record ends the Undo of its staged rows.
+        if !written { undoManager?.removeAllActions(withTarget: self) }
         written = true
-        undoPending = input.contains { if case .restore = $0 { true } else { false } }
-        changeRegistered = false
+        complete()
         problems = []
         failure = nil
         needsReopen = false
@@ -339,9 +359,20 @@ import SpielOrdersKit
 }
 
 /// Raw owning-record values, not domain interpretation or a filesystem snapshot.
-private struct RecordValues: Equatable {
+struct RecordValues: Equatable {
     let fields: [Int32: String]
     let rows: [[Int32: String]]
+
+    static func == (left: Self, right: Self) -> Bool {
+        equal(left.fields, right.fields) && left.rows.count == right.rows.count
+            && zip(left.rows, right.rows).allSatisfy { equal($0, $1) }
+    }
+
+    private static func equal(_ left: [Int32: String], _ right: [Int32: String]) -> Bool {
+        left.count == right.count && left.allSatisfy { field, value in
+            right[field].map { value.utf8.elementsEqual($0.utf8) } ?? false
+        }
+    }
 
     init(_ draft: RecordDraft) {
         fields = Dictionary(uniqueKeysWithValues: draft.fields.map { ($0, draft.field($0)) })

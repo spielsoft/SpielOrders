@@ -8,8 +8,8 @@ use crate::{
     filesystem::{DestinationExpectation, replace_validated_file_expecting},
     metadata::{
         Config, IndexDocument, IndexOrder, IndexOrderDirectory, MetadataErrorKind, OrderDocument,
-        OrderId, PackageRoot, PackageRootLocator, Vendor, VendorsDocument, Version1,
-        VersionDocument, config_shape_field, order_shape_field, vendors_shape_field,
+        OrderId, PackageRoot, PackageRootLocator, StoredValues, Vendor, VendorId, VendorsDocument,
+        Version1, VersionDocument, config_shape_field, order_shape_field, vendors_shape_field,
         version_shape_field,
     },
     mutation::{MutationReport, Never, OperationKind, PlannedOperation},
@@ -32,6 +32,7 @@ use crate::{
         ManagedArtifactKind, OrderLocatorReason, OrderSemanticReason, ReadmeKind, ReadmeRead,
         ReadmeReference, Severity, package_relative_path_text, read_document,
     },
+    values::ValueProjections,
 };
 use serde::Serialize;
 use std::{
@@ -159,6 +160,7 @@ impl HealthyOrder {
 pub struct DamagedOrder {
     pub paths: OrderPaths,
     pub order_id: Option<OrderId>,
+    pub vendor_id: Option<VendorId>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -188,10 +190,10 @@ pub struct CurrentPackageCandidate {
     /// Every Vendor in the Package, Hidden Vendors included, each carrying its own
     /// visibility.
     pub vendors: Vec<Vendor>,
-    pub ordering_institutions: Vec<ReusableValueProjection>,
-    pub orderers: Vec<ReusableValueProjection>,
-    pub projects: Vec<ReusableValueProjection>,
-    pub order_groups: Vec<ReusableValueProjection>,
+    /// The values `vendors.json` keeps, normalized.
+    pub values: StoredValues,
+    /// Every value the Package keeps or a healthy Order uses, with its usage count.
+    pub projections: ValueProjections,
     pub diagnostic_groups: Vec<DiagnosticGroup>,
     pub index: PackageIndexRecord,
 }
@@ -200,29 +202,11 @@ impl CurrentPackageCandidate {
     /// The Order Groups of one Project, or of the Orders with no Project for `None`, each
     /// with the number of healthy Orders using it.
     ///
-    /// A group belongs to the Project of the Orders that use it, so the same name under two
-    /// Projects is two groups. Projects compare as Reusable Free-Entry Values do: trimmed
+    /// A group belongs to the Project of the Orders that use it or that keeps it, so the
+    /// same name under two Projects is two groups. Projects compare as values do: trimmed
     /// and case-insensitively.
     pub fn order_groups_of(&self, project: Option<&str>) -> Vec<ReusableValueProjection> {
-        let project = project.map(str::trim).filter(|project| !project.is_empty());
-        reusable_values(
-            self.healthy_orders
-                .iter()
-                .filter(|order| {
-                    let own = order
-                        .document
-                        .project
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|own| !own.is_empty());
-                    match (own, project) {
-                        (None, None) => true,
-                        (Some(own), Some(project)) => focaccia::unicode_full_case_eq(own, project),
-                        _ => false,
-                    }
-                })
-                .filter_map(|order| order.document.order_group.as_deref()),
-        )
+        self.projections.order_groups_of(project).to_vec()
     }
 
     /// The Vendor the healthy Order at `order_index` references, Hidden Vendors included.
@@ -1195,6 +1179,7 @@ fn try_open_current_index<F: FileSystem>(
         healthy_orders,
         Vec::new(),
         index.vendors,
+        index.values,
         diagnostic_groups,
         PackageIndexRecord {
             location: context_without_paths.index,
@@ -1268,6 +1253,7 @@ fn index_document(package: &CurrentPackageCandidate) -> Option<IndexDocument> {
             })
             .collect::<Option<Vec<_>>>()?,
         vendors: package.vendors.clone(),
+        values: package.values.clone(),
     })
 }
 
@@ -1422,7 +1408,7 @@ fn stale_index_reasons(
     }) {
         reasons.push(PackageIndexStaleReason::ManagedInputWrongKind);
     }
-    if index.vendors != package.vendors {
+    if index.vendors != package.vendors || index.values != package.values {
         reasons.push(PackageIndexStaleReason::VendorsChanged);
     }
     if package.healthy_orders.iter().any(|order| {
@@ -1659,6 +1645,7 @@ fn inspect_canonical_package_with_breadth<F: FileSystem>(
     let vendors = vendors.unwrap_or(VendorsDocument {
         schema_version: Version1,
         vendors: Vec::new(),
+        values: StoredValues::default(),
     });
     let normalized_vendors = match PackageMetadata::new(&[], &vendors).validate() {
         Ok(validated) => validated.vendors().clone(),
@@ -1755,6 +1742,7 @@ fn inspect_canonical_package_with_breadth<F: FileSystem>(
             quarantine_order(
                 paths,
                 None,
+                None,
                 order_diagnostics,
                 &mut damaged_orders,
                 &mut diagnostic_groups,
@@ -1762,9 +1750,12 @@ fn inspect_canonical_package_with_breadth<F: FileSystem>(
             continue;
         };
         let recognizable_order_version = recognizable_version(&order_bytes, "schema_version");
-        let trustworthy_order_id = (recognizable_order_version == Some(1))
-            .then(|| extract_order_id(&order_bytes))
-            .flatten();
+        let (trustworthy_order_id, trustworthy_vendor_id) = if recognizable_order_version == Some(1)
+        {
+            extract_references(&order_bytes)
+        } else {
+            (None, None)
+        };
         let order = match OrderDocument::from_json_bytes(&order_bytes) {
             Ok(order) => order,
             Err(error) => {
@@ -1805,6 +1796,7 @@ fn inspect_canonical_package_with_breadth<F: FileSystem>(
                 quarantine_order(
                     paths,
                     trustworthy_order_id,
+                    trustworthy_vendor_id,
                     order_diagnostics,
                     &mut damaged_orders,
                     &mut diagnostic_groups,
@@ -1831,6 +1823,7 @@ fn inspect_canonical_package_with_breadth<F: FileSystem>(
                 quarantine_order(
                     paths,
                     Some(order.order_id.clone()),
+                    order.vendor_id.clone(),
                     order_diagnostics,
                     &mut damaged_orders,
                     &mut diagnostic_groups,
@@ -1886,6 +1879,7 @@ fn inspect_canonical_package_with_breadth<F: FileSystem>(
             quarantine_order(
                 paths,
                 Some(validated.order().order_id.clone()),
+                validated.order().vendor_id.clone(),
                 order_diagnostics,
                 &mut damaged_orders,
                 &mut diagnostic_groups,
@@ -1913,6 +1907,7 @@ fn inspect_canonical_package_with_breadth<F: FileSystem>(
             quarantine_order(
                 paths,
                 Some(validated.order().order_id.clone()),
+                validated.order().vendor_id.clone(),
                 order_diagnostics,
                 &mut damaged_orders,
                 &mut diagnostic_groups,
@@ -1977,6 +1972,7 @@ fn inspect_canonical_package_with_breadth<F: FileSystem>(
         healthy_orders,
         damaged_orders,
         normalized_vendors.vendors,
+        normalized_vendors.values,
         diagnostic_groups,
         index,
     ))
@@ -2088,30 +2084,12 @@ fn current_package_candidate(
     healthy_orders: Vec<HealthyOrder>,
     damaged_orders: Vec<DamagedOrder>,
     vendors: Vec<Vendor>,
+    values: StoredValues,
     diagnostic_groups: Vec<DiagnosticGroup>,
     index: PackageIndexRecord,
 ) -> CurrentPackageCandidate {
-    let ordering_institutions = reusable_values(
-        healthy_orders
-            .iter()
-            .filter_map(|order| order.document.ordering_institution.as_deref()),
-    );
-    let orderers = reusable_values(
-        healthy_orders
-            .iter()
-            .filter_map(|order| order.document.orderer.as_deref()),
-    );
-    let projects = reusable_values(
-        healthy_orders
-            .iter()
-            .filter_map(|order| order.document.project.as_deref()),
-    );
-    let order_groups = reusable_values(
-        healthy_orders
-            .iter()
-            .filter_map(|order| order.document.order_group.as_deref()),
-    );
-
+    let projections =
+        crate::values::project(&values, healthy_orders.iter().map(|order| &order.document));
     CurrentPackageCandidate {
         context,
         metadata_version: 1,
@@ -2119,23 +2097,31 @@ fn current_package_candidate(
         healthy_orders,
         damaged_orders,
         vendors,
-        ordering_institutions,
-        orderers,
-        projects,
-        order_groups,
+        values,
+        projections,
         diagnostic_groups,
         index,
     }
 }
 
-fn extract_order_id(bytes: &[u8]) -> Option<OrderId> {
-    let value = serde_json::from_slice::<serde_json::Value>(bytes).ok()?;
-    serde_json::from_value(value.get("order_id")?.clone()).ok()
+fn extract_references(bytes: &[u8]) -> (Option<OrderId>, Option<VendorId>) {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return (None, None);
+    };
+    (
+        value
+            .get("order_id")
+            .and_then(|id| serde_json::from_value(id.clone()).ok()),
+        value
+            .get("vendor_id")
+            .and_then(|id| serde_json::from_value(id.clone()).ok()),
+    )
 }
 
 fn quarantine_order(
     paths: OrderPaths,
     order_id: Option<OrderId>,
+    vendor_id: Option<VendorId>,
     mut diagnostics: Vec<Diagnostic>,
     damaged_orders: &mut Vec<DamagedOrder>,
     diagnostic_groups: &mut Vec<DiagnosticGroup>,
@@ -2146,7 +2132,11 @@ fn quarantine_order(
         location: paths.directory.clone(),
         diagnostics,
     });
-    damaged_orders.push(DamagedOrder { paths, order_id });
+    damaged_orders.push(DamagedOrder {
+        paths,
+        order_id,
+        vendor_id,
+    });
 }
 
 fn quarantine_duplicate_order_ids(
@@ -2189,6 +2179,7 @@ fn quarantine_duplicate_order_ids(
         quarantine_order(
             order.paths,
             Some(order_id),
+            order.document.vendor_id.clone(),
             Vec::new(),
             damaged_orders,
             diagnostic_groups,
@@ -2711,29 +2702,6 @@ fn sort_healthy_orders(orders: &mut [HealthyOrder]) {
                     .cmp(right.document.order_id.as_str())
             })
     });
-}
-
-fn reusable_values<'a>(values: impl IntoIterator<Item = &'a str>) -> Vec<ReusableValueProjection> {
-    let mut projections = Vec::<ReusableValueProjection>::new();
-    for value in values {
-        let value = value.trim();
-        if value.is_empty() {
-            continue;
-        }
-        if let Some(existing) = projections
-            .iter_mut()
-            .find(|existing| focaccia::unicode_full_case_eq(&existing.value, value))
-        {
-            existing.usage_count += 1;
-        } else {
-            projections.push(ReusableValueProjection {
-                value: value.to_owned(),
-                usage_count: 1,
-            });
-        }
-    }
-    projections.sort_by(|left, right| left.value.as_bytes().cmp(right.value.as_bytes()));
-    projections
 }
 
 fn required_artifact<F: FileSystem>(

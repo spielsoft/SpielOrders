@@ -16,13 +16,12 @@ final class RemovedOrder {
     }
 }
 
-/// Remove Order's history lives in `removals`, which the Orders list answers Undo and Redo
-/// from. Editors keep the window's own history, which a new selection clears.
+/// Remove Order's Undo and Redo in the window's history, with the removed Order as their target.
 extension DesktopModel {
-    /// Offers Undo Remove Order and puts the keyboard in the Orders list, where Undo finds it.
+    /// Offers Undo Remove Order, and puts the keyboard in the Orders list.
     func offerRestore(_ order: RemovedOrder) {
-        removals.registerUndo(withTarget: order) { [weak self] _ in self?.restore(order) }
-        removals.setActionName(DirectoryAction.remove.title)
+        undoManager.registerUndo(withTarget: order) { [weak self] _ in self?.restore(order) }
+        undoManager.setActionName(DirectoryAction.remove.title)
         guard let window = dialogs.window, let list = window.contentView?.descendant(OrdersTableView.self) else {
             return
         }
@@ -32,8 +31,8 @@ extension DesktopModel {
     /// Undo Remove Order. Redo is registered at once, as it must be while undoing; a refusal
     /// withdraws it and offers Undo again, leaving everything as it was.
     private func restore(_ order: RemovedOrder) {
-        removals.registerUndo(withTarget: order) { [weak self] _ in self?.removeAgain(order) }
-        removals.setActionName(DirectoryAction.remove.title)
+        undoManager.registerUndo(withTarget: order) { [weak self] _ in self?.removeAgain(order) }
+        undoManager.setActionName(DirectoryAction.remove.title)
         guard canBrowseRecords else {
             Task {
                 keepRemoved(order, "The Order wasn’t restored",
@@ -79,8 +78,8 @@ extension DesktopModel {
 
     /// Redo Remove Order: the existing removal, without a review. Undo is registered at once.
     private func removeAgain(_ order: RemovedOrder) {
-        removals.registerUndo(withTarget: order) { [weak self] _ in self?.restore(order) }
-        removals.setActionName(DirectoryAction.remove.title)
+        undoManager.registerUndo(withTarget: order) { [weak self] _ in self?.restore(order) }
+        undoManager.setActionName(DirectoryAction.remove.title)
         guard canBrowseRecords, !busy, !dirty, let row = orderRow(order.id), let retainedFolder = folder else {
             Task { forget(order, "Finish the current work or unsaved changes, then choose Remove Order.") }
             return
@@ -102,7 +101,7 @@ extension DesktopModel {
                 discardEditors()
                 contents.stop()
                 guard let directory = removed.finalDirectory else {
-                    removals.removeAllActions(withTarget: order)
+                    undoManager.removeAllActions(withTarget: order)
                     requireReload(Notice(removed.summary, details: removed.message))
                     clearOrders()
                     return
@@ -123,14 +122,14 @@ extension DesktopModel {
 
     /// The Order stays removed and Undo Remove Order is offered again.
     private func keepRemoved(_ order: RemovedOrder, _ title: String, _ explanation: String, details: String = "") {
-        removals.removeAllActions(withTarget: order)
+        undoManager.removeAllActions(withTarget: order)
         offerRestore(order)
         alert(title, explanation, details: details, identifier: "order.restore")
     }
 
     /// The Order stays where it is, and its removal leaves the history.
     private func forget(_ order: RemovedOrder, _ explanation: String, details: String = "") {
-        removals.removeAllActions(withTarget: order)
+        undoManager.removeAllActions(withTarget: order)
         alert("The Order wasn’t removed again", explanation, details: details, identifier: "order.removeAgain")
     }
 

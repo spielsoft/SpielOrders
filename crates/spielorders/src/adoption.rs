@@ -4,7 +4,7 @@ use crate::vendors::vendor_aggregate;
 use crate::{
     Answer, Assignments, Failure, Warning,
     canonical::load_package,
-    metadata::{OrderDocument, OrderStatus, Vendor},
+    metadata::{OrderDocument, OrderStatus, StoredValues, Vendor},
     mutation::{
         CleanupFailure, CommitFailure, IndexRefresh, MutationReport, OperationKind,
         PlannedOperation,
@@ -65,6 +65,8 @@ pub(crate) struct OrderAdoptionInput {
     currency: Option<String>,
     project: Option<String>,
     order_group: Option<String>,
+    /// The fields whose new value this Order's change adds to the Package.
+    introduced: Vec<String>,
     items: Vec<OrderItemInput>,
 }
 
@@ -89,6 +91,7 @@ impl OrderAdoptionInput {
         input.currency = facts.optional("currency");
         input.project = facts.optional("project");
         input.order_group = facts.optional("order_group");
+        input.introduced = facts.introduced();
         Ok(input)
     }
 
@@ -107,6 +110,7 @@ impl OrderAdoptionInput {
             currency: None,
             project: None,
             order_group: None,
+            introduced: Vec::new(),
             items: Vec::new(),
         }
     }
@@ -124,6 +128,8 @@ pub struct OrderAdoptionPlan {
     pub(crate) document: OrderDocument,
     pub(crate) vendor: Option<Vendor>,
     pub(crate) reusable_values: ReusableValues,
+    /// The new values this change adds to those the Package keeps.
+    additions: StoredValues,
     candidate_observation: FileChangeObservation,
     readme_kind: Option<FileSystemEntryKind>,
     pub(crate) operations: Vec<PlannedOperation>,
@@ -258,12 +264,12 @@ pub(crate) fn plan_order_adoption<F: FileSystem>(
             })
             .transpose()?;
         let vendor_id = vendor.map(|vendor| vendor.vendor_id.as_str());
-        let project = canonical_reusable(input.project.as_deref(), &package.projects);
+        let project = canonical_reusable(input.project.as_deref(), &package.projections.projects);
         let reusable_values = ReusableValues {
-            orderer: canonical_reusable(input.orderer.as_deref(), &package.orderers),
+            orderer: canonical_reusable(input.orderer.as_deref(), &package.projections.orderers),
             ordering_institution: canonical_reusable(
                 input.ordering_institution.as_deref(),
-                &package.ordering_institutions,
+                &package.projections.ordering_institutions,
             ),
             order_group: canonical_reusable(
                 input.order_group.as_deref(),
@@ -271,6 +277,8 @@ pub(crate) fn plan_order_adoption<F: FileSystem>(
             ),
             project,
         };
+        crate::order_edits::refuse_unconfirmed(&reusable_values, &input.introduced)?;
+        let additions = crate::values::additions(&reusable_values);
         let items = input
             .items
             .iter()
@@ -374,14 +382,23 @@ pub(crate) fn plan_order_adoption<F: FileSystem>(
                 readme_staging,
             ));
         }
-        operations.extend([
-            operation(&root, OperationKind::RemoveStaging, order_staging),
-            operation(
+        operations.push(operation(
+            &root,
+            OperationKind::RemoveStaging,
+            order_staging,
+        ));
+        if !additions.is_empty() {
+            operations.push(operation(
                 &root,
-                OperationKind::RefreshPackageIndex,
-                package.context.index.absolute_path.clone(),
-            ),
-        ]);
+                OperationKind::ReplaceVendorRecord,
+                package.context.vendors.absolute_path.clone(),
+            ));
+        }
+        operations.push(operation(
+            &root,
+            OperationKind::RefreshPackageIndex,
+            package.context.index.absolute_path.clone(),
+        ));
 
         Ok(OrderAdoptionPlan {
             vendor: vendor.cloned(),
@@ -389,6 +406,7 @@ pub(crate) fn plan_order_adoption<F: FileSystem>(
             root,
             document,
             reusable_values,
+            additions,
             candidate_observation,
             readme_kind,
             operations,
@@ -482,6 +500,7 @@ pub(crate) fn commit_order_adoption<F: FileSystem>(
         let candidate = order
             .to_json_bytes()
             .expect("a validated newest-version Order serializes deterministically");
+        let values = crate::values::ValuesWrite::prepare(&current, &plan.additions, filesystem)?;
 
         if filesystem.create_directory(&metadata_directory).is_err() {
             let failure = CommitFailure::new(located(&plan.root, metadata_directory));
@@ -520,23 +539,30 @@ pub(crate) fn commit_order_adoption<F: FileSystem>(
                 }
             }
         }
+        if let Some(values) = &values
+            && let Err(failure) = values.write(filesystem)
+        {
+            return Err(crate::values::with_cleanup(
+                failure,
+                cleanup_adoption(&plan, create_readme, filesystem),
+                located(&plan.root, values.path().to_path_buf()),
+            ));
+        }
         match filesystem.link_new_file(&order_staging, &order_path) {
             Ok(NewFileLinkOutcome::Linked) => {}
             Ok(NewFileLinkOutcome::DestinationExists) => {
-                return Err(rollback_failure(
-                    &plan,
-                    order_path,
-                    create_readme,
-                    filesystem,
-                ));
+                let failure = rollback_failure(&plan, order_path, create_readme, filesystem);
+                return Err(match &values {
+                    Some(values) => values.rollback(failure, filesystem),
+                    None => failure,
+                });
             }
             Err(_) => {
-                return Err(rollback_failure(
-                    &plan,
-                    order_path,
-                    create_readme,
-                    filesystem,
-                ));
+                let failure = rollback_failure(&plan, order_path, create_readme, filesystem);
+                return Err(match &values {
+                    Some(values) => values.rollback(failure, filesystem),
+                    None => failure,
+                });
             }
         }
 
@@ -644,16 +670,16 @@ fn reusable_values_for_document(
     package: &crate::canonical::CurrentPackageCandidate,
 ) -> ReusableValues {
     ReusableValues {
-        orderer: canonical_reusable(document.orderer.as_deref(), &package.orderers),
+        orderer: canonical_reusable(document.orderer.as_deref(), &package.projections.orderers),
         ordering_institution: canonical_reusable(
             document.ordering_institution.as_deref(),
-            &package.ordering_institutions,
+            &package.projections.ordering_institutions,
         ),
         order_group: canonical_reusable(
             document.order_group.as_deref(),
             &package.order_groups_of(document.project.as_deref()),
         ),
-        project: canonical_reusable(document.project.as_deref(), &package.projects),
+        project: canonical_reusable(document.project.as_deref(), &package.projections.projects),
     }
 }
 
@@ -731,6 +757,14 @@ fn rolled_back<F: FileSystem>(
     created_readme: bool,
     filesystem: &F,
 ) -> Failure {
+    rejected(failure, cleanup_adoption(plan, created_readme, filesystem))
+}
+
+fn cleanup_adoption<F: FileSystem>(
+    plan: &OrderAdoptionPlan,
+    created_readme: bool,
+    filesystem: &F,
+) -> Vec<CleanupFailure> {
     let mut rollback_failures = Vec::new();
     let metadata_directory = plan.directory.absolute_path.join(".spielorders");
     let created_readme = created_readme.then(|| plan.directory.absolute_path.join("README.md"));
@@ -746,7 +780,7 @@ fn rolled_back<F: FileSystem>(
     if filesystem.remove_directory(&metadata_directory).is_err() {
         rollback_failures.push(CleanupFailure::new(located(&plan.root, metadata_directory)));
     }
-    rejected(failure, rollback_failures)
+    rollback_failures
 }
 
 /// Removes the file at `path` where one stands, or says why it could not.

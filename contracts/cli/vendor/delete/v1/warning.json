@@ -28,7 +28,8 @@
         "reuse": null
       }
     ],
-    "final_path": null
+    "final_path": null,
+    "orders": 0
   },
   "diagnostics": [
     {

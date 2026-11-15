@@ -30,6 +30,10 @@
         "path": "<PACKAGE_ROOT>/Orders/<TODAY>_Tarnwick_Laser_components_Ada_Lovelace"
       },
       {
+        "kind": "replace_vendor_record",
+        "path": "<PACKAGE_ROOT>/.spielorders/vendors.json"
+      },
+      {
         "kind": "refresh_package_index",
         "path": "<PACKAGE_ROOT>/.spielorders/index.json"
       }

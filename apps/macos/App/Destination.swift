@@ -1,4 +1,5 @@
 import CSpielOrders
+import SpielOrdersKit
 
 extension DesktopModel {
     /// What the content column shows for the open Package, chosen in the sidebar.
@@ -50,10 +51,9 @@ extension DesktopModel {
             }
         }
 
-        /// Whether File → New can create a record here. Values and Projects wait on the
-        /// library's support for adding them.
+        /// Whether File → New can create a record here.
         var creates: Bool {
-            self == .orders || self == .vendors
+            self != .packageReadme
         }
     }
 
@@ -61,6 +61,14 @@ extension DesktopModel {
     enum ValueList: Hashable {
         case orderers
         case institutions
+
+        /// The values the destination lists and changes.
+        var scope: ValueScope {
+            switch self {
+            case .orderers: .orderers
+            case .institutions: .institutions
+            }
+        }
 
         /// The `SPIELORDERS_ORDER_FIELD_*` constant the values belong to.
         var field: Int32 {

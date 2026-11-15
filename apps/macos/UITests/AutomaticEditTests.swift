@@ -99,6 +99,129 @@ import XCTest
         XCTAssertFalse(redo.isEnabled)
     }
 
+    /// The metadata of the Order whose stored Title is `title`.
+    private func record(_ root: URL, titled title: String) throws -> URL {
+        let directories = try FileManager.default.contentsOfDirectory(at: root.appendingPathComponent("Orders"),
+                                                                      includingPropertiesForKeys: nil)
+        let records = directories.filter { !$0.lastPathComponent.hasPrefix(".") }
+            .map { $0.appendingPathComponent(".spielorders/order.json") }
+        return try XCTUnwrap(records.first { (try? read($0)["title"] as? String) == title })
+    }
+
+    private func expectValue(_ field: XCUIElement, _ value: String) {
+        let shown = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", value), object: field)
+        XCTAssertEqual(XCTWaiter.wait(for: [shown], timeout: 10), .completed)
+    }
+
+    // Decision source: Prototype the SpielOrders desktop experience, Order and Vendor editing.
+    func testUndoAcrossSelection() throws {
+        let root = try makePackage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try addOrder(in: root, title: "First optics")
+        try addOrder(in: root, title: "Second optics")
+        let first = try record(root, titled: "First optics")
+        let second = try record(root, titled: "Second optics")
+        let app = XCUIApplication()
+        app.launchArguments = ["-packageBookmark", "", "-sidebarVisible", "YES"]
+        app.launch()
+        openPackage(root, in: app)
+        let table = app.tables["orders.table"]
+        func row(_ title: String) -> XCUIElement {
+            table.staticTexts.matching(NSPredicate(format: "value == %@", title)).firstMatch
+        }
+        let title = app.textFields["order.editor.title"]
+        XCTAssertTrue(row("First optics").waitForExistence(timeout: 10))
+        row("First optics").click()
+        XCTAssertTrue(title.wait(for: \.isEnabled, toEqual: true, timeout: 10))
+        replace(title, with: "First edited", in: app)
+        app.typeKey(.tab, modifierFlags: [])
+        try awaitValue(first, "title", "First edited")
+
+        // Selecting another Order keeps the edit in the window's Undo history.
+        row("Second optics").click()
+        expectValue(title, "Second optics")
+        app.menuBars.menuBarItems["Edit"].click()
+        let undo = app.menuBars.menuItems["Undo Edit Order"]
+        XCTAssertTrue(undo.waitForExistence(timeout: 5))
+        XCTAssertTrue(undo.isEnabled)
+        undo.click()
+        // Undo shows the edited Order and reverses the edit through its automatic save.
+        try awaitValue(first, "title", "First optics")
+        expectValue(title, "First optics")
+        XCTAssertEqual(try read(second)["title"] as? String, "Second optics")
+
+        row("Second optics").click()
+        expectValue(title, "Second optics")
+        app.typeKey("z", modifierFlags: [.command, .shift])
+        try awaitValue(first, "title", "First edited")
+        expectValue(title, "First edited")
+
+        // Remove Order joins the same history, wherever the keyboard is.
+        row("Second optics").rightClick()
+        table.menuItems["Remove Order"].click()
+        XCTAssertTrue(row("Second optics").waitForNonExistence(timeout: 10))
+        row("First edited").click()
+        XCTAssertTrue(title.wait(for: \.isEnabled, toEqual: true, timeout: 10))
+        title.click()
+        app.menuBars.menuBarItems["Edit"].click()
+        let restore = app.menuBars.menuItems["Undo Remove Order"]
+        XCTAssertTrue(restore.waitForExistence(timeout: 5))
+        restore.click()
+        XCTAssertTrue(row("Second optics").waitForExistence(timeout: 10))
+    }
+
+    func testReadmeUndoAcrossSelection() throws {
+        let root = try makePackage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try addOrder(in: root, title: "First optics")
+        try addOrder(in: root, title: "Second optics")
+        let first = try record(root, titled: "First optics")
+        let notes = first.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("README.md")
+        let app = XCUIApplication()
+        app.launchArguments = ["-packageBookmark", "", "-sidebarVisible", "YES"]
+        app.launch()
+        openPackage(root, in: app)
+        let table = app.tables["orders.table"]
+        func row(_ title: String) -> XCUIElement {
+            table.staticTexts.matching(NSPredicate(format: "value == %@", title)).firstMatch
+        }
+        func awaitNotes(_ text: String) {
+            let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                (try? String(contentsOf: notes, encoding: .utf8)) == text
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 10), .completed)
+        }
+        XCTAssertTrue(row("First optics").waitForExistence(timeout: 10))
+        row("First optics").click()
+        let title = app.textFields["order.editor.title"]
+        XCTAssertTrue(title.wait(for: \.isEnabled, toEqual: true, timeout: 10))
+        replace(title, with: "First edited", in: app)
+        app.typeKey(.tab, modifierFlags: [])
+        try awaitValue(first, "title", "First edited")
+        let readme = app.textViews["Order README"]
+        readme.click()
+        readme.typeText("Later README edit")
+        awaitNotes("Later README edit")
+        row("Second optics").click()
+        expectValue(title, "Second optics")
+        app.typeKey("z", modifierFlags: .command)
+        awaitNotes("")
+        expectValue(title, "First edited")
+        XCTAssertEqual(try read(first)["title"] as? String, "First edited")
+        app.typeKey("z", modifierFlags: .command)
+        try awaitValue(first, "title", "First optics")
+        app.typeKey("z", modifierFlags: [.command, .shift])
+        try awaitValue(first, "title", "First edited")
+        app.typeKey("z", modifierFlags: [.command, .shift])
+        awaitNotes("Later README edit")
+
+        // Undo is still a guarded README save, never an overwrite of another writer.
+        try "Another writer".write(to: notes, atomically: true, encoding: .utf8)
+        app.typeKey("z", modifierFlags: .command)
+        XCTAssertTrue(app.buttons["readme.notSaved"].waitForExistence(timeout: 10))
+        XCTAssertEqual(try String(contentsOf: notes, encoding: .utf8), "Another writer")
+    }
+
     func testRapidFields() throws {
         let root = try makePackage()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -182,15 +305,18 @@ import XCTest
         XCTAssertEqual(orderer.value as? String, "")
         app.typeKey("z", modifierFlags: [.command, .shift])
         XCTAssertEqual(orderer.value as? String, "Unconfirmed Buyer")
-        let confirm = app.buttons["order.editor.newValues.confirm"]
-        let premature = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == YES"), object: confirm)
+        let problem = app.buttons["order.editor.orderer.problem"]
+        let premature = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == YES"), object: problem)
         premature.isInverted = true
         wait(for: [premature], timeout: 2)
         XCTAssertEqual(try Data(contentsOf: metadata), original)
-        // Only ending the field asks whether the new reusable value should be saved.
+        // Ending the field with a value the Package lacks writes nothing and marks the field.
         app.typeKey(.tab, modifierFlags: [])
-        XCTAssertTrue(confirm.waitForExistence(timeout: 10))
-        confirm.click()
+        XCTAssertTrue(problem.waitForExistence(timeout: 10))
+        XCTAssertEqual(try Data(contentsOf: metadata), original)
+        problem.click()
+        app.buttons["order.editor.orderer.add"].click()
+        app.sheets.buttons["order.editor.addValue.confirm"].click()
         try awaitValue(metadata, "orderer", "Unconfirmed Buyer")
         app.tables["orders.table"].click()
         app.typeKey("z", modifierFlags: .command)

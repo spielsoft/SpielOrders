@@ -12,7 +12,9 @@ struct VendorsWorkspace: View {
 
 private struct VendorGrid: View {
     @Bindable var model: DesktopModel
-    @State private var selection: String?
+    /// The selected rows; the detail shows the Vendor while one is selected, and Merge
+    /// offers several.
+    @State private var selection: Set<String> = []
     @State private var sortOrder = [KeyPathComparator(\VendorRow.name)]
 
     var body: some View {
@@ -50,7 +52,11 @@ private struct VendorGrid: View {
                 }
             }
             .contextMenu(forSelectionType: String.self) { ids in
-                if let row = model.vendors.first(where: { $0.id == ids.first }) {
+                if ids.count > 1 {
+                    Button("Merge \(ids.count) Vendors…") { model.mergeVendors(Array(ids)) }
+                        .disabled(model.busy || !model.canBrowseRecords)
+                        .accessibilityIdentifier("vendors.merge")
+                } else if let row = model.vendors.first(where: { $0.id == ids.first }) {
                     Button("Open") { model.openVendor(row.id) }
                         .accessibilityIdentifier("vendors.row.\(row.id).open")
                     Button(row.hidden ? "Show Vendor" : "Hide Vendor") {
@@ -58,13 +64,22 @@ private struct VendorGrid: View {
                     }
                     .disabled(model.busy || !model.canBrowseRecords)
                     .accessibilityIdentifier("vendors.row.\(row.id).visibility")
+                    Divider()
+                    Button("Delete Vendor…") { model.deleteVendor(row.id) }
+                        .disabled(model.busy || !model.canBrowseRecords)
+                        .accessibilityIdentifier("vendors.row.\(row.id).delete")
                 }
-            } primaryAction: { ids in model.openVendor(ids.first) }
-            .onChange(of: selection) { _, id in
-                model.selectVendor(id)
-                selection = model.selectedVendorID
+            } primaryAction: { ids in
+                if ids.count == 1 { model.openVendor(ids.first) }
             }
-            .onChange(of: model.selectedVendorID, initial: true) { _, id in selection = id }
+            .onChange(of: selection) { _, ids in
+                guard ids.count <= 1 else { return }
+                model.selectVendor(ids.first)
+                selection = Set([model.selectedVendorID].compactMap { $0 })
+            }
+            .onChange(of: model.selectedVendorID, initial: true) { _, id in
+                selection = Set([id].compactMap { $0 })
+            }
             .onChange(of: sortOrder) { _, requested in
                 let field: Int32
                 switch requested.first?.keyPath {

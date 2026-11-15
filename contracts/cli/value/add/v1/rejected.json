@@ -1,0 +1,23 @@
+{
+  "contract": "spielorders.value.add",
+  "contract_version": 1,
+  "ok": false,
+  "context": {
+    "root": "<PACKAGE_ROOT>"
+  },
+  "data": null,
+  "diagnostics": [],
+  "error": {
+    "code": "unknown_value",
+    "detail": {
+      "severity": "error",
+      "message": "Unknown value",
+      "field": "project",
+      "reason": null,
+      "position": null,
+      "path": null,
+      "before": null,
+      "after": "Weather station"
+    }
+  }
+}

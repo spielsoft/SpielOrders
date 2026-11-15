@@ -1,0 +1,23 @@
+{
+  "contract": "spielorders.value.rename",
+  "contract_version": 1,
+  "ok": false,
+  "context": {
+    "root": "<PACKAGE_ROOT>"
+  },
+  "data": null,
+  "diagnostics": [],
+  "error": {
+    "code": "unknown_value",
+    "detail": {
+      "severity": "error",
+      "message": "Unknown value",
+      "field": "orderer",
+      "reason": null,
+      "position": null,
+      "path": null,
+      "before": null,
+      "after": "Nobody"
+    }
+  }
+}
