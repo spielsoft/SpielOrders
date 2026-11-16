@@ -2,7 +2,7 @@
 
 use crate::{
     Failure, Warning,
-    canonical::{CurrentPackageCandidate, PackageLoad, load_package_and_index},
+    canonical::{CurrentPackageCandidate, PackageLoad, Touched, load_package_and_refresh_index},
     filesystem::{
         MultiFileReplacementError, MultiFileReplacementFailure, ReplacementPlanFailure,
         RollbackFailure, ValidatedReplacementError, staging_path,
@@ -46,9 +46,14 @@ pub(crate) struct IndexRefresh {
 }
 
 impl IndexRefresh {
-    /// Rebuilds the Package Index at `root`, which only a committed write may do.
-    pub(crate) fn after_commit<F: FileSystem>(root: &Path, filesystem: &F) -> Self {
-        let (package, warning) = match load_package_and_index(root, filesystem) {
+    /// Refreshes the Package Index at `root` after a committed write of the records
+    /// `touched` names, which only a committed write may do.
+    pub(crate) fn after_commit<F: FileSystem>(
+        root: &Path,
+        touched: &Touched,
+        filesystem: &F,
+    ) -> Self {
+        let (package, warning) = match load_package_and_refresh_index(root, touched, filesystem) {
             Ok(PackageLoad::Available(package)) => (Some(package), None),
             Ok(PackageLoad::PackageIndexReplacementFailed(failed)) => {
                 let (evidence, failure) = failed.into_parts();
@@ -60,7 +65,9 @@ impl IndexRefresh {
                 )
             }
             Err(
-                failed @ (Failure::PackageAccessDenied(_) | Failure::PackageOperationFailed(_)),
+                failed @ (Failure::PackageAccessDenied(_)
+                | Failure::PackageOperationFailed(_)
+                | Failure::FilesystemUnsupported(_)),
             ) => (None, Some(Warning::IndexRefreshFailed(failed))),
             // An unmanaged or damaged load attempted no rebuild.
             Err(_) => (None, Some(Warning::RefreshUnavailable)),
@@ -166,6 +173,30 @@ impl Failure {
         }
     }
 
+    /// This refusal, or, where it left nothing behind and the filesystem cannot perform
+    /// the operation that failed on `path` at all, that answer instead, so the caller
+    /// learns the volume is the obstacle.
+    pub(crate) fn unless_unsupported<F: FileSystem>(
+        self,
+        root: &Path,
+        path: &Path,
+        error: &F::Error,
+        filesystem: &F,
+    ) -> Self {
+        match self {
+            Self::CommitFailed { .. } if filesystem.is_unsupported(error) => {
+                crate::operations::FailedOperation::inside(
+                    root,
+                    path.to_path_buf(),
+                    error,
+                    filesystem,
+                )
+                .into()
+            }
+            other => other,
+        }
+    }
+
     /// A replacement of the file at `destination` inside the Root at `root` that did not
     /// publish it, naming the stage beside it where the replacement could not remove it
     /// again.
@@ -206,11 +237,15 @@ impl Failure {
         };
         let MultiFileReplacementError {
             failure,
+            cleanup_failures,
             rollback_failures,
             refused_rollbacks,
         } = error;
-        let mut cleanup_failures = Vec::new();
-        let failure = match failure {
+        let mut cleanup_failures = cleanup_failures
+            .into_iter()
+            .map(|failure| stage_left(root, failure.projection().path.as_path()))
+            .collect::<Vec<_>>();
+        let failure = match *failure {
             MultiFileReplacementFailure::InvalidPlan(failures) => {
                 let index = match failures
                     .into_iter()
@@ -288,6 +323,8 @@ pub enum OperationKind {
     ReplaceManagedArtifact,
     PromoteStagingCandidate,
     RefreshPackageIndex,
+    MoveMergedEntry,
+    DiscardMergedEntry,
 }
 
 impl crate::code::Coded for OperationKind {}
@@ -297,11 +334,25 @@ impl crate::code::Coded for OperationKind {}
 pub struct PlannedOperation {
     pub kind: OperationKind,
     pub location: Location,
+    /// Whether the entry the operation acts on is a directory, for the operations that act
+    /// on a merged Order's entries.
+    pub directory: bool,
+}
+
+/// Whether committing `operations` replaces the Vendor record.
+pub(crate) fn replaces_vendors(operations: &[PlannedOperation]) -> bool {
+    operations
+        .iter()
+        .any(|operation| operation.kind == OperationKind::ReplaceVendorRecord)
 }
 
 impl PlannedOperation {
     pub(crate) fn new(kind: OperationKind, location: Location) -> Self {
-        Self { kind, location }
+        Self {
+            kind,
+            location,
+            directory: false,
+        }
     }
 }
 

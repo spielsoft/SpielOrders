@@ -1,4 +1,4 @@
-//! Decision sources: Decide how Package Index freshness is proven without canonical rereads;
+//! Decision sources: Define durable metadata schemas and version evolution;
 //! Define the stable diagnostic vocabulary and evidence contract; Define the complete
 //! Package read projection and load-state contract.
 
@@ -82,23 +82,6 @@ fn missing_index_is_rebuilt_exactly_and_the_package_becomes_available() {
     assert!(
         !filesystem.exists("/package/.spielorders/.index.json.spielorders-stage"),
         "no staging artifact is left behind"
-    );
-}
-
-#[test]
-fn valid_equal_index_without_freshness_evidence_is_conservatively_stale() {
-    let filesystem = minimal_package();
-    filesystem.put_file("/package/.spielorders/index.json", MINIMAL_INDEX);
-
-    let result = opened(Path::new("/package"), &filesystem);
-
-    let Ok(failed) = result.result else {
-        panic!("the injected replacement failure preserves the stale assessment")
-    };
-    assert_eq!(failed.contents.index.state, PackageIndexState::Stale);
-    assert_eq!(
-        failed.contents.index.stale_reasons,
-        &[PackageIndexStaleReason::ChangeEvidenceUncertain]
     );
 }
 
@@ -287,7 +270,7 @@ fn valid_noncanonical_json_preserves_non_deterministic_serialization_reason() {
 }
 
 #[test]
-fn discovered_order_membership_change_precedes_uncertain_change_evidence() {
+fn changed_membership() {
     let filesystem = minimal_package();
     filesystem.put_entry("/package/Orders/Order", FileSystemEntryKind::Directory);
     filesystem.put_file(
@@ -302,10 +285,7 @@ fn discovered_order_membership_change_precedes_uncertain_change_evidence() {
 
     assert_eq!(
         failed.contents.index.stale_reasons,
-        &[
-            PackageIndexStaleReason::OrderMembershipChanged,
-            PackageIndexStaleReason::ChangeEvidenceUncertain,
-        ]
+        &[PackageIndexStaleReason::OrderMembershipChanged,]
     );
 }
 
@@ -328,7 +308,6 @@ fn index_order_path_mismatch_is_distinct_and_ordered_after_membership() {
         &[
             PackageIndexStaleReason::OrderMembershipChanged,
             PackageIndexStaleReason::OrderPathMismatch,
-            PackageIndexStaleReason::ChangeEvidenceUncertain,
         ]
     );
 }
@@ -352,7 +331,6 @@ fn managed_order_input_wrong_kind_is_a_separate_stale_reason() {
         &[
             PackageIndexStaleReason::OrderMembershipChanged,
             PackageIndexStaleReason::ManagedInputWrongKind,
-            PackageIndexStaleReason::ChangeEvidenceUncertain,
         ]
     );
     assert_eq!(failed.contents.damaged_orders.len(), 1);
@@ -370,10 +348,7 @@ fn canonical_vendor_change_is_a_separate_stale_reason() {
 
     assert_eq!(
         failed.contents.index.stale_reasons,
-        &[
-            PackageIndexStaleReason::VendorsChanged,
-            PackageIndexStaleReason::ChangeEvidenceUncertain,
-        ]
+        &[PackageIndexStaleReason::VendorsChanged,]
     );
 }
 
@@ -397,10 +372,7 @@ fn canonical_order_metadata_change_is_a_separate_stale_reason() {
 
     assert_eq!(
         failed.contents.index.stale_reasons,
-        &[
-            PackageIndexStaleReason::OrderMetadataChanged,
-            PackageIndexStaleReason::ChangeEvidenceUncertain,
-        ]
+        &[PackageIndexStaleReason::OrderMetadataChanged,]
     );
 }
 
@@ -424,10 +396,7 @@ fn canonical_order_readme_change_is_a_separate_stale_reason() {
 
     assert_eq!(
         failed.contents.index.stale_reasons,
-        &[
-            PackageIndexStaleReason::OrderReadmeChanged,
-            PackageIndexStaleReason::ChangeEvidenceUncertain,
-        ]
+        &[PackageIndexStaleReason::OrderReadmeChanged,]
     );
 }
 

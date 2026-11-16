@@ -9,7 +9,7 @@
 use super::{PlatformFileSystem, TemporaryTree};
 use crate::ports::{
     DirectoryEntry, FileChangeEvidence, FileChangeObservation, FileSystem, FileSystemEntryKind,
-    NewDirectoryRenameOutcome, NewFileLinkOutcome,
+    NewFileLinkOutcome, RenameOutcome,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -28,13 +28,14 @@ pub enum Operation {
     ReplaceFile,
     RemoveFile,
     Canonicalize,
+    EntryName,
     SymlinkMetadata,
     ObserveFileChange,
     ReadDirectory,
     CreateDirectory,
     RemoveDirectory,
     LinkNewFile,
-    RenameNewDirectory,
+    RenameNew,
 }
 
 impl Operation {
@@ -49,7 +50,7 @@ impl Operation {
                 | Self::CreateDirectory
                 | Self::RemoveDirectory
                 | Self::LinkNewFile
-                | Self::RenameNewDirectory
+                | Self::RenameNew
         )
     }
 }
@@ -106,9 +107,7 @@ pub enum Answer {
     Bytes(Vec<u8>),
     /// A directory listing in exactly this order.
     Listing(Vec<DirectoryEntry>),
-    /// A change observation, entry kind and evidence both.
-    Change(FileChangeObservation),
-    Renamed(NewDirectoryRenameOutcome),
+    Renamed(RenameOutcome),
 }
 
 #[derive(Clone)]
@@ -166,7 +165,10 @@ enum Volume {
     Private { _tree: TemporaryTree, base: PathBuf },
     /// Real paths below these roots resolve without regard to ASCII case, the way APFS
     /// does in its default macOS configuration, wherever the suite runs.
-    CaseInsensitive { roots: Vec<PathBuf> },
+    CaseInsensitive {
+        roots: Vec<PathBuf>,
+        trimmed_names: bool,
+    },
     /// Real paths below these roots keep every two byte spellings of a name apart, the
     /// way a case- and normalization-sensitive volume does, wherever the suite runs.
     /// Each name is stored escaped to bytes no host volume folds together.
@@ -181,7 +183,10 @@ impl Volume {
                 Ok(relative) => base.join(relative),
                 Err(_) => path.to_path_buf(),
             },
-            Self::CaseInsensitive { roots } => {
+            Self::CaseInsensitive {
+                roots,
+                trimmed_names,
+            } => {
                 let Some((root, relative)) = roots
                     .iter()
                     .find_map(|root| path.strip_prefix(root).ok().map(|rest| (root, rest)))
@@ -191,8 +196,10 @@ impl Volume {
                 let mut resolved = root.clone();
                 for component in relative.components() {
                     match component {
-                        Component::Normal(name) => resolved
-                            .push(existing_spelling(&resolved, name).unwrap_or(name.to_owned())),
+                        Component::Normal(name) => resolved.push(
+                            existing_spelling(&resolved, name, *trimmed_names)
+                                .unwrap_or(name.to_owned()),
+                        ),
                         other => resolved.push(other.as_os_str()),
                     }
                 }
@@ -278,16 +285,35 @@ fn unescaped(name: &OsStr) -> OsString {
     OsString::from_vec(unescaped)
 }
 
-/// The spelling `directory` already holds for a name that differs only in ASCII case.
-fn existing_spelling(directory: &Path, name: &OsStr) -> Option<OsString> {
+/// The spelling `directory` already holds under this volume's alias rules.
+fn existing_spelling(directory: &Path, name: &OsStr, trimmed_names: bool) -> Option<OsString> {
+    fn comparable(name: &OsStr, trimmed_names: bool) -> &[u8] {
+        let bytes = name.as_encoded_bytes();
+        let start = if trimmed_names {
+            bytes
+                .iter()
+                .position(|byte| *byte != b' ')
+                .unwrap_or(bytes.len())
+        } else {
+            0
+        };
+        let end = if trimmed_names {
+            bytes
+                .iter()
+                .rposition(|byte| !matches!(byte, b'.' | b' '))
+                .map_or(0, |last| last + 1)
+        } else {
+            bytes.len()
+        };
+        &bytes[start.min(end)..end]
+    }
     std::fs::read_dir(directory)
         .ok()?
         .filter_map(Result::ok)
         .map(|entry| entry.file_name())
         .find(|candidate| {
-            candidate
-                .as_encoded_bytes()
-                .eq_ignore_ascii_case(name.as_encoded_bytes())
+            comparable(candidate, trimmed_names)
+                .eq_ignore_ascii_case(comparable(name, trimmed_names))
         })
 }
 
@@ -353,7 +379,24 @@ impl ScriptedFileSystem {
             Ok(canonical) if canonical != root => roots.push(canonical),
             _ => {}
         }
-        Self::over(Volume::CaseInsensitive { roots })
+        Self::over(Volume::CaseInsensitive {
+            roots,
+            trimmed_names: false,
+        })
+    }
+
+    /// A case-insensitive volume whose lookups also ignore leading ASCII spaces and
+    /// trailing periods and ASCII spaces.
+    pub fn trimmed_names_over(root: &Path) -> Self {
+        let mut roots = vec![root.to_path_buf()];
+        match std::fs::canonicalize(root) {
+            Ok(canonical) if canonical != root => roots.push(canonical),
+            _ => {}
+        }
+        Self::over(Volume::CaseInsensitive {
+            roots,
+            trimmed_names: true,
+        })
     }
 
     /// A real tree seen through a volume that keeps every two byte spellings of a name
@@ -523,13 +566,6 @@ impl ScriptedFileSystem {
                 comparison_domain,
                 sequence,
             });
-    }
-
-    /// Change observations of `path` report no comparable evidence.
-    pub fn clear_change_evidence(&self, path: impl AsRef<Path>) {
-        self.on(Operation::ObserveFileChange)
-            .at(path)
-            .reports_evidence(FileChangeEvidence::Uncertain);
     }
 
     /// Every call to `operation` at exactly `path` fails.
@@ -805,6 +841,10 @@ impl FileSystem for ScriptedFileSystem {
         )
     }
 
+    fn is_unsupported(&self, error: &Self::Error) -> bool {
+        matches!(error, FsError::Io(io::ErrorKind::Unsupported))
+    }
+
     fn read(&self, path: &Path) -> Result<Vec<u8>, Self::Error> {
         self.perform(
             self.one(Operation::Read, path),
@@ -869,6 +909,19 @@ impl FileSystem for ScriptedFileSystem {
         )
     }
 
+    fn entry_name(&self, path: &Path) -> Result<Option<OsString>, Self::Error> {
+        self.perform(
+            self.one(Operation::EntryName, path),
+            |volume| {
+                PlatformFileSystem
+                    .entry_name(&volume.resolve(path))
+                    .map(|name| name.map(|name| volume.present_name(path, name)))
+            },
+            no_answer,
+            unadjusted,
+        )
+    }
+
     fn symlink_metadata(&self, path: &Path) -> Result<Option<FileSystemEntryKind>, Self::Error> {
         self.perform(
             self.one(Operation::SymlinkMetadata, path),
@@ -882,10 +935,7 @@ impl FileSystem for ScriptedFileSystem {
         self.perform(
             self.one(Operation::ObserveFileChange, path),
             |volume| PlatformFileSystem.observe_file_change(&volume.resolve(path)),
-            |answer| match answer {
-                Answer::Change(observation) => Some(observation),
-                _ => None,
-            },
+            no_answer,
             |observation, outcome| match outcome {
                 // An entry that is not there has no evidence to report.
                 Outcome::Evidence(evidence) if observation.kind.is_some() => {
@@ -964,16 +1014,11 @@ impl FileSystem for ScriptedFileSystem {
         )
     }
 
-    fn rename_new_directory(
-        &self,
-        source: &Path,
-        destination: &Path,
-    ) -> Result<NewDirectoryRenameOutcome, Self::Error> {
+    fn rename_new(&self, source: &Path, destination: &Path) -> Result<RenameOutcome, Self::Error> {
         self.perform(
-            self.two(Operation::RenameNewDirectory, source, destination),
+            self.two(Operation::RenameNew, source, destination),
             |volume| {
-                PlatformFileSystem
-                    .rename_new_directory(&volume.resolve(source), &volume.resolve(destination))
+                PlatformFileSystem.rename_new(&volume.resolve(source), &volume.resolve(destination))
             },
             |answer| match answer {
                 Answer::Renamed(outcome) => Some(outcome),

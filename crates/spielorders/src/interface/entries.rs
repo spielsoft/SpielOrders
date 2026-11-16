@@ -110,9 +110,9 @@ fn subject_of(failure: &Failure) -> (Option<&str>, Option<CString>) {
     match failure {
         Failure::RootIsALink { root } => (None, located(root)),
         Failure::UnmanagedPackage(package) => (None, Some(relative(&package.root))),
-        Failure::PackageAccessDenied(failed) | Failure::PackageOperationFailed(failed) => {
-            (None, located(&failed.path))
-        }
+        Failure::PackageAccessDenied(failed)
+        | Failure::PackageOperationFailed(failed)
+        | Failure::FilesystemUnsupported(failed) => (None, located(&failed.path)),
         Failure::NotAnOrderDirectory { directory, .. }
         | Failure::OrderNotFound { directory, .. }
         | Failure::LocatorUnusable { directory }
@@ -245,9 +245,9 @@ impl Entry {
         let mut entry = Self::coded(SPIELORDERS_FAMILY_WARNING, warning.code(), None);
         entry.severity = SPIELORDERS_SEVERITY_WARNING;
         let location = match warning {
-            Warning::IndexRefreshFailed(failure) | Warning::LocatorUpdateFailed(failure) => {
-                subject_of(failure).1
-            }
+            Warning::IndexRefreshFailed(failure)
+            | Warning::LocatorUpdateFailed(failure)
+            | Warning::OrderNotRemoved(failure) => subject_of(failure).1,
             Warning::StagingCleanupFailed(failure) => Some(relative(&failure.location)),
             Warning::RefreshUnavailable | Warning::RediagnosisUnavailable => None,
         };
@@ -263,8 +263,9 @@ impl Entry {
         let entry = Self::warning(warning);
         let code = entry.code;
         entries.push(entry);
-        if let Warning::IndexRefreshFailed(failure) | Warning::LocatorUpdateFailed(failure) =
-            warning
+        if let Warning::IndexRefreshFailed(failure)
+        | Warning::LocatorUpdateFailed(failure)
+        | Warning::OrderNotRemoved(failure) = warning
         {
             entries.extend(left_behind(failure).iter().map(|left| {
                 let mut entry = Self::new(

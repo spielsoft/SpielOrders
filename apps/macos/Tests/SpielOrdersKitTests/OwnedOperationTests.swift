@@ -32,3 +32,60 @@ import Testing
     await operation.wait()
     #expect(restored != nil)
 }
+
+/// A library call may finish reading after cancellation was requested.
+@MainActor private final class SuspendedRead {
+    private var continuation: CheckedContinuation<Void, Never>?
+    let events = AsyncStream<String>.makeStream()
+
+    func run() async {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                self.continuation = continuation
+                events.continuation.yield("started")
+            }
+        } onCancel: { [events] in
+            events.continuation.yield("cancelled")
+        }
+    }
+
+    func resume() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+@Test @MainActor func planningSettlement() async throws {
+    let planning = Planning()
+    let earlier = SuspendedRead()
+    var firstEvents = earlier.events.stream.makeAsyncIterator()
+    let first = Task { try await planning.run { _ in await earlier.run() } }
+    #expect(await firstEvents.next() == "started")
+    first.cancel()
+    #expect(await firstEvents.next() == "cancelled")
+
+    let latest = SuspendedRead()
+    var lastEvents = latest.events.stream.makeAsyncIterator()
+    let last = Task { try await planning.run { _ in await latest.run() } }
+    #expect(await lastEvents.next() == "started")
+    var exited = false
+    let operation = OwnedOperation(kind: .mutation) {
+        await planning.finish()
+        exited = true
+    }
+    #expect(await lastEvents.next() == "cancelled")
+    #expect(!exited, "Exit must wait for the library calls to finish")
+    latest.resume()
+    _ = await last.result
+    #expect(!exited, "Superseded calls still own their folder access")
+    earlier.resume()
+    _ = await first.result
+    await operation.settleForExit()
+    #expect(exited)
+
+    await #expect(throws: CancellationError.self) {
+        try await planning.run { _ in
+            Issue.record("A dismissed dialog started new library work")
+        }
+    }
+}

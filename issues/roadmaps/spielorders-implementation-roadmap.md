@@ -37,18 +37,11 @@ decisions govern compatibility. A different frontend alone needs no metadata cha
 | M10 — Agent Ready | Accepted | M9 |
 | M11 — MVP acceptance | Accepted | M9 and M10 |
 | M12 — Value management | Accepted | M11 |
-| M13 — Bulk performance | Not started | M12 |
+| M13 — Bulk performance | Accepted | M12 |
 | M14 — App Store release | Not started | M13 |
 
 Native controls and their standard interaction behavior apply throughout the desktop;
 broader visual refinement follows core functionality.
-
-## M13 — Bulk performance
-
-Outcome: scripts and agents that change thousands of Orders through the CLI finish in
-seconds rather than minutes. Each change stops reloading the whole Package and rewriting
-its derived data, and one CLI run can apply many changes with one load and one guarded
-write. Measured on a generated, disposable Package of fictional Orders.
 
 ## M14 — App Store release
 

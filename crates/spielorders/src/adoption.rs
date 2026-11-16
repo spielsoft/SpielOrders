@@ -3,7 +3,7 @@
 use crate::vendors::vendor_aggregate;
 use crate::{
     Answer, Assignments, Failure, Warning,
-    canonical::load_package,
+    canonical::{Touched, load_every_record},
     metadata::{OrderDocument, OrderStatus, StoredValues, Vendor},
     mutation::{
         CleanupFailure, CommitFailure, IndexRefresh, MutationReport, OperationKind,
@@ -150,7 +150,7 @@ pub(crate) fn plan_order_adoption<F: FileSystem>(
     filesystem: &F,
 ) -> Answer<OrderAdoptionPlan> {
     Answer::of(|| {
-        let package = load_package(selected_root, filesystem)?;
+        let package = load_every_record(selected_root, filesystem)?;
         let root_location = package.context.root.clone();
         let root = root_location.absolute_path.clone();
         let orders = package
@@ -420,7 +420,7 @@ pub(crate) fn commit_order_adoption<F: FileSystem>(
     filesystem: &F,
 ) -> Answer<OrderAdoptionReport> {
     Answer::of(|| {
-        let current = load_package(&plan.root, filesystem)?;
+        let current = load_every_record(&plan.root, filesystem)?;
         let metadata_directory = plan.directory.absolute_path.join(".spielorders");
         let order_staging = metadata_directory.join(ORDER_STAGING_NAME);
         let order_path = metadata_directory.join("order.json");
@@ -572,7 +572,9 @@ pub(crate) fn commit_order_adoption<F: FileSystem>(
                 warnings.push(Warning::StagingCleanupFailed(failure));
             }
         }
-        let mut refresh = IndexRefresh::after_commit(&plan.root, filesystem);
+        let touched = Touched::orders([plan.directory.absolute_path.clone()])
+            .with_vendors(crate::mutation::replaces_vendors(&plan.operations));
+        let mut refresh = IndexRefresh::after_commit(&plan.root, &touched, filesystem);
         // A refreshed Package that no longer carries the adopted Order cannot confirm it,
         // and the commit says so instead of silently claiming a confirmation it did not get.
         let confirmed = refresh.package().is_some_and(|package| {

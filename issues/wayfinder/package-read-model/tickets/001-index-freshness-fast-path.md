@@ -6,15 +6,19 @@ status: closed
 ## Decision
 
 The [core read model](../../../../crates/spielorders/src/canonical.rs) owns
-index assessment, refresh, and loading. Its tests define concrete observation budgets
-and typed outcomes.
+index assessment, refresh, and loading. Its tests define the typed outcomes.
 
 The Package Index is derived, never a second authority. A fast load trusts it only
 after valid shape/semantics, exact candidate membership, ordinary no-follow file kinds,
-and conservative filesystem change evidence establish freshness. The index replacement
-must be strictly newer than the projected inputs. Equal, uncertain, incomparable, or
-contradictory observations require canonical reading. This assumes a friendly workspace,
-not an attacker forging both index bytes and filesystem bookkeeping.
+and conservative filesystem change evidence establish freshness. That evidence is each
+file's status-change time (ctime), which every write, copy, restore, sync, rename, and
+timestamp change sets to the present; modification time is not evidence, because
+restores, copies, and syncs preserve it. The index replacement must be strictly newer
+than the projected inputs. Equal, uncertain, incomparable, or contradictory observations
+require canonical reading. A mutation takes the facts of the records it changes from
+those records, never from the index, so a stale index can mislead a display but never a
+write. This assumes a friendly workspace with one writer at a time: an index edited by
+hand, or synced in from another machine after its records, is outside it.
 
 No timestamp, filesystem identity, diagnostic, or revision sidecar is added to the
 metadata merely to accelerate loading. Fast-path work stays at managed artifacts,

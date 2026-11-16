@@ -32,13 +32,13 @@ unless the new Project already has a group of that name or the same command assi
 `value add`, `rename`, `merge`, and `delete` change a kind's values; every Order using a
 changed value follows it, and the response's `orders` is how many Orders changed. An
 `order_group` command takes `--project` for the Project the group belongs to. Renaming
-onto an existing value merges the two. Deleting a used value needs `--replacement VALUE`
+onto an existing value merges the two; `value merge` keeps the first spelling named. Deleting a used value needs `--replacement VALUE`
 or `--clear`. A Project's groups go with its Orders.
 
 ```sh
 spielorders value add orderer "Emmy Noether" --root "$package"
 spielorders value add orderer "E. Noether" --root "$package"
-spielorders value merge orderer "Emmy Noether" "E. Noether" --keep "Emmy Noether" --root "$package" --dry-run
+spielorders value merge orderer "Emmy Noether" "E. Noether" --root "$package" --dry-run
 spielorders value delete orderer "E. Noether" --replacement "Emmy Noether" --root "$package"
 spielorders value add project "Clock" --root "$package"
 spielorders value rename project "Clock" "Telescope" --root "$package"
@@ -50,3 +50,21 @@ facts. It is not a side effect of editing or adoption and can break external lin
 `order remove` moves the complete directory into the Package's configured recovery
 directory. `order remove --delete` additionally requests native Trash; a failed handoff
 leaves the recoverable directory named in the result. There is no Item-level Trash.
+
+Many edits go faster as one batch:
+
+```sh
+printf '%s\n' "[\"order\", \"edit\", \"currency=USD\", \"--root\", \"$directory\"]" > "${TMPDIR:-/tmp}/spielorders-operations.jsonl"
+spielorders apply "${TMPDIR:-/tmp}/spielorders-operations.jsonl" --root "$package" --dry-run
+```
+
+`order merge` merges other Orders into the one `--root` names, in precedence order: the
+kept Order keeps its facts and gains only the facts, Items, and directory entries it
+lacks, and what remains of each other Order goes to the recovery directory. It asks
+before discarding each entry the kept Order already holds; pass `--yes` when no one is
+there to answer, after reviewing `--dry-run`.
+
+```sh
+spielorders add-order --root "$package" title="Duplicate order"
+spielorders order merge "$package"/Orders/*_Duplicate_order --root "$directory" --dry-run
+```

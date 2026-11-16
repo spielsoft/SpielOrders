@@ -11,11 +11,11 @@
 //! evolution.
 
 use crate::support::{
-    Invocation, damage_index, directory_that_is_not_a_root, hidden_vendor_id, managed_snapshot,
-    modification_time, newest_order_id, offered_vendor_id, package_at_an_uninterpretable_version,
-    package_root_that_cannot_be_read, package_with_a_damaged_order,
-    package_with_duplicate_vendor_names, package_with_unreadable_readme, populated_package,
-    remove_index, response, reversion_index, touch_an_order_record,
+    Invocation, change_order_record, damage_index, directory_that_is_not_a_root, hidden_vendor_id,
+    managed_snapshot, modification_time, newest_order_id, offered_vendor_id,
+    package_at_an_uninterpretable_version, package_root_that_cannot_be_read,
+    package_with_a_damaged_order, package_with_duplicate_vendor_names,
+    package_with_unreadable_readme, populated_package, remove_index, response, reversion_index,
 };
 use std::path::Path;
 
@@ -34,7 +34,7 @@ const INDEX_STATES: [IndexState; 5] = [
     },
     IndexState {
         label: "stale",
-        prepare: Some(touch_an_order_record),
+        prepare: Some(change_order_record),
     },
     IndexState {
         label: "missing",

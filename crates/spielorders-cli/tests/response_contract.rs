@@ -274,6 +274,8 @@ fn every_recorded_cell_is_one_this_file_compares() {
     for (contract, _) in RELOCATION_MUTATIONS {
         compared.push((contract, mutations.clone()));
     }
+    compared.push((ResponseContract::OrderMerge, mutations.clone()));
+    compared.push((ResponseContract::Apply, mutations.clone()));
 
     let mut named: Vec<&str> = compared
         .iter()
@@ -1362,18 +1364,9 @@ fn mutation_command(contract: ResponseContract, cell: MutationCell) -> Vec<&'sta
         (ResponseContract::VendorDelete, _) => vec!["vendor", "delete", "Elderglass Optics"],
         // A Name the Package has no Vendor for, refused before anything is merged.
         (ResponseContract::VendorMerge, MutationCell::Rejected) => {
-            vec![
-                "vendor", "merge", "Tarnwick", "Nonesuch", "--keep", "Tarnwick",
-            ]
+            vec!["vendor", "merge", "Tarnwick", "Nonesuch"]
         }
-        (ResponseContract::VendorMerge, _) => vec![
-            "vendor",
-            "merge",
-            "Tarnwick",
-            "Elderglass Optics",
-            "--keep",
-            "Tarnwick",
-        ],
+        (ResponseContract::VendorMerge, _) => vec!["vendor", "merge", "Tarnwick", "Elderglass Optics"],
         // A Project the Package lacks, named as the home of a new group.
         (ResponseContract::ValueAdd, MutationCell::Rejected) => {
             vec![
@@ -1397,22 +1390,14 @@ fn mutation_command(contract: ResponseContract, cell: MutationCell) -> Vec<&'sta
             "Telescope array",
         ],
         (ResponseContract::ValueMerge, MutationCell::Rejected) => {
-            vec![
-                "value",
-                "merge",
-                "orderer",
-                "Nobody",
-                "--keep",
-                "Ada Lovelace",
-            ]
+            vec!["value", "merge", "orderer", "Ada Lovelace", "Nobody"]
         }
         (ResponseContract::ValueMerge, _) => vec![
             "value",
             "merge",
             "project",
-            "Telescope",
-            "--keep",
             "TeleScope",
+            "Telescope",
         ],
         // A value its Orders still use, named without a replacement: the refusal that
         // lists them.
@@ -2010,6 +1995,108 @@ fn every_relocation_matches_its_golden_fixtures() {
             cell.assert_is_this_kind(&response(&outcome), &label);
             assert_matches_golden(contract, cell.name(), &outcome, &root);
         }
+    }
+}
+
+/// `order merge` in each of its cells, against its recorded bytes.
+///
+/// Recorded on the populated Package's two Orders, the second merged into the first with
+/// `--yes`, so its README is a discarded entry; the invalid cell keeps an Order whose
+/// record is damaged, and the rejected cell names the kept Order as merged into itself.
+#[test]
+fn every_order_merge_cell_matches_its_golden_fixture() {
+    let contract = ResponseContract::OrderMerge;
+    for cell in MUTATION_CELLS {
+        let label = format!("golden-order-merge-{}", cell.name());
+        let (_tree, root, kept, merged) = match cell {
+            MutationCell::Invalid => {
+                let (tree, root, damaged) = package_with_an_impossible_date(&label);
+                let other = order_directory(&root, "Laser_components");
+                (tree, root, damaged, other)
+            }
+            MutationCell::Warning => {
+                let (tree, root) = package_with_a_blocked_index_refresh(&label);
+                let kept = order_directory(&root, "Laser_components");
+                let merged = order_directory(&root, "Mirror_mounts");
+                (tree, root, kept, merged)
+            }
+            MutationCell::Rejected => {
+                let (tree, root) = populated_package(&label);
+                let kept = order_directory(&root, "Laser_components");
+                (tree, root, kept.clone(), kept)
+            }
+            MutationCell::Success => {
+                let (tree, root) = populated_package(&label);
+                let kept = order_directory(&root, "Laser_components");
+                let merged = order_directory(&root, "Mirror_mounts");
+                (tree, root, kept, merged)
+            }
+        };
+        let outcome = Invocation::new(&["order", "merge"])
+            .argument(&merged)
+            .argument("--yes")
+            .argument("--json")
+            .rooted_at(&kept)
+            .run();
+        assert_eq!(
+            outcome.status,
+            Some(cell.status()),
+            "{} {}: {}{}",
+            contract.name(),
+            cell.name(),
+            outcome.stdout_text(),
+            outcome.stderr_text()
+        );
+        cell.assert_is_this_kind(&response(&outcome), &label);
+        assert_matches_golden(contract, cell.name(), &outcome, &root);
+    }
+}
+
+/// `apply` in each of its cells, against its recorded bytes.
+///
+/// Recorded with a file editing one Order's Title and adding a Vendor; the rejected cell
+/// adds a line naming a Project the Package lacks, which refuses the whole batch at that
+/// line.
+#[test]
+fn every_apply_cell_matches_its_golden_fixture() {
+    let contract = ResponseContract::Apply;
+    for cell in MUTATION_CELLS {
+        let label = format!("golden-apply-{}", cell.name());
+        let (_tree, root) = match cell {
+            MutationCell::Invalid => package_with_duplicate_vendor_names(&label),
+            MutationCell::Warning => package_with_a_blocked_index_refresh(&label),
+            _ => populated_package(&label),
+        };
+        let operations = if matches!(cell, MutationCell::Invalid) {
+            let path = root.join("operations.jsonl");
+            std::fs::write(&path, "[\"add-vendor\", \"Elderglass Optics\"]\n").unwrap();
+            path
+        } else {
+            crate::support::operations_file(&root)
+        };
+        if matches!(cell, MutationCell::Rejected) {
+            let order = order_directory(&root, "Mirror_mounts");
+            let refused = serde_json::json!(["order", "edit", "project=Unknown", "--root", order]);
+            let mut text = std::fs::read_to_string(&operations).unwrap();
+            text.push_str(&format!("{refused}\n"));
+            std::fs::write(&operations, text).unwrap();
+        }
+        let outcome = Invocation::new(&["apply"])
+            .argument(&operations)
+            .argument("--json")
+            .rooted_at(&root)
+            .run();
+        assert_eq!(
+            outcome.status,
+            Some(cell.status()),
+            "{} {}: {}{}",
+            contract.name(),
+            cell.name(),
+            outcome.stdout_text(),
+            outcome.stderr_text()
+        );
+        cell.assert_is_this_kind(&response(&outcome), &label);
+        assert_matches_golden(contract, cell.name(), &outcome, &root);
     }
 }
 

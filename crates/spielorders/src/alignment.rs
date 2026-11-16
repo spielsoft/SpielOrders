@@ -6,14 +6,14 @@
 
 use crate::{
     Answer, Failure,
-    canonical::{CurrentPackageCandidate, HealthyOrder},
+    canonical::{CurrentPackageCandidate, HealthyOrder, Touched},
     creation::{normalize_filename_component, projected_order_basename},
     evidence::EvidenceFingerprint,
     metadata::{OrderDocument, Vendor, VendorId},
     mutation::{CommitFailure, IndexRefresh, MutationReport, OperationKind, PlannedOperation},
     operations::FailedOperation,
     order_edits::resolve_order,
-    ports::{FileSystem, FileSystemEntryKind, NewDirectoryRenameOutcome},
+    ports::{FileSystem, FileSystemEntryKind, RenameOutcome},
     readme::{Location, package_relative_path_text},
 };
 use std::path::{Path, PathBuf};
@@ -296,24 +296,31 @@ pub(crate) fn commit_order_alignment<F: FileSystem + FileSystem>(
 
         // The whole directory moves as one opaque tree. Nothing enumerates, copies, or
         // rewrites its children, so README and Supporting Material bytes travel intact.
-        match filesystem
-            .rename_new_directory(&plan.source.absolute_path, &plan.destination.absolute_path)
-        {
-            Ok(NewDirectoryRenameOutcome::Renamed) => {}
-            Ok(NewDirectoryRenameOutcome::DestinationExists) => {
+        match filesystem.rename_new(&plan.source.absolute_path, &plan.destination.absolute_path) {
+            Ok(RenameOutcome::Renamed) => {}
+            Ok(RenameOutcome::DestinationExists) => {
                 return Err(Failure::DestinationCollision {
                     root: located(&plan.root, plan.root.clone()),
                     location: plan.destination.clone(),
                     found: None,
                 });
             }
-            Err(_) => {
+            Err(error) => {
                 let failure = CommitFailure::new(plan.destination.clone());
-                return Err(Failure::commit(failure, Vec::new()));
+                return Err(Failure::commit(failure, Vec::new()).unless_unsupported(
+                    &plan.root,
+                    &plan.source.absolute_path,
+                    &error,
+                    filesystem,
+                ));
             }
         }
 
-        let mut refresh = IndexRefresh::after_commit(&plan.root, filesystem);
+        let touched = Touched::orders([
+            plan.source.absolute_path.clone(),
+            plan.destination.absolute_path.clone(),
+        ]);
+        let mut refresh = IndexRefresh::after_commit(&plan.root, &touched, filesystem);
         // The rename already happened, so an Order the refresh cannot show is never a
         // rejection: the caller learns it as a warning rather than as work that did not
         // occur.

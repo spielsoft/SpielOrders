@@ -15,6 +15,7 @@ use crate::{
     alignment::{
         OrderAlignmentPlan, OrderAlignmentResult, commit_order_alignment, plan_order_alignment,
     },
+    batch::{Batch, BatchPlan, BatchResult, commit_batch},
     canonical::{
         PackageIndexRebuildPlan, commit_package_index_rebuild, plan_package_index_rebuild,
     },
@@ -30,6 +31,7 @@ use crate::{
     mutation::{MutationReport, OperationKind, PlannedOperation},
     operations::refuse_linked_root,
     order_edits::{OrderEditPlan, OrderEditResult, commit_order_edit, plan_order_save},
+    order_merge::{OrderMergePlan, OrderMergeResult, commit_order_merge, plan_order_merge},
     order_reads::read_order,
     package::ReusableValues,
     ports::Effects,
@@ -222,6 +224,12 @@ pub enum Change {
     RemoveOrder {
         order: OrderRef,
     },
+    /// Merges `orders` in precedence order: the first is kept, and each later one only
+    /// fills the facts, Items, and directory entries the result still lacks before what
+    /// remains of it is removed.
+    MergeOrders {
+        orders: Vec<OrderRef>,
+    },
     /// `contacts`, where an editor's new Vendor has any, is its complete ordered Contact
     /// list, and every rule its facts and rows break is refused together as
     /// [`Failure::InvalidDraft`].
@@ -327,6 +335,9 @@ impl Change {
             Self::SaveOrder { order, .. }
             | Self::AlignOrder { order }
             | Self::RemoveOrder { order, .. } => order.selected(),
+            Self::MergeOrders { orders } => {
+                orders.first().map_or(Path::new(""), OrderRef::selected)
+            }
             Self::WriteReadme { scope, .. } | Self::Repair { scope, .. } => scope.selected(),
         }
     }
@@ -348,6 +359,8 @@ enum PlanKind {
     EditOrder(Box<OrderEditPlan>),
     AlignOrder(Box<OrderAlignmentPlan>),
     RemoveOrder(Box<OrderRemovalPlan>),
+    MergeOrders(Box<OrderMergePlan>),
+    Batch(Box<BatchPlan>),
     RestoreOrder(Box<OrderRestorePlan>),
     Vendor(Box<VendorMutationPlan>),
     Values(Box<ValueChangePlan>),
@@ -366,6 +379,8 @@ pub enum ChangeResult {
     EditOrder(Box<OrderEditResult>),
     AlignOrder(Box<OrderAlignmentResult>),
     RemoveOrder(Box<OrderRemovalResult>),
+    MergeOrders(Box<OrderMergeResult>),
+    Batch(Box<BatchResult>),
     RestoreOrder(Box<OrderRestoreResult>),
     Vendor(Box<VendorMutationResult>),
     Values(Box<ValueChangeResult>),
@@ -475,6 +490,8 @@ impl Plan {
             PlanKind::EditOrder(plan) => planned(&plan.operations),
             PlanKind::AlignOrder(plan) => planned(&plan.operations),
             PlanKind::RemoveOrder(plan) => planned(&plan.operations),
+            PlanKind::MergeOrders(plan) => planned(&plan.operations),
+            PlanKind::Batch(plan) => planned(&plan.operations),
             PlanKind::RestoreOrder(plan) => planned(&plan.operations),
             PlanKind::Vendor(plan) => planned(&plan.operations),
             PlanKind::Values(plan) => planned(&plan.operations),
@@ -490,6 +507,7 @@ impl Plan {
     pub fn order_count(&self) -> usize {
         match &self.0 {
             PlanKind::Values(plan) => plan.order_count(),
+            PlanKind::Batch(plan) => plan.order_count(),
             _ => self
                 .operations()
                 .iter()
@@ -502,6 +520,18 @@ impl Plan {
                     .contains(&kind.as_str())
                 })
                 .count(),
+        }
+    }
+
+    /// For each operation in [`Self::operations`] order, whether it acts on a directory.
+    pub(crate) fn operation_directories(&self) -> Vec<bool> {
+        match &self.0 {
+            PlanKind::MergeOrders(plan) => plan
+                .operations
+                .iter()
+                .map(|operation| operation.directory)
+                .collect(),
+            _ => vec![false; self.operations().len()],
         }
     }
 
@@ -552,6 +582,8 @@ variants!(PlanKind, PlanKind {
     EditOrder(OrderEditPlan),
     AlignOrder(OrderAlignmentPlan),
     RemoveOrder(OrderRemovalPlan),
+    MergeOrders(OrderMergePlan),
+    Batch(BatchPlan),
     RestoreOrder(OrderRestorePlan),
     Vendor(VendorMutationPlan),
     Values(ValueChangePlan),
@@ -565,6 +597,8 @@ variants!(ChangeResult, ChangeResult {
     EditOrder(OrderEditResult),
     AlignOrder(OrderAlignmentResult),
     RemoveOrder(OrderRemovalResult),
+    MergeOrders(OrderMergeResult),
+    Batch(BatchResult),
     RestoreOrder(OrderRestoreResult),
     Vendor(VendorMutationResult),
     Values(ValueChangeResult),
@@ -647,6 +681,15 @@ pub fn plan<E: Effects>(change: &Change, effects: &E) -> Answer<Plan> {
         Change::RemoveOrder { order } => {
             settled(order.healthy_directory(filesystem), |directory| {
                 plan_order_removal(&directory, filesystem).map(Plan::of)
+            })
+        }
+        Change::MergeOrders { orders } => {
+            let directories = orders
+                .iter()
+                .map(|order| order.healthy_directory(filesystem))
+                .collect::<Result<Vec<_>, _>>();
+            settled(directories, |directories| {
+                plan_order_merge(&directories, filesystem).map(Plan::of)
             })
         }
         Change::RestoreOrder { root, removed } => {
@@ -823,6 +866,11 @@ pub fn plan<E: Effects>(change: &Change, effects: &E) -> Answer<Plan> {
     }
 }
 
+/// Plans committing every change `batch` holds as one write.
+pub(crate) fn plan_batch(batch: &Batch) -> Answer<Plan> {
+    crate::batch::plan_batch(batch).map(Plan::of)
+}
+
 /// Commits `plan`, re-checking the evidence it was planned against before its first
 /// effect.
 pub fn commit<E: Effects>(plan: Plan, effects: &E) -> Answer<Report> {
@@ -845,6 +893,8 @@ pub fn commit<E: Effects>(plan: Plan, effects: &E) -> Answer<Report> {
         PlanKind::AlignOrder(plan) => commit_order_alignment(*plan, filesystem).map(Report::of),
         PlanKind::RemoveOrder(plan) => commit_order_removal(*plan, effects).map(Report::of),
         PlanKind::RestoreOrder(plan) => commit_order_restore(*plan, filesystem).map(Report::of),
+        PlanKind::MergeOrders(plan) => commit_order_merge(*plan, effects).map(Report::of),
+        PlanKind::Batch(plan) => commit_batch(*plan, filesystem).map(Report::of),
         PlanKind::Vendor(plan) => {
             commit_vendor_mutation(*plan, &new_uuid, filesystem).map(Report::of)
         }

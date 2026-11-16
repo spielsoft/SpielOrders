@@ -6,9 +6,9 @@
 //! evolution.
 
 use crate::support::{
-    Invocation, Outcome, damage_index, managed_snapshot, modification_time,
+    Invocation, Outcome, change_order_record, damage_index, managed_snapshot, modification_time,
     package_with_a_staging_artifact, package_with_an_impossible_date, populated_package,
-    remove_index, response, reversion_index, touch_an_order_record,
+    remove_index, response, reversion_index,
 };
 use serde_json::Value;
 use std::path::Path;
@@ -276,7 +276,7 @@ fn index_status_reports_every_state_and_writes_nothing() {
         ),
         (
             "stale",
-            Some(touch_an_order_record as fn(&Path)),
+            Some(change_order_record as fn(&Path)),
             "stale",
             vec!["order_metadata_changed"],
         ),

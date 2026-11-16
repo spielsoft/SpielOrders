@@ -37,6 +37,39 @@ private struct OrderDetail: View {
     @Bindable var model: DesktopModel
 
     var body: some View {
+        if model.multipleSelection.isEmpty {
+            SelectedOrder(model: model)
+        } else {
+            SelectedOrders(model: model)
+        }
+    }
+}
+
+/// The detail for several selected Orders: how many, and Merge.
+private struct SelectedOrders: View {
+    @Bindable var model: DesktopModel
+
+    var body: some View {
+        ContentUnavailableView {
+            Label("\(model.multipleSelection.count) Orders Selected", systemImage: "doc.on.doc")
+        } description: {
+            Text("Merging keeps the Order you selected first. You can change that before merging.")
+        } actions: {
+            Button(model.mergeTitle) { model.mergeOrders() }
+                .disabled(!model.canMergeOrders)
+                .accessibilityIdentifier("order.selection.merge")
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Order detail")
+        .accessibilityIdentifier("order.selection")
+    }
+}
+
+/// The detail for one selected Order: its editor, or what can be shown without one.
+private struct SelectedOrder: View {
+    @Bindable var model: DesktopModel
+
+    var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 if let editor = model.orderEditor {

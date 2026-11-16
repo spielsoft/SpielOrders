@@ -521,3 +521,52 @@ fn a_project_change_keeps_only_an_order_group_the_command_names() {
         "an unnamed group the new Project lacks is cleared"
     );
 }
+
+/// A per-line modifier must never be silently ignored and turn a preview or a
+/// differently targeted command into a write to the batch's Package.
+#[test]
+fn apply_modifiers() {
+    let (_tree, root) = populated_package("apply-modifiers");
+    let (_other_tree, other) = populated_package("apply-other");
+    let order = order_directory(&root, "Laser_components");
+    let lines = [
+        serde_json::json!(["vendor", "edit", "Tarnwick", "phone=123", "--root", other]),
+        serde_json::json!(["add-vendor", "Example Supply", "--root", other]),
+        serde_json::json!(["vendor", "edit", "Tarnwick", "phone=123", "--dry-run"]),
+        serde_json::json!([
+            "order",
+            "edit",
+            "title=Changed",
+            "--root",
+            order,
+            "--dry-run"
+        ]),
+        serde_json::json!([
+            "order",
+            "edit",
+            "title=Changed",
+            "--uuid",
+            newest_order_id(&root)
+        ]),
+        serde_json::json!(["add-vendor", "Example Supply", "--quiet"]),
+    ];
+    let file = root.join("operations.jsonl");
+    for line in lines {
+        std::fs::write(
+            &file,
+            format!("[\"add-vendor\",\"Earlier Supply\"]\n{line}\n"),
+        )
+        .unwrap();
+        let before = managed_snapshot(&root);
+        let other_before = managed_snapshot(&other);
+        let outcome = Invocation::new(&["apply"])
+            .argument(&file)
+            .argument("--json")
+            .rooted_at(&root)
+            .run();
+        assert_eq!(outcome.status, Some(1), "{}", outcome.stdout_text());
+        assert_eq!(response(&outcome)["error"]["detail"]["line"], 2);
+        assert_eq!(managed_snapshot(&root), before);
+        assert_eq!(managed_snapshot(&other), other_before);
+    }
+}

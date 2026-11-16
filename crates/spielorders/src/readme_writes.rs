@@ -6,7 +6,7 @@
 
 use crate::{
     Answer, Failure,
-    canonical::{CurrentPackageCandidate, load_package},
+    canonical::{CurrentPackageCandidate, Touched, load_package},
     filesystem::{DestinationExpectation, replace_validated_file_expecting},
     mutation::{IndexRefresh, MutationReport, Never, OperationKind, PlannedOperation},
     operations::FailedOperation,
@@ -237,7 +237,19 @@ pub(crate) fn commit_readme_write<F: FileSystem>(
             return Ok(MutationReport::Committed { result: () });
         }
 
-        let refresh = IndexRefresh::after_commit(&plan.root, filesystem);
+        // A Package README is no part of the index; an Order README is part of its Order's
+        // entry.
+        let touched = match plan.reference.kind {
+            ReadmeKind::OrderReadme => Touched::orders(
+                plan.reference
+                    .location
+                    .absolute_path
+                    .parent()
+                    .map(Path::to_path_buf),
+            ),
+            ReadmeKind::PackageReadme => Touched::default(),
+        };
+        let refresh = IndexRefresh::after_commit(&plan.root, &touched, filesystem);
         Ok(refresh.report(()))
     })
 }

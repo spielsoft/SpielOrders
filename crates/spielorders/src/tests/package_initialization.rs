@@ -681,6 +681,63 @@ fn rollback_never_deletes_unowned_staging_or_replaced_canonical_bytes() {
 }
 
 #[test]
+fn cleanup_does_not_claim_an_unrelated_file_with_the_same_initial_change_time() {
+    let tree = TemporaryTree::new("initialization-equal-status-times");
+    let filesystem = ScriptedFileSystem::new();
+    let root = fs::canonicalize(tree.path()).unwrap();
+    let config = root.join(".spielorders/config.toml");
+    let version = root.join(".spielorders/version.json");
+    let version_stage = root.join(".spielorders/.version.json.spielorders-stage");
+    let initial = FileChangeEvidence::Comparable {
+        comparison_domain: 1,
+        sequence: 10,
+    };
+    filesystem
+        .on(Operation::ObserveFileChange)
+        .at(&config)
+        .reports_evidence(initial);
+    filesystem
+        .on(Operation::ObserveFileChange)
+        .at(&version_stage)
+        .reports_evidence(initial);
+    filesystem
+        .on(Operation::ObserveFileChange)
+        .at(&config)
+        .after_an_injected_failure()
+        .reports_evidence(FileChangeEvidence::Comparable {
+            comparison_domain: 1,
+            sequence: 20,
+        });
+    let changed = config.clone();
+    filesystem
+        .on(Operation::LinkNewFile)
+        .at(&version)
+        .preceded_by(move |outside| outside.write(&changed, b"Another writer's config"))
+        .fails();
+    let plan = crate::plan(&initialize(&root), &effects(&filesystem))
+        .result
+        .unwrap();
+
+    let failure = crate::commit(plan, &effects(&filesystem))
+        .result
+        .unwrap_err();
+
+    assert_eq!(fs::read(&config).unwrap(), b"Another writer's config");
+    assert!(matches!(
+        failure,
+        Failure::CommitFailedCleanupIncomplete { .. }
+    ));
+    assert!(
+        failure
+            .cleanup_failures()
+            .iter()
+            .any(|left| left.location.absolute_path == config)
+    );
+    assert!(!version.exists());
+    assert!(!version_stage.exists());
+}
+
+#[test]
 fn concurrent_destination_appearance_is_never_overwritten_or_owned_by_rollback() {
     let tree = TemporaryTree::new("initialization-concurrent-destination");
     let filesystem = injected(InjectedBoundary::DestinationAppearsBeforeInstall, None);

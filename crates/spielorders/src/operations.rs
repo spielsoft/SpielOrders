@@ -90,6 +90,7 @@ impl From<Location> for FailedPath {
 pub(crate) enum FailedOperation {
     PackageAccessDenied(Box<OperationFailedProjection>),
     PackageOperationFailed(Box<OperationFailedProjection>),
+    FilesystemUnsupported(Box<OperationFailedProjection>),
 }
 
 impl From<FailedOperation> for Failure {
@@ -100,6 +101,9 @@ impl From<FailedOperation> for Failure {
             }
             FailedOperation::PackageOperationFailed(projection) => {
                 Self::PackageOperationFailed(projection)
+            }
+            FailedOperation::FilesystemUnsupported(projection) => {
+                Self::FilesystemUnsupported(projection)
             }
         }
     }
@@ -117,6 +121,8 @@ impl FailedOperation {
         });
         if filesystem.is_access_denied(error) {
             Self::PackageAccessDenied(projection)
+        } else if filesystem.is_unsupported(error) {
+            Self::FilesystemUnsupported(projection)
         } else {
             Self::PackageOperationFailed(projection)
         }
@@ -167,17 +173,17 @@ impl FailedOperation {
 
     pub(crate) fn projection(&self) -> &OperationFailedProjection {
         match self {
-            Self::PackageAccessDenied(projection) | Self::PackageOperationFailed(projection) => {
-                projection
-            }
+            Self::PackageAccessDenied(projection)
+            | Self::PackageOperationFailed(projection)
+            | Self::FilesystemUnsupported(projection) => projection,
         }
     }
 
     fn projection_mut(&mut self) -> &mut OperationFailedProjection {
         match self {
-            Self::PackageAccessDenied(projection) | Self::PackageOperationFailed(projection) => {
-                projection
-            }
+            Self::PackageAccessDenied(projection)
+            | Self::PackageOperationFailed(projection)
+            | Self::FilesystemUnsupported(projection) => projection,
         }
     }
 }

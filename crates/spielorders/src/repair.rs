@@ -15,7 +15,7 @@
 
 use crate::{
     Answer, Failure, Warning,
-    canonical::{OrderPaths, load_package},
+    canonical::{OrderPaths, Touched, load_every_record},
     diagnosis::{self, Breadth, Diagnosis},
     filesystem::{
         DestinationExpectation, promote_staged_file, replace_validated_file_expecting, staging_path,
@@ -507,7 +507,7 @@ fn package_evidence<F: FileSystem>(
     // The diagnosis this repair answers established a current Package moments ago.
     // Reaching the error means that stopped holding, and a candidate no evidence can
     // clear is refused rather than written, under what the read established.
-    let package = load_package(root, filesystem)?;
+    let package = load_every_record(root, filesystem)?;
     let another_order = |paths: &OrderPaths| paths.directory.absolute_path != directory;
     // Every discovered Order Directory except the one being repaired. A quarantined
     // Order still holds the identity it was quarantined for, so consulting the
@@ -581,7 +581,8 @@ pub(crate) fn commit_repair<F: FileSystem>(
         return Err(rejection).into();
     }
 
-    let refresh = IndexRefresh::after_commit(plan.root(), filesystem);
+    // A repair can touch any record, so the refresh proves or reads them all.
+    let refresh = IndexRefresh::after_commit(plan.root(), &Touched::default(), filesystem);
     let mut warnings = Vec::from_iter(refresh.warning());
     if diagnose(plan.scope(), plan.directory(), filesystem).is_err() {
         warnings.push(Warning::RediagnosisUnavailable);

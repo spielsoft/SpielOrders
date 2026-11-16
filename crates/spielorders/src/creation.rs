@@ -4,7 +4,7 @@ use crate::vendors::vendor_aggregate;
 use crate::{
     Answer, Assignments, Failure,
     answer::DraftFailure,
-    canonical::{CurrentPackageCandidate, load_package},
+    canonical::{CurrentPackageCandidate, Touched, load_package_to_change},
     evidence::EvidenceFingerprint,
     metadata::{OrderDocument, OrderItem, OrderStatus, StoredValues, Vendor},
     mutation::{
@@ -14,7 +14,7 @@ use crate::{
     operations::{FailedOperation, FailedPath},
     order_edits::{NewOrderFacts, draft_item},
     package::{ReusableValue, ReusableValues, canonicalize_reusable_value},
-    ports::{FileSystem, LocalDate, NewDirectoryRenameOutcome},
+    ports::{FileSystem, LocalDate, RenameOutcome},
     readme::{Location, package_relative_path_text},
     vendors::vendor_by_name,
 };
@@ -159,7 +159,11 @@ pub(crate) fn plan_order_creation<F: FileSystem>(
     filesystem: &F,
 ) -> Answer<OrderCreationPlan> {
     Answer::of(|| {
-        let package = load_package(selected_root, filesystem)?;
+        let package = load_package_to_change(
+            selected_root,
+            &Touched::default().with_vendors(true),
+            filesystem,
+        )?;
         let root = package.context.root.absolute_path.clone();
         let orders = package
             .context
@@ -416,7 +420,11 @@ pub(crate) fn commit_order_creation<F: FileSystem>(
     filesystem: &F,
 ) -> Answer<OrderCreationReport> {
     Answer::of(|| {
-        let current = load_package(&plan.root, filesystem)?;
+        let current = load_package_to_change(
+            &plan.root,
+            &Touched::default().with_vendors(true),
+            filesystem,
+        )?;
         // Before the destination, because a destination projected from an Orders Directory
         // this Package no longer configures is not the path whose absence means anything.
         let outcome = plan
@@ -550,12 +558,12 @@ pub(crate) fn commit_order_creation<F: FileSystem>(
                 located(&plan.root, values.path().to_path_buf()),
             ));
         }
-        match filesystem.rename_new_directory(
+        match filesystem.rename_new(
             &plan.staging_directory.absolute_path,
             &plan.directory.absolute_path,
         ) {
-            Ok(NewDirectoryRenameOutcome::Renamed) => {}
-            Ok(NewDirectoryRenameOutcome::DestinationExists) => {
+            Ok(RenameOutcome::Renamed) => {}
+            Ok(RenameOutcome::DestinationExists) => {
                 let path = plan.directory.absolute_path.clone();
                 let failure = commit_failure_with_cleanup(
                     &plan,
@@ -568,7 +576,7 @@ pub(crate) fn commit_order_creation<F: FileSystem>(
                     None => failure,
                 });
             }
-            Err(_) => {
+            Err(error) => {
                 let failure_path = plan.staging_directory.absolute_path.clone();
                 let failure = commit_failure_with_cleanup(
                     &plan,
@@ -576,14 +584,22 @@ pub(crate) fn commit_order_creation<F: FileSystem>(
                     &[readme_path, order_path],
                     filesystem,
                 );
-                return Err(match &values {
+                let failure = match &values {
                     Some(values) => values.rollback(failure, filesystem),
                     None => failure,
-                });
+                };
+                return Err(failure.unless_unsupported(
+                    &plan.root,
+                    &plan.directory.absolute_path,
+                    &error,
+                    filesystem,
+                ));
             }
         }
 
-        let mut refresh = IndexRefresh::after_commit(&plan.root, filesystem);
+        let touched = Touched::orders([plan.directory.absolute_path.clone()])
+            .with_vendors(crate::mutation::replaces_vendors(&plan.operations));
+        let mut refresh = IndexRefresh::after_commit(&plan.root, &touched, filesystem);
         // A concurrent external change can remove or damage the Order between the commit
         // and the refresh; the creation still happened, and the refresh cannot confirm it.
         if refresh

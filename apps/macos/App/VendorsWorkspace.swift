@@ -53,7 +53,7 @@ private struct VendorGrid: View {
             }
             .contextMenu(forSelectionType: String.self) { ids in
                 if ids.count > 1 {
-                    Button("Merge \(ids.count) Vendors…") { model.mergeVendors(Array(ids)) }
+                    Button("Merge \(ids.count) Vendors…") { model.mergeVendors(ids) }
                         .disabled(model.busy || !model.canBrowseRecords)
                         .accessibilityIdentifier("vendors.merge")
                 } else if let row = model.vendors.first(where: { $0.id == ids.first }) {

@@ -3,7 +3,7 @@
 use crate::{
     Answer, Assignments, Failure,
     answer::DraftFailure,
-    canonical::{CurrentPackageCandidate, load_package},
+    canonical::{CurrentPackageCandidate, Touched, load_every_record, load_package_to_change},
     change::Assignment,
     filesystem::{DestinationExpectation, replace_validated_file_expecting},
     metadata::{
@@ -73,6 +73,12 @@ impl VendorMutationPlan {
         self
     }
 
+    /// The Vendor aggregate committing this plan writes, a created Vendor carrying the
+    /// planning identity.
+    pub(crate) fn candidate_vendors(&self) -> &[Vendor] {
+        &self.candidate_vendors
+    }
+
     /// Whether committing this plan would change the canonical Vendor aggregate.
     /// A dry run of an unchanged mutation reports the same result a commit does.
     pub fn changes_canonical_vendors(&self) -> bool {
@@ -130,55 +136,67 @@ pub(crate) fn plan_vendor_creation<F: FileSystem>(
     filesystem: &F,
 ) -> Answer<VendorMutationPlan> {
     Answer::of(|| {
-        let package = load_package(selected_root, filesystem)?;
-        let at_facts = |failure| DraftFailure { row: None, failure };
-        let mut faults = Vec::new();
-        // A blank optional value means absence on creation, so nothing is left to clear.
-        // A blank Name never reaches here; `accepted_assignments` already rejected it.
-        let mut facts = accepted_assignments(assignments).unwrap_or_else(|failure| {
-            faults.push(at_facts(failure));
-            Vec::new()
-        });
-        facts.retain(|(_, value)| !value.trim().is_empty());
-        match facts.iter().find(|(field, _)| field == "name") {
-            Some((_, name)) => {
-                if let Err(failure) = reject_duplicate_name(name, None, &package) {
-                    faults.push(at_facts(failure));
-                }
-            }
-            None if faults.is_empty() => faults.push(at_facts(Failure::MissingRequiredName {
-                scope: vendor_aggregate(&package),
-            })),
-            None => {}
-        }
-        let rows = DraftFailure::rows(contacts, &mut faults, |row| draft_contact(row, &package));
-        if !faults.is_empty() {
-            // A draft with rows is refused with every rule it broke, as a new Order is.
-            return Err(if contacts.is_empty() {
-                DraftFailure::first(faults)
-            } else {
-                Failure::InvalidDraft(faults)
-            });
-        }
-
-        let mut object = json!({ "vendor_id": PLANNING_VENDOR_ID, "contacts": rows });
-        let target = object
-            .as_object_mut()
-            .expect("the planned Vendor candidate is an object");
-        for (field, value) in &facts {
-            target.insert(field.clone(), serde_json::Value::String(value.clone()));
-        }
-        let mut vendors = package.vendors.to_vec();
-        vendors
-            .push(serde_json::from_value::<Vendor>(object).map_err(|_| Failure::InvalidAggregate)?);
-
-        plan_from_candidate_aggregate(
-            &package,
-            VendorMutationKind::Create,
-            vendors,
-            PLANNING_VENDOR_ID,
-        )
+        let package = load_package_to_change(
+            selected_root,
+            &Touched::default().with_vendors(true),
+            filesystem,
+        )?;
+        vendor_creation_in(&package, assignments, contacts)
     })
+}
+
+/// Plans creating a Vendor with `assignments` and `contacts` in `package` as loaded.
+pub(crate) fn vendor_creation_in(
+    package: &CurrentPackageCandidate,
+    assignments: &Assignments,
+    contacts: &[Assignments],
+) -> Result<VendorMutationPlan, Failure> {
+    let at_facts = |failure| DraftFailure { row: None, failure };
+    let mut faults = Vec::new();
+    // A blank optional value means absence on creation, so nothing is left to clear.
+    // A blank Name never reaches here; `accepted_assignments` already rejected it.
+    let mut facts = accepted_assignments(assignments).unwrap_or_else(|failure| {
+        faults.push(at_facts(failure));
+        Vec::new()
+    });
+    facts.retain(|(_, value)| !value.trim().is_empty());
+    match facts.iter().find(|(field, _)| field == "name") {
+        Some((_, name)) => {
+            if let Err(failure) = reject_duplicate_name(name, None, package) {
+                faults.push(at_facts(failure));
+            }
+        }
+        None if faults.is_empty() => faults.push(at_facts(Failure::MissingRequiredName {
+            scope: vendor_aggregate(package),
+        })),
+        None => {}
+    }
+    let rows = DraftFailure::rows(contacts, &mut faults, |row| draft_contact(row, package));
+    if !faults.is_empty() {
+        // A draft with rows is refused with every rule it broke, as a new Order is.
+        return Err(if contacts.is_empty() {
+            DraftFailure::first(faults)
+        } else {
+            Failure::InvalidDraft(faults)
+        });
+    }
+
+    let mut object = json!({ "vendor_id": PLANNING_VENDOR_ID, "contacts": rows });
+    let target = object
+        .as_object_mut()
+        .expect("the planned Vendor candidate is an object");
+    for (field, value) in &facts {
+        target.insert(field.clone(), serde_json::Value::String(value.clone()));
+    }
+    let mut vendors = package.vendors.to_vec();
+    vendors.push(serde_json::from_value::<Vendor>(object).map_err(|_| Failure::InvalidAggregate)?);
+
+    plan_from_candidate_aggregate(
+        package,
+        VendorMutationKind::Create,
+        vendors,
+        PLANNING_VENDOR_ID,
+    )
 }
 
 /// Plans an editor's whole draft of one Vendor: its facts and its complete Contact list.
@@ -190,7 +208,11 @@ pub(crate) fn plan_vendor_save<F: FileSystem>(
     filesystem: &F,
 ) -> Answer<VendorMutationPlan> {
     Answer::of(|| {
-        let package = load_package(selected_root, filesystem)?;
+        let package = load_package_to_change(
+            selected_root,
+            &Touched::default().with_vendors(true),
+            filesystem,
+        )?;
         let position = vendor_position(vendor_id, &package.vendors)?;
         edited_vendor(&package, position, assignments, Some(contacts))
             .map_err(Failure::InvalidDraft)
@@ -200,7 +222,7 @@ pub(crate) fn plan_vendor_save<F: FileSystem>(
 /// The plan that rewrites the Vendor at `position` with `assignments` over its stored
 /// facts and, where given, `contacts` in place of its stored Contacts; or every rule that
 /// broke, the facts' first and then each row's.
-fn edited_vendor(
+pub(crate) fn edited_vendor(
     package: &CurrentPackageCandidate,
     position: usize,
     assignments: &Assignments,
@@ -306,7 +328,8 @@ pub(crate) fn plan_vendor_delete<F: FileSystem>(
     filesystem: &F,
 ) -> Answer<VendorMutationPlan> {
     Answer::of(|| {
-        let package = load_package(selected_root, filesystem)?;
+        // Which Orders reference the Vendor is what their records hold.
+        let package = load_every_record(selected_root, filesystem)?;
         let position = vendor_position(vendor_id, &package.vendors)?;
         let mut orders: Vec<_> = package
             .healthy_orders
@@ -364,7 +387,11 @@ fn plan_vendor_visibility<F: FileSystem>(
     kind: VendorMutationKind,
     filesystem: &F,
 ) -> Result<VendorMutationPlan, Failure> {
-    let package = load_package(selected_root, filesystem)?;
+    let package = load_package_to_change(
+        selected_root,
+        &Touched::default().with_vendors(true),
+        filesystem,
+    )?;
     let position = vendor_position(vendor_id, &package.vendors)?;
     let mut vendors = package.vendors.to_vec();
     // Visible is spelled as absence, so unhiding restores exactly the record hiding
@@ -617,7 +644,15 @@ fn commit_vendor<F: FileSystem>(
     new_uuid: &dyn Fn() -> String,
     filesystem: &F,
 ) -> Result<VendorMutationReport, Failure> {
-    let current = load_package(&plan.root, filesystem)?;
+    let current = if plan.kind == VendorMutationKind::Delete {
+        load_every_record(&plan.root, filesystem)?
+    } else {
+        load_package_to_change(
+            &plan.root,
+            &Touched::default().with_vendors(true),
+            filesystem,
+        )?
+    };
     if plan.kind == VendorMutationKind::Delete
         && !damaged_references(&current, &plan.subject_vendor_id).is_empty()
     {
@@ -747,7 +782,11 @@ fn commit_vendor<F: FileSystem>(
         ));
     }
 
-    let refresh = IndexRefresh::after_commit(&plan.root, filesystem);
+    let refresh = IndexRefresh::after_commit(
+        &plan.root,
+        &Touched::default().with_vendors(true),
+        filesystem,
+    );
     Ok(refresh.report(VendorMutationResult {
         vendor_id: committed,
     }))

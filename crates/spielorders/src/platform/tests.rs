@@ -7,8 +7,7 @@
 
 use crate::platform::{PlatformEffects, PlatformFileSystem};
 use crate::ports::{
-    Effects, FileChangeEvidence, FileSystem, FileSystemEntryKind, NewDirectoryRenameOutcome,
-    NewFileLinkOutcome,
+    Effects, FileChangeEvidence, FileSystem, FileSystemEntryKind, NewFileLinkOutcome, RenameOutcome,
 };
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Barrier};
@@ -67,10 +66,10 @@ fn publication_into_an_absent_destination_moves_the_complete_staging_directory()
     let destination = tree.path().join("2026_08_22_Laser_components");
 
     let outcome = PlatformFileSystem
-        .rename_new_directory(&source, &destination)
+        .rename_new(&source, &destination)
         .expect("publishing at a free name succeeds");
 
-    assert_eq!(outcome, NewDirectoryRenameOutcome::Renamed);
+    assert_eq!(outcome, RenameOutcome::Renamed);
     assert!(
         !source.exists(),
         "the staging name is consumed by the publication"
@@ -110,12 +109,12 @@ fn publication_refuses_existing_destination_evidence_of_every_kind_and_preserves
         let source = staged_order(tree.path(), label);
 
         let outcome = PlatformFileSystem
-            .rename_new_directory(&source, destination)
+            .rename_new(&source, destination)
             .unwrap_or_else(|error| panic!("{label}: a collision is typed, not an error: {error}"));
 
         assert_eq!(
             outcome,
-            NewDirectoryRenameOutcome::DestinationExists,
+            RenameOutcome::DestinationExists,
             "{label}: existing destination evidence is reported as a collision"
         );
         assert!(
@@ -190,8 +189,7 @@ fn an_unpublishable_destination_is_an_error_rather_than_a_collision() {
 
     // Nothing exists at this destination, so reporting a collision would tell creation
     // that concurrent evidence must be preserved when the real fact is a broken path.
-    let outcome =
-        PlatformFileSystem.rename_new_directory(&source, &tree.path().join("absent/child"));
+    let outcome = PlatformFileSystem.rename_new(&source, &tree.path().join("absent/child"));
 
     assert!(
         outcome.is_err(),
@@ -230,7 +228,7 @@ fn a_destination_that_appears_during_publication_is_never_replaced() {
         };
 
         start.wait();
-        let outcome = PlatformFileSystem.rename_new_directory(&source, &destination);
+        let outcome = PlatformFileSystem.rename_new(&source, &destination);
         competitor.join().expect("the competing creation finishes");
 
         let outcome =
@@ -239,7 +237,7 @@ fn a_destination_that_appears_during_publication_is_never_replaced() {
             contended += 1;
             assert_eq!(
                 outcome,
-                NewDirectoryRenameOutcome::DestinationExists,
+                RenameOutcome::DestinationExists,
                 "{label}: the concurrent directory claimed the name first"
             );
             assert!(
@@ -253,7 +251,7 @@ fn a_destination_that_appears_during_publication_is_never_replaced() {
         } else {
             assert_eq!(
                 outcome,
-                NewDirectoryRenameOutcome::Renamed,
+                RenameOutcome::Renamed,
                 "{label}: this publication claimed the name first"
             );
             assert!(destination.join(".spielorders/order.json").is_file());
@@ -527,4 +525,45 @@ fn the_calendar_answers_with_this_machines_own_local_date() {
         "{today:?} names a day of the month"
     );
     assert!(today.year >= 2026, "{today:?} is not an epoch default");
+}
+
+#[test]
+fn resolved_names() {
+    let tree = Tree::new("entry-names");
+    let parent = tree.path().join("Folder");
+    fs::create_dir(&parent).unwrap();
+    fs::write(parent.join("Original"), b"bytes").unwrap();
+    fs::hard_link(parent.join("Original"), parent.join("Hardlink")).unwrap();
+    std::os::unix::fs::symlink("Original", parent.join("Link")).unwrap();
+    std::os::unix::fs::symlink("Original", parent.join("AnotherLink")).unwrap();
+    std::os::unix::fs::symlink("missing", parent.join("Dangling")).unwrap();
+    for name in ["Original", "Hardlink", "Link", "AnotherLink", "Dangling"] {
+        assert_eq!(
+            PlatformFileSystem.entry_name(&parent.join(name)).unwrap(),
+            Some(name.into())
+        );
+        let alias = parent.join(name.to_lowercase());
+        if fs::symlink_metadata(&alias).is_ok() {
+            assert_eq!(
+                PlatformFileSystem.entry_name(&alias).unwrap(),
+                Some(name.into())
+            );
+        } else {
+            assert_eq!(PlatformFileSystem.entry_name(&alias).unwrap(), None);
+        }
+    }
+    assert_eq!(
+        fs::read_link(parent.join("Link")).unwrap(),
+        Path::new("Original")
+    );
+    assert_eq!(
+        fs::read_link(parent.join("Dangling")).unwrap(),
+        Path::new("missing")
+    );
+    assert_eq!(
+        PlatformFileSystem
+            .entry_name(&parent.join("absent"))
+            .unwrap(),
+        None
+    );
 }

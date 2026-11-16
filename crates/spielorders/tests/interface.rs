@@ -3296,8 +3296,10 @@ fn an_order_save_refuses_a_value_deleted_after_planning() {
     }
 }
 
+/// The kept Vendor takes precedence: a merged Contact it already has by Name only fills
+/// that Contact's missing facts, and every other one is added after its own, in order.
 #[test]
-fn a_vendor_merge_preserves_every_contact_row_in_order() {
+fn a_vendor_merge_adds_only_the_contacts_the_kept_vendor_lacks() {
     let root = initialized("merge-contact-rows");
     let package = open(&root.0);
     let vendor = |name: &str, contacts: &[&str]| {
@@ -3339,7 +3341,7 @@ fn a_vendor_merge_preserves_every_contact_row_in_order() {
     );
     let report = commit(&plan.unwrap());
     let saved = spielorders_report_vendor(&report).expect("the merged Vendor is returned");
-    assert_eq!(spielorders_vendor_contact_count(&saved), 4);
+    assert_eq!(spielorders_vendor_contact_count(&saved), 2);
     let package = open(&root.0);
     let mut vendor = None;
     assert_eq!(
@@ -3363,7 +3365,7 @@ fn a_vendor_merge_preserves_every_contact_row_in_order() {
             ))
         })
         .collect::<Vec<_>>();
-    assert_eq!(contacts, ["Accounts", "Accounts", "Accounts", "Sales"]);
+    assert_eq!(contacts, ["Accounts", "Sales"]);
 }
 
 #[test]
@@ -3679,4 +3681,379 @@ fn value_matching_agrees_with_adding_an_existing_spelling() {
         spielorders_value_matches(Text::new(&invalid), Text::new(c"Ada")),
         0
     );
+}
+
+/// A merge plan says which of the entries it moves or discards are folders.
+#[test]
+fn a_merge_plan_marks_the_folders_it_moves() {
+    let root = initialized("merge-folders");
+    let kept = created_order(&root.0, "Kept", &[]);
+    let other = created_order(&root.0, "Other", &[]);
+    fs::create_dir(other.join("photos")).unwrap();
+    fs::write(other.join("photos/bench.jpg"), "photo").unwrap();
+    fs::write(other.join("invoice.pdf"), "invoice").unwrap();
+    let package = open(&root.0);
+    let order = read_order(&package, &kept);
+    let merged = c_path(&other);
+    let paths = [PathBytes::new(&merged)];
+    let mut plan = None;
+    assert_eq!(
+        spielorders_order_plan_merge(
+            &order,
+            std::ptr::NonNull::new(paths.as_ptr().cast_mut()),
+            1,
+            0,
+            &mut plan,
+            None,
+        ),
+        SPIELORDERS_RESULT_OK
+    );
+    let plan = plan.unwrap();
+    let moved = (0..spielorders_plan_operation_count(&plan))
+        .filter(|index| {
+            spielorders_plan_operation_kind(&plan, *index)
+                == SPIELORDERS_OPERATION_MOVE_MERGED_ENTRY
+        })
+        .map(|index| {
+            (
+                path(spielorders_plan_operation_path(&plan, index))
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+                spielorders_plan_operation_directory(&plan, index),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        moved,
+        [("invoice.pdf".to_owned(), 0), ("photos".to_owned(), 1)]
+    );
+}
+#[test]
+fn current_vendor() {
+    let root = initialized("related-vendor");
+    let package = open(&root.0);
+    let mut vendor = new_draft(&package, spielorders_package_new_vendor_draft);
+    set(&mut vendor, SPIELORDERS_VENDOR_FIELD_NAME, "Acme");
+    commit(&plan_draft(&vendor).unwrap());
+    let package = open(&root.0);
+    let mut order = new_draft(&package, spielorders_package_new_order_draft);
+    set(&mut order, SPIELORDERS_ORDER_FIELD_VENDOR, "Acme");
+    let report = commit(&plan_draft(&order).unwrap());
+    let directory = path(spielorders_report_final_path(&report));
+    let package = open(&root.0);
+    let vendors = root.0.join(".spielorders/vendors.json");
+    let bytes = fs::read_to_string(&vendors).unwrap();
+    fs::write(&vendors, bytes.replace("Acme", "Beta")).unwrap();
+    let order = read_order(&package, &directory);
+    assert_eq!(
+        string(spielorders_order_field(
+            &order,
+            SPIELORDERS_ORDER_FIELD_VENDOR
+        )),
+        "Beta"
+    );
+}
+
+#[test]
+fn package_integrity() {
+    for case in ["config", "version", "duplicate"] {
+        let root = initialized(case);
+        let directory = created_order(&root.0, "Lenses", &[]);
+        let package = open(&root.0);
+        match case {
+            "config" => fs::write(
+                root.0.join(".spielorders/config.toml"),
+                "not valid TOML {{{",
+            )
+            .unwrap(),
+            "version" => fs::write(
+                root.0.join(".spielorders/version.json"),
+                r#"{"metadata_version":99}"#,
+            )
+            .unwrap(),
+            "duplicate" => {
+                let duplicate = root.0.join("Orders/Duplicate");
+                fs::create_dir_all(duplicate.join(".spielorders")).unwrap();
+                fs::copy(
+                    directory.join(".spielorders/order.json"),
+                    duplicate.join(".spielorders/order.json"),
+                )
+                .unwrap();
+                fs::copy(directory.join("README.md"), duplicate.join("README.md")).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let mut order = None;
+        let directory = c_path(&directory);
+        assert_eq!(
+            spielorders_package_read_order(
+                &package,
+                PathBytes::new(&directory),
+                0,
+                &mut order,
+                None
+            ),
+            SPIELORDERS_RESULT_REFUSED,
+            "{case}"
+        );
+        assert!(order.is_none());
+    }
+}
+
+#[test]
+fn invented_vendor() {
+    let root = initialized("index-vendor");
+    let directory = created_order(&root.0, "Lenses", &[]);
+    let index = root.0.join(".spielorders/index.json");
+    let original = fs::read_to_string(&index).unwrap();
+    let invented = original.replace("\"vendors\": []", "\"vendors\": [\n    {\n      \"vendor_id\": \"11111111-1111-4111-8111-111111111111\",\n      \"name\": \"Ghost\",\n      \"contacts\": []\n    }\n  ]");
+    assert_ne!(invented, original);
+    fs::write(&index, invented).unwrap();
+    let package = open(&root.0);
+    let order = read_order(&package, &directory);
+    let mut draft = order_draft(&order);
+    set(&mut draft, SPIELORDERS_ORDER_FIELD_VENDOR, "Ghost");
+    let before = tree(&root.0);
+    assert!(plan_draft(&draft).is_err());
+    assert_eq!(tree(&root.0), before);
+}
+
+#[test]
+fn linked_browsing() {
+    let root = initialized("linked-browsing");
+    let order = created_order(&root.0, "Lenses", &[]);
+    let outside = Directory::new("linked-record");
+    let metadata = order.join(".spielorders");
+    fs::rename(&metadata, outside.0.join("record")).unwrap();
+    std::os::unix::fs::symlink(outside.0.join("record"), &metadata).unwrap();
+    let before = fs::read(outside.0.join("record/order.json")).unwrap();
+    let package = open(&root.0);
+    let list = orders(&package, None, 0, SpielordersConstant(-1), 0);
+    assert_eq!(spielorders_list_count(&list), 1);
+    assert!(
+        !string(spielorders_list_field(
+            &list,
+            0,
+            SPIELORDERS_ORDER_FIELD_DAMAGE
+        ))
+        .is_empty()
+    );
+    assert_eq!(
+        spielorders_package_index_state(&package),
+        SPIELORDERS_INDEX_STATE_STALE
+    );
+    assert_eq!(
+        fs::read(outside.0.join("record/order.json")).unwrap(),
+        before
+    );
+}
+
+fn title_batch(package: &SpielordersPackage, directory: &Path) -> Box<SpielordersPlan> {
+    let mut batch = None;
+    assert_eq!(
+        spielorders_package_batch(package, &mut batch, None),
+        SPIELORDERS_RESULT_OK
+    );
+    let mut batch = batch.unwrap();
+    let directory = c_path(directory);
+    let mut draft = None;
+    assert_eq!(
+        spielorders_batch_order_draft(&batch, PathBytes::new(&directory), &mut draft, None,),
+        SPIELORDERS_RESULT_OK
+    );
+    let mut draft = draft.unwrap();
+    set(&mut draft, SPIELORDERS_ORDER_FIELD_TITLE, "Changed title");
+    assert_eq!(
+        spielorders_batch_add(&mut batch, &draft, 0, None),
+        SPIELORDERS_RESULT_OK
+    );
+    let mut plan = None;
+    assert_eq!(
+        spielorders_batch_plan(&batch, 0, &mut plan, None),
+        SPIELORDERS_RESULT_OK
+    );
+    plan.unwrap()
+}
+
+#[test]
+fn a_batch_refuses_orders_that_leave_its_active_scope() {
+    let mut observed = Vec::new();
+    for case in [
+        "configured elsewhere",
+        "linked directory",
+        "linked metadata",
+        "linked record",
+        "removed",
+    ] {
+        let root = initialized("batch-scope");
+        let directory = created_order(&root.0, "Lenses", &[]);
+        let package = open(&root.0);
+        let plan = title_batch(&package, &directory);
+        let outside = Directory::new("batch-scope-outside");
+        let metadata = directory.join(".spielorders");
+        let record = metadata.join("order.json");
+        match case {
+            "configured elsewhere" => {
+                fs::create_dir(root.0.join("NewOrders")).unwrap();
+                fs::write(
+                    root.0.join(".spielorders/config.toml"),
+                    "orders_path = 'NewOrders'\n",
+                )
+                .unwrap();
+            }
+            "linked directory" => {
+                let moved = outside.0.join("Order");
+                fs::rename(&directory, &moved).unwrap();
+                std::os::unix::fs::symlink(moved, &directory).unwrap();
+            }
+            "linked metadata" => {
+                let moved = outside.0.join("metadata");
+                fs::rename(&metadata, &moved).unwrap();
+                std::os::unix::fs::symlink(moved, &metadata).unwrap();
+            }
+            "linked record" => {
+                let moved = outside.0.join("order.json");
+                fs::rename(&record, &moved).unwrap();
+                std::os::unix::fs::symlink(moved, &record).unwrap();
+            }
+            "removed" => fs::rename(&directory, outside.0.join("Order")).unwrap(),
+            _ => unreachable!(),
+        }
+        let before = tree(&root.0);
+        let outside_before = tree(&outside.0);
+        let mut report = None;
+        let result = spielorders_plan_commit(&plan, &mut report, None);
+        observed.push((
+            case,
+            result,
+            report.is_none(),
+            tree(&root.0) == before,
+            tree(&outside.0) == outside_before,
+        ));
+    }
+    assert!(
+        observed
+            .iter()
+            .all(|(_, result, no_report, same_root, same_outside)| {
+                *result == SPIELORDERS_RESULT_REFUSED && *no_report && *same_root && *same_outside
+            }),
+        "a stale scope must authorize no write: {observed:?}"
+    );
+}
+
+#[test]
+fn a_batch_add_refuses_linked_order_records() {
+    let mut observed = Vec::new();
+    for case in ["directory", "metadata", "record"] {
+        let root = initialized("batch-add-kind");
+        let directory = created_order(&root.0, "Lenses", &[]);
+        let package = open(&root.0);
+        let mut batch = None;
+        assert_eq!(
+            spielorders_package_batch(&package, &mut batch, None),
+            SPIELORDERS_RESULT_OK
+        );
+        let mut batch = batch.unwrap();
+        let argument = c_path(&directory);
+        let mut draft = None;
+        assert_eq!(
+            spielorders_batch_order_draft(&batch, PathBytes::new(&argument), &mut draft, None),
+            SPIELORDERS_RESULT_OK
+        );
+        let mut draft = draft.unwrap();
+        set(&mut draft, SPIELORDERS_ORDER_FIELD_TITLE, "Changed title");
+        let outside = Directory::new("batch-add-kind-outside");
+        let source = match case {
+            "directory" => directory,
+            "metadata" => directory.join(".spielorders"),
+            "record" => directory.join(".spielorders/order.json"),
+            _ => unreachable!(),
+        };
+        let moved = outside.0.join("source");
+        fs::rename(&source, &moved).unwrap();
+        std::os::unix::fs::symlink(moved, &source).unwrap();
+        let before = tree(&root.0);
+        let outside_before = tree(&outside.0);
+        observed.push((
+            case,
+            spielorders_batch_add(&mut batch, &draft, 0, None),
+            spielorders_batch_count(&batch),
+            tree(&root.0) == before,
+            tree(&outside.0) == outside_before,
+        ));
+    }
+    assert!(
+        observed
+            .iter()
+            .all(|(_, result, count, same_root, same_outside)| {
+                *result == SPIELORDERS_RESULT_REFUSED && *count == 0 && *same_root && *same_outside
+            }),
+        "a linked source must not enter the batch: {observed:?}"
+    );
+}
+
+#[test]
+fn an_edit_refuses_a_linked_record_after_planning() {
+    let root = initialized("edit-linked-record");
+    let directory = created_order(&root.0, "Lenses", &[]);
+    let package = open(&root.0);
+    let order = read_order(&package, &directory);
+    let mut draft = order_draft(&order);
+    set(&mut draft, SPIELORDERS_ORDER_FIELD_TITLE, "Changed title");
+    let plan = plan_draft(&draft).unwrap();
+    let outside = Directory::new("edit-linked-record-outside");
+    let record = directory.join(".spielorders/order.json");
+    let moved = outside.0.join("order.json");
+    fs::rename(&record, &moved).unwrap();
+    std::os::unix::fs::symlink(moved, &record).unwrap();
+    let before = tree(&root.0);
+    let outside_before = tree(&outside.0);
+    let mut report = None;
+    assert_eq!(
+        spielorders_plan_commit(&plan, &mut report, None),
+        SPIELORDERS_RESULT_REFUSED
+    );
+    assert!(report.is_none());
+    assert_eq!(tree(&root.0), before);
+    assert_eq!(tree(&outside.0), outside_before);
+}
+
+#[test]
+fn a_merge_refuses_a_later_record_linked_after_planning() {
+    let root = initialized("merge-linked-record");
+    let kept = created_order(&root.0, "Kept", &[]);
+    let other = created_order(&root.0, "Other", &[("Lens", "1", "2")]);
+    let package = open(&root.0);
+    let kept = read_order(&package, &kept);
+    let argument = c_path(&other);
+    let paths = [PathBytes::new(&argument)];
+    let mut plan = None;
+    assert_eq!(
+        spielorders_order_plan_merge(
+            &kept,
+            std::ptr::NonNull::new(paths.as_ptr().cast_mut()),
+            1,
+            0,
+            &mut plan,
+            None,
+        ),
+        SPIELORDERS_RESULT_OK
+    );
+    let outside = Directory::new("merge-linked-record-outside");
+    let record = other.join(".spielorders/order.json");
+    let moved = outside.0.join("order.json");
+    fs::rename(&record, &moved).unwrap();
+    std::os::unix::fs::symlink(moved, &record).unwrap();
+    let before = tree(&root.0);
+    let outside_before = tree(&outside.0);
+    let mut report = None;
+    assert_eq!(
+        spielorders_plan_commit(&plan.unwrap(), &mut report, None),
+        SPIELORDERS_RESULT_REFUSED
+    );
+    assert!(report.is_none());
+    assert_eq!(tree(&root.0), before);
+    assert_eq!(tree(&outside.0), outside_before);
 }

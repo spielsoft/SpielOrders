@@ -98,8 +98,7 @@ fn every_list_answer_carries_the_findings_of_its_package() {
     );
 }
 
-/// Opening only assesses the derived Package Index: a missing, malformed, or stale one is
-/// reported as found, and nothing is written to correct it.
+/// Opening only assesses the derived Package Index and writes nothing to correct it.
 #[test]
 fn opening_a_package_writes_nothing_whatever_its_index_needs() {
     for (index, state) in [
@@ -108,7 +107,7 @@ fn opening_a_package_writes_nothing_whatever_its_index_needs() {
             Some(b"{ malformed".as_slice()),
             PackageIndexState::Malformed,
         ),
-        (Some(MINIMAL_INDEX), PackageIndexState::Stale),
+        (Some(MINIMAL_INDEX), PackageIndexState::Current),
     ] {
         let filesystem = minimal_package();
         if let Some(index) = index {

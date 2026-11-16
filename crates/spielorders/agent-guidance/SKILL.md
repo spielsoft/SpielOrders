@@ -24,6 +24,13 @@ machine-readable responses. `--help` is the live command reference.
 the named change. `agent provision` writes the current guidance, replacing earlier copies of its files.
 `agent defaults` reports the installed default resource locations without opening a Package.
 
+For many record changes, write one command line per line as a JSON array of strings and
+run `spielorders apply FILE --root <Package>` once: every line is planned against the
+Package as the lines before it leave it, one refused line refuses the whole batch and
+names it, and otherwise everything is written together. It accepts `order edit`, the
+`order item` and `vendor contact` changes, `add-vendor`, and `vendor edit`; review it with
+`--dry-run` first. A loop of single commands is far slower on a large Package.
+
 Never edit `.spielorders` configuration or JSON directly when a CLI operation exists.
 The CLI enforces validation, guarded writes, cross-record rules, and index refresh.
 Package and Order READMEs are ordinary Markdown content. Diagnostics do not authorize

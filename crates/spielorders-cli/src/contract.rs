@@ -74,6 +74,10 @@ pub(crate) enum ResponseContract {
     OrderAlign,
     /// `spielorders order remove`, with or without `--delete`
     OrderRemove,
+    /// `spielorders order merge`
+    OrderMerge,
+    /// `spielorders apply`
+    Apply,
     /// `spielorders vendor show`, and `spielorders vendor contact list`
     VendorShow,
     /// `spielorders add-order`
@@ -153,6 +157,8 @@ impl ResponseContract {
             Self::OrderValidate => "spielorders.order.validate",
             Self::OrderAlign => "spielorders.order.align",
             Self::OrderRemove => "spielorders.order.remove",
+            Self::OrderMerge => "spielorders.order.merge",
+            Self::Apply => "spielorders.apply",
             Self::AddOrder => "spielorders.add_order",
             Self::AdoptOrder => "spielorders.adopt_order",
             Self::VendorShow => "spielorders.vendor.show",
@@ -204,6 +210,8 @@ impl ResponseContract {
             Self::OrderValidate => 1,
             Self::OrderAlign => 1,
             Self::OrderRemove => 1,
+            Self::OrderMerge => 1,
+            Self::Apply => 1,
             Self::AddOrder => 1,
             Self::AdoptOrder => 1,
             Self::VendorShow => 1,

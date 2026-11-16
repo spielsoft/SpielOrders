@@ -9,8 +9,8 @@
 use crate::{
     cli::{
         self, AgentCommand, ContactCommand, Execution, Family, FieldAssignment, IndexCommand,
-        ItemCommand, ListCommand, OrderCommand, OrderTarget, PackageCommand, RepairRequest,
-        SearchCommand, ValueCommand, ValueKind, VendorCommand,
+        ItemCommand, ListCommand, OrderCommand, OrderTarget, PackageCommand, PackageTarget,
+        RepairRequest, SearchCommand, ValueCommand, ValueKind, VendorCommand,
     },
     contract::ResponseContract as Contract,
     library::{self, Calls, c_path, c_text, constant, resolution_name},
@@ -256,6 +256,38 @@ pub(crate) fn run(family: &Family) -> Shown<'_> {
                 Human::Whole,
             ),
         },
+        Family::Apply {
+            file,
+            target,
+            execution,
+            ..
+        } => {
+            let answer = answered(|calls| {
+                let text = crate::effects::operations(file.as_deref()).map_err(|error| {
+                    calls.refuse_own(
+                        "operations_unreadable",
+                        json!({ "reason": error.to_string() }),
+                    )
+                })?;
+                let package = open(calls, &target.root)?;
+                let mut batch = calls
+                    .get(|batch, outcome| spielorders_package_batch(&package, batch, outcome))?;
+                for (index, line) in text.lines().enumerate() {
+                    let line = line.trim();
+                    if line.is_empty() || line.starts_with('#') {
+                        continue;
+                    }
+                    apply_line(calls, &mut batch, line)
+                        .map_err(|refused| at_line(refused, index + 1, line))?;
+                }
+                let plan =
+                    calls.get(|plan, outcome| spielorders_batch_plan(&batch, 0, plan, outcome))?;
+                let mut data = counted(calls, &plan, execution)?;
+                data["applied"] = Value::from(spielorders_batch_count(&batch));
+                Ok(data)
+            });
+            (Contract::Apply, &target.root, answer, Human::Whole)
+        }
         Family::Order { command } => order(command),
         Family::Value { command } => value(command),
         Family::Vendor { command } => vendor(command),
@@ -459,8 +491,210 @@ fn order(command: &OrderCommand) -> Command<'_> {
             }),
             Human::Whole,
         ),
+        OrderCommand::Merge {
+            merged,
+            yes,
+            target,
+            execution,
+            ..
+        } => (
+            Contract::OrderMerge,
+            &target.root,
+            answered(|calls| {
+                let order = read_order(calls, target)?;
+                let merged: Vec<_> = merged.iter().map(|path| c_path(path)).collect();
+                let paths: Vec<PathBytes<'_>> =
+                    merged.iter().map(|path| PathBytes::new(path)).collect();
+                let plan = calls.get(|plan, outcome| {
+                    spielorders_order_plan_merge(
+                        &order,
+                        std::ptr::NonNull::new(paths.as_ptr().cast_mut()),
+                        i64::try_from(paths.len()).unwrap_or(i64::MAX),
+                        0,
+                        plan,
+                        outcome,
+                    )
+                })?;
+                if !execution.dry_run && !yes {
+                    confirm_discards(calls, &plan)?;
+                }
+                mutate(calls, &plan, execution)
+            }),
+            Human::Whole,
+        ),
         OrderCommand::Item { command } => item(command),
     }
+}
+
+/// Adds the one command line `line`, a JSON array of strings, to `batch`.
+fn apply_line(calls: &mut Calls, batch: &mut SpielordersBatch, line: &str) -> Result<(), Answer> {
+    let arguments: Vec<String> = serde_json::from_str(line).map_err(|error| {
+        calls.refuse_own("operation_invalid", json!({ "reason": error.to_string() }))
+    })?;
+    let arguments: Vec<std::ffi::OsString> = std::iter::once("spielorders".to_owned())
+        .chain(arguments)
+        .map(std::ffi::OsString::from)
+        .collect();
+    let parsed = cli::parse_batch(&arguments).map_err(|error| {
+        calls.refuse_own(
+            "operation_invalid",
+            json!({ "reason": cli::usage_message(&error) }),
+        )
+    })?;
+    let draft = match &parsed.family {
+        Family::Order {
+            command:
+                OrderCommand::Edit {
+                    assignments,
+                    target,
+                    values,
+                    ..
+                },
+        } => {
+            let mut draft = batch_order_draft(calls, batch, &target.root)?;
+            assign_adding(
+                calls,
+                &mut draft,
+                SPIELORDERS_FAMILY_ORDER_FIELD,
+                None,
+                assignments,
+                values.add_values,
+            )?;
+            draft
+        }
+        Family::Order {
+            command: OrderCommand::Item { command },
+        } => {
+            let Ok((_, target, _, edit)) = item_edit(command) else {
+                return Err(not_batchable(calls));
+            };
+            let mut draft = batch_order_draft(calls, batch, &target.root)?;
+            edit(calls, &mut draft)?;
+            draft
+        }
+        Family::AddVendor { subject, .. } => {
+            let mut draft =
+                calls.get(|draft, _| spielorders_batch_new_vendor_draft(batch, draft))?;
+            without_default(&mut draft, SPIELORDERS_VENDOR_FIELD_NAME);
+            let assignments = cli::subject_assignments(subject, cli::VENDOR_NAME_FIELD);
+            assign(
+                calls,
+                &mut draft,
+                SPIELORDERS_FAMILY_VENDOR_FIELD,
+                None,
+                &assignments,
+            )?;
+            draft
+        }
+        Family::Vendor {
+            command: VendorCommand::Edit {
+                name, assignments, ..
+            },
+        } => {
+            let mut draft = batch_vendor_draft(calls, batch, name)?;
+            assign(
+                calls,
+                &mut draft,
+                SPIELORDERS_FAMILY_VENDOR_FIELD,
+                None,
+                assignments,
+            )?;
+            draft
+        }
+        Family::Vendor {
+            command: VendorCommand::Contact { command },
+        } => {
+            let Ok((_, name, _, _, edit)) = contact_edit(command) else {
+                return Err(not_batchable(calls));
+            };
+            let mut draft = batch_vendor_draft(calls, batch, name)?;
+            edit(calls, &mut draft)?;
+            draft
+        }
+        _ => return Err(not_batchable(calls)),
+    };
+    calls.act(|outcome| spielorders_batch_add(batch, &draft, 0, outcome))
+}
+
+fn not_batchable(calls: &mut Calls) -> Answer {
+    calls.refuse(SPIELORDERS_FAILURE_NOT_BATCHABLE, json!({}))
+}
+
+fn batch_order_draft(
+    calls: &mut Calls,
+    batch: &SpielordersBatch,
+    directory: &Path,
+) -> Result<Box<SpielordersDraft>, Answer> {
+    let directory = c_path(directory);
+    calls.get(|draft, outcome| {
+        spielorders_batch_order_draft(batch, PathBytes::new(&directory), draft, outcome)
+    })
+}
+
+fn batch_vendor_draft(
+    calls: &mut Calls,
+    batch: &SpielordersBatch,
+    name: &str,
+) -> Result<Box<SpielordersDraft>, Answer> {
+    let name = c_text(name);
+    calls.get(|draft, outcome| {
+        spielorders_batch_vendor_draft(
+            batch,
+            SPIELORDERS_VENDOR_SELECTOR_NAME,
+            Text::new(&name),
+            draft,
+            outcome,
+        )
+    })
+}
+
+/// A refusal of the batch line `number`, `line`, carrying the line it refused.
+fn at_line(refused: Answer, number: usize, line: &str) -> Answer {
+    match refused {
+        Answer::Failed {
+            mut error,
+            findings,
+        } => {
+            let detail = error["detail"].take();
+            error["detail"] = json!({ "line": number, "operation": line, "refusal": detail });
+            Answer::Failed { error, findings }
+        }
+        answered => answered,
+    }
+}
+
+/// Asks before each entry a merge `plan` discards, refusing the merge at the first entry
+/// declined, or before any where there is no one to ask.
+fn confirm_discards(calls: &mut Calls, plan: &SpielordersPlan) -> Result<(), Answer> {
+    let discarded: Vec<String> = (0..spielorders_plan_operation_count(plan))
+        .filter(|index| {
+            spielorders_plan_operation_kind(plan, *index)
+                == SPIELORDERS_OPERATION_DISCARD_MERGED_ENTRY
+        })
+        .map(|index| {
+            spielorders_plan_operation_path(plan, index)
+                .as_path()
+                .display()
+                .to_string()
+        })
+        .collect();
+    for path in &discarded {
+        match crate::effects::confirm(&format!(
+            "Discard {path}? The kept Order already holds this entry."
+        )) {
+            Some(true) => {}
+            Some(false) => {
+                return Err(calls.refuse_own("discard_declined", json!({ "path": path })));
+            }
+            None => {
+                return Err(calls.refuse_own(
+                    "discard_unconfirmed",
+                    json!({ "paths": discarded, "reason": "pass --yes to discard them" }),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Moves the directory a removal produced to the platform Trash, as this front end's own
@@ -502,8 +736,9 @@ fn trash(calls: &mut Calls, data: &mut Value, execution: &Execution) -> Result<(
 }
 
 fn item(command: &ItemCommand) -> Command<'_> {
-    let (contract, target, execution, edit): (_, _, _, RowEdit<'_>) = match command {
-        ItemCommand::List { target, .. } => {
+    let (contract, target, execution, edit) = match item_edit(command) {
+        Ok(edit) => edit,
+        Err(target) => {
             return (
                 Contract::OrderShow,
                 &target.root,
@@ -511,6 +746,22 @@ fn item(command: &ItemCommand) -> Command<'_> {
                 Human::Member(&["items"]),
             );
         }
+    };
+    let answer = answered(|calls| {
+        let mut draft = order_draft(calls, target)?;
+        edit(calls, &mut draft)?;
+        save(calls, draft, SPIELORDERS_FAMILY_ORDER_FIELD, &[], execution)
+    });
+    (contract, &target.root, answer, Human::Whole)
+}
+
+/// What one Item command does to the draft of its Order, or the Order a listing reads.
+#[allow(clippy::type_complexity)]
+fn item_edit(
+    command: &ItemCommand,
+) -> Result<(Contract, &OrderTarget, &Execution, RowEdit<'_>), &OrderTarget> {
+    Ok(match command {
+        ItemCommand::List { target, .. } => return Err(target),
         ItemCommand::Add {
             assignments,
             target,
@@ -568,13 +819,7 @@ fn item(command: &ItemCommand) -> Command<'_> {
             execution,
             Box::new(|calls, draft| remove_row(calls, draft, position)),
         ),
-    };
-    let answer = answered(|calls| {
-        let mut draft = order_draft(calls, target)?;
-        edit(calls, &mut draft)?;
-        save(calls, draft, SPIELORDERS_FAMILY_ORDER_FIELD, &[], execution)
-    });
-    (contract, &target.root, answer, Human::Whole)
+    })
 }
 
 fn vendor(command: &VendorCommand) -> Command<'_> {
@@ -666,7 +911,6 @@ fn vendor(command: &VendorCommand) -> Command<'_> {
         ),
         VendorCommand::Merge {
             names,
-            keep,
             target,
             execution,
             ..
@@ -674,11 +918,11 @@ fn vendor(command: &VendorCommand) -> Command<'_> {
             Contract::VendorMerge,
             &target.root,
             answered(|calls| {
-                let ids = names
+                let mut ids = names
                     .iter()
                     .map(|name| vendor_id(calls, &target.root, name).map(|id| c_text(id.as_str())))
                     .collect::<Result<Vec<_>, _>>()?;
-                let keep = c_text(vendor_id(calls, &target.root, keep)?.as_str());
+                let keep = ids.remove(0);
                 let package = open(calls, &target.root)?;
                 let texts: Vec<Text<'_>> = ids.iter().map(|id| Text::new(id)).collect();
                 let plan = calls.get(|plan, outcome| {
@@ -780,15 +1024,15 @@ fn value(command: &ValueCommand) -> Command<'_> {
             ValueCommand::Merge {
                 kind,
                 values,
-                keep,
                 scope,
                 execution,
                 ..
             } => {
                 let project = scope.project.as_deref().map(c_text);
-                let values: Vec<_> = values.iter().map(|value| c_text(value.as_str())).collect();
+                let mut values: Vec<_> =
+                    values.iter().map(|value| c_text(value.as_str())).collect();
+                let keep = values.remove(0);
                 let texts: Vec<Text<'_>> = values.iter().map(|value| Text::new(value)).collect();
-                let keep = c_text(keep.as_str());
                 let plan = calls.get(|plan, outcome| {
                     spielorders_package_plan_merge_values(
                         &package,
@@ -861,8 +1105,9 @@ fn hide(calls: &mut Calls, root: &Path, name: &str, hidden: bool, execution: &Ex
 }
 
 fn contact(command: &ContactCommand) -> Command<'_> {
-    let (contract, name, target, execution, edit): (_, _, _, _, RowEdit<'_>) = match command {
-        ContactCommand::List { name, target, .. } => {
+    let (contract, name, target, execution, edit) = match contact_edit(command) {
+        Ok(edit) => edit,
+        Err((name, target)) => {
             return (
                 Contract::VendorShow,
                 &target.root,
@@ -870,6 +1115,30 @@ fn contact(command: &ContactCommand) -> Command<'_> {
                 Human::Member(&["contacts"]),
             );
         }
+    };
+    let answer = answered(|calls| {
+        let mut draft = vendor_draft(calls, &target.root, name)?;
+        edit(calls, &mut draft)?;
+        save(
+            calls,
+            draft,
+            SPIELORDERS_FAMILY_VENDOR_FIELD,
+            &[],
+            execution,
+        )
+    });
+    (contract, &target.root, answer, Human::Whole)
+}
+
+/// The Vendor one Contact command names and what it does to that Vendor's draft, or the
+/// Vendor a listing reads.
+#[allow(clippy::type_complexity)]
+fn contact_edit(
+    command: &ContactCommand,
+) -> Result<(Contract, &String, &PackageTarget, &Execution, RowEdit<'_>), (&String, &PackageTarget)>
+{
+    Ok(match command {
+        ContactCommand::List { name, target, .. } => return Err((name, target)),
         ContactCommand::Add {
             name,
             assignments,
@@ -935,19 +1204,7 @@ fn contact(command: &ContactCommand) -> Command<'_> {
             execution,
             Box::new(|calls, draft| remove_row(calls, draft, position)),
         ),
-    };
-    let answer = answered(|calls| {
-        let mut draft = vendor_draft(calls, &target.root, name)?;
-        edit(calls, &mut draft)?;
-        save(
-            calls,
-            draft,
-            SPIELORDERS_FAMILY_VENDOR_FIELD,
-            &[],
-            execution,
-        )
-    });
-    (contract, &target.root, answer, Human::Whole)
+    })
 }
 
 fn search(command: &SearchCommand) -> Command<'_> {

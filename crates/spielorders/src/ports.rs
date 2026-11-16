@@ -23,7 +23,7 @@ pub enum NewFileLinkOutcome {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum NewDirectoryRenameOutcome {
+pub enum RenameOutcome {
     Renamed,
     DestinationExists,
 }
@@ -61,12 +61,33 @@ pub trait FileSystem {
     fn is_access_denied(&self, _error: &Self::Error) -> bool {
         false
     }
+    /// Whether the effect reports that this filesystem cannot perform the operation at
+    /// all, such as an exclusive rename on a volume that has none.
+    fn is_unsupported(&self, _error: &Self::Error) -> bool {
+        false
+    }
 
     fn read(&self, path: &Path) -> Result<Vec<u8>, Self::Error>;
     /// Creates a new file without replacing any existing staging evidence.
     fn write_new(&self, path: &Path, contents: &[u8]) -> Result<(), Self::Error>;
     /// Makes the named file's current contents durable before replacement.
     fn sync_file(&self, path: &Path) -> Result<(), Self::Error>;
+    /// Hands the named file's contents to the device without waiting for the device's
+    /// own cache, which the next [`Self::sync_file`] of any file on it then makes durable.
+    /// An adapter with no weaker sync makes it durable here.
+    fn sync_file_contents(&self, path: &Path) -> Result<(), Self::Error> {
+        self.sync_file(path)
+    }
+    /// The Package at the canonical `root` as this seam already loaded it, where nothing
+    /// has been written through it since. A seam that keeps no such memory has none.
+    fn remembered_package(
+        &self,
+        _root: &Path,
+    ) -> Option<crate::canonical::CurrentPackageCandidate> {
+        None
+    }
+    /// Keeps `package` for [`Self::remembered_package`] until the next write.
+    fn remember_package(&self, _package: &crate::canonical::CurrentPackageCandidate) {}
     /// Atomically replaces `destination` with `source`, preserving the destination
     /// unchanged when the operation fails.
     fn replace_file(&self, source: &Path, destination: &Path) -> Result<(), Self::Error>;
@@ -74,6 +95,10 @@ pub trait FileSystem {
     /// Resolves a path to the filesystem's canonical spelling. Low-level batch
     /// replacement uses this value as destination identity before its first write.
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, Self::Error>;
+    /// The filesystem's spelling of an existing entry's final component, without
+    /// following a final symbolic link. An absent entry returns None; names of
+    /// distinct hard links remain distinct even though their file identity is shared.
+    fn entry_name(&self, path: &Path) -> Result<Option<OsString>, Self::Error>;
     fn symlink_metadata(&self, path: &Path) -> Result<Option<FileSystemEntryKind>, Self::Error>;
     /// Observes the final entry without following a symbolic link and returns
     /// comparable in-memory change evidence when the adapter can supply it.
@@ -102,17 +127,13 @@ pub trait FileSystem {
         source: &Path,
         destination: &Path,
     ) -> Result<NewFileLinkOutcome, Self::Error>;
-    /// Atomically renames a complete staging directory into discovery without
-    /// replacing destination evidence that appeared concurrently.
+    /// Atomically moves one file, directory, or symbolic link to an absent name,
+    /// without following links or replacing destination evidence.
     ///
     /// An occupied destination must be refused by the same operation that publishes.
-    /// Checking the destination separately leaves a window in which a directory created
+    /// Checking the destination separately leaves a window in which an entry created
     /// at that name is silently replaced instead of reported.
-    fn rename_new_directory(
-        &self,
-        source: &Path,
-        destination: &Path,
-    ) -> Result<NewDirectoryRenameOutcome, Self::Error>;
+    fn rename_new(&self, source: &Path, destination: &Path) -> Result<RenameOutcome, Self::Error>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

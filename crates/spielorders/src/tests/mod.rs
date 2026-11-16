@@ -8,6 +8,7 @@
 mod support;
 
 mod artifact_repair;
+mod batch;
 mod canonical_package_load;
 mod capability_composition;
 mod draft_saves;
@@ -20,12 +21,14 @@ mod order_alignment;
 mod order_creation;
 mod order_diagnosis;
 mod order_fact_edits;
+mod order_merge;
 mod order_reads;
 mod order_removal;
 mod orders_directory_entry_names;
 mod package_index_fast_path;
 mod package_index_maintenance;
 mod package_index_rebuild;
+mod package_index_refresh;
 mod package_index_replacement_failure;
 mod package_initialization;
 mod package_paths;

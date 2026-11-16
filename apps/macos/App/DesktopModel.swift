@@ -6,9 +6,18 @@ import SpielOrdersKit
 @MainActor @Observable final class DesktopModel {
     var destination = Destination.orders
     var ordersRevision = 0
-    var orders: [OrderRow] = [] { didSet { ordersRevision &+= 1 } }
+    var orders: [OrderRow] = [] {
+        didSet {
+            ordersRevision &+= 1
+            let listed = multipleSelection.filter { id in orders.contains { $0.id == id } }
+            multipleSelection = listed.count > 1 ? listed : []
+        }
+    }
     var orderCount = 0
     var selectedOrderID: String?
+    /// The Orders selected together, in the order the owner selected them; empty unless more
+    /// than one is. While it holds any, no single Order is selected or shown.
+    var multipleSelection: [String] = []
     var orderContext: OrderRow?
     var inspection: OrderInspection?
     /// Whether the destination sidebar shows while a Package is open.
@@ -400,6 +409,7 @@ import SpielOrdersKit
                 orderCount = 0
                 search = RecordQuery()
                 selectedOrderID = nil
+                multipleSelection = []
                 orderContext = nil
                 inspection = nil
                 vendors = []
@@ -511,6 +521,7 @@ import SpielOrdersKit
                 orderCount = rows.count
                 search = RecordQuery()
                 selectedOrderID = rows.first(where: { $0.id == priorSelection && $0.damage == nil })?.id
+                multipleSelection = []
                 orderContext = rows.first { $0.id == selectedOrderID }
                 inspection = nil
                 vendors = vendorRows
@@ -855,6 +866,7 @@ import SpielOrdersKit
         vendors = []
         vendorCount = 0
         selectedOrderID = nil
+        multipleSelection = []
         selectedVendorID = nil
         orderContext = nil
         vendorContext = nil

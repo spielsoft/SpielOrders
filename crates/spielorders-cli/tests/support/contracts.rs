@@ -60,6 +60,8 @@ contracts! {
     OrderValidate => "spielorders.order.validate" at 1,
     OrderAlign => "spielorders.order.align" at 1,
     OrderRemove => "spielorders.order.remove" at 1,
+    OrderMerge => "spielorders.order.merge" at 1,
+    Apply => "spielorders.apply" at 1,
     AddOrder => "spielorders.add_order" at 1,
     AdoptOrder => "spielorders.adopt_order" at 1,
     VendorShow => "spielorders.vendor.show" at 1,

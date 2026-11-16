@@ -88,6 +88,7 @@ impl Family {
             | Self::AddOrder { output, .. }
             | Self::AdoptOrder { output, .. }
             | Self::Validate { output, .. }
+            | Self::Apply { output, .. }
             | Self::Repair { output, .. } => output.mode(),
             Self::Package { command } => command.mode(),
             Self::Value { command } => command.mode(),
@@ -184,6 +185,7 @@ impl OrderCommand {
             | Self::Validate { output, .. }
             | Self::Repair { output, .. }
             | Self::Align { output, .. }
+            | Self::Merge { output, .. }
             | Self::Remove { output, .. } => output.mode(),
             Self::Item { command } => command.mode(),
         }
@@ -344,6 +346,34 @@ pub(crate) enum Family {
 
         #[command(flatten)]
         values: NewValues,
+
+        #[command(flatten)]
+        execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
+    },
+    // A first-level command, because a batch belongs to the Package and holds changes to
+    // records of several kinds. Its operations are ordinary command lines, so a batch has
+    // no vocabulary of its own to learn.
+    /// Apply many changes to a Package as one guarded write.
+    ///
+    /// Each line of FILE (or standard input, for `-` or no FILE) is one command line as a
+    /// JSON array of strings, such as
+    /// `["order", "edit", "currency=USD", "--root", "Orders/2026_01_15_Lenses"]`; blank
+    /// lines and lines starting with `#` are skipped. `order edit`, `order item add`,
+    /// `edit`, `move`, and `remove`, `add-vendor`, `vendor edit`, and `vendor contact add`,
+    /// `edit`, `move`, and `remove` may be applied. Each is planned against the Package as
+    /// the lines before it leave it; a refused line refuses the whole batch, naming the
+    /// line, and writes nothing. Otherwise every record the batch changed is written
+    /// together, with one index update.
+    Apply {
+        /// The file of operations; `-` or none reads standard input.
+        #[arg(value_name = "FILE")]
+        file: Option<PathBuf>,
+
+        #[command(flatten)]
+        target: PackageTarget,
 
         #[command(flatten)]
         execution: Execution,
@@ -616,18 +646,15 @@ pub(crate) enum VendorCommand {
         #[command(flatten)]
         output: OutputMode,
     },
-    /// Merge Vendors into one.
+    /// Merge Vendors into the first one named.
     ///
-    /// Every Order referencing one of them references the kept Vendor, which keeps its own
-    /// facts and gains the others' Contacts; the others are deleted.
+    /// The Names are in precedence order. The first Vendor is kept with its own facts, and
+    /// each later one fills only the facts and Contacts it still lacks; every Order
+    /// referencing a merged Vendor references the kept one, and the others are deleted.
     Merge {
-        /// The Vendor Names to merge.
-        #[arg(required = true, num_args = 1..)]
+        /// The Vendor Names, the one kept first.
+        #[arg(required = true, num_args = 2..)]
         names: Vec<String>,
-
-        /// The Name of the Vendor that is kept.
-        #[arg(long, value_name = "NAME")]
-        keep: String,
 
         #[command(flatten)]
         target: PackageTarget,
@@ -1087,6 +1114,34 @@ pub(crate) enum OrderCommand {
         #[command(flatten)]
         output: OutputMode,
     },
+    // The one command that asks before it acts: a merge discards Supporting Material the
+    // kept Order already has, and the owner ruled that each such entry is confirmed unless
+    // `--yes` says the whole list is.
+    /// Merge other Orders into this one, in precedence order.
+    ///
+    /// This Order is kept. Each other Order in turn fills only the facts, Items, and
+    /// directory entries the result still lacks: an entry this Order does not hold is moved
+    /// in at the same relative path, and one it already holds stays behind. What remains of
+    /// each other Order, including every entry left behind, is removed into the Removed
+    /// Orders Directory. Each entry left behind is confirmed first unless `--yes` is given.
+    Merge {
+        /// The other Order Directories, in precedence order.
+        #[arg(required = true, num_args = 1.., value_name = "ORDER")]
+        merged: Vec<PathBuf>,
+
+        /// Discard every entry the kept Order already holds without asking.
+        #[arg(long)]
+        yes: bool,
+
+        #[command(flatten)]
+        target: OrderTarget,
+
+        #[command(flatten)]
+        execution: Execution,
+
+        #[command(flatten)]
+        output: OutputMode,
+    },
     /// Work with this Order's ordered Item collection.
     Item {
         #[command(subcommand)]
@@ -1400,7 +1455,7 @@ pub(crate) struct Execution {
     /// Validate and report the whole mutation without performing any of it.
     ///
     /// No directory, file, staging artifact, index write, or cleanup effect is produced.
-    /// There is no confirmation prompt and no `--yes`: naming the mutation and leaving
+    /// Naming the mutation and leaving
     /// this option off is the authorization.
     #[arg(long)]
     pub dry_run: bool,
@@ -1617,18 +1672,15 @@ pub(crate) enum ValueCommand {
         #[command(flatten)]
         output: OutputMode,
     },
-    /// Make several values one value, which every Order using one of them then uses.
+    /// Make several values one value spelled as the first, which every Order using one of
+    /// them then uses.
     Merge {
         /// Which kind of value.
         kind: ValueKind,
 
-        /// The values to merge.
-        #[arg(required = true, num_args = 1..)]
+        /// The values, the spelling kept first.
+        #[arg(required = true, num_args = 2..)]
         values: Vec<String>,
-
-        /// The spelling the merged value keeps.
-        #[arg(long, value_name = "VALUE")]
-        keep: String,
 
         #[command(flatten)]
         scope: ValueScope,
@@ -1818,8 +1870,36 @@ pub(crate) enum ValueKind {
 /// [`crate::output::color_permitted`]. Two color policies, one in the parser and one in
 /// this crate, is how a `NO_COLOR` request comes to be honored in half a program.
 pub(crate) fn parse(arguments: &[OsString]) -> Result<Cli, clap::Error> {
+    parse_command(arguments, false)
+}
+
+/// Batch lines carry record edits; execution, output and Package targeting belong to
+/// the outer `apply`. Order Directory targeting remains meaningful within a line.
+pub(crate) fn parse_batch(arguments: &[OsString]) -> Result<Cli, clap::Error> {
+    parse_command(arguments, true)
+}
+
+fn parse_command(arguments: &[OsString], batch: bool) -> Result<Cli, clap::Error> {
     let mut command = Cli::command().color(clap::ColorChoice::Always);
     let matches = command.try_get_matches_from_mut(arguments)?;
+    if batch {
+        let order = matches.subcommand_name() == Some("order");
+        let mut leaf = &matches;
+        while let Some((_, child)) = leaf.subcommand() {
+            leaf = child;
+        }
+        for id in leaf.ids() {
+            let name = id.as_str();
+            let unsupported = matches!(name, "dry_run" | "uuid" | "json" | "quiet" | "verbose")
+                || (name == "root" && !order);
+            if unsupported
+                && leaf.value_source(name) == Some(clap::parser::ValueSource::CommandLine)
+            {
+                return Err(command.error(ErrorKind::ValueValidation,
+                    format!("--{} is not supported inside apply; set execution, output and Package options on apply itself", name.replace('_', "-"))));
+            }
+        }
+    }
     let cli = Cli::from_arg_matches(&matches)?;
     if let Family::Init { assignments, .. } = &cli.family
         && let Some(repeated) = repeated_assignment(assignments)

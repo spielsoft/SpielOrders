@@ -872,8 +872,7 @@ pub fn committed<F: FileSystem>(change: &Change, effects: &TestEffects<'_, F>) -
     }
 }
 
-/// A Package whose minimal index is proven current: change evidence orders every
-/// managed input before the index.
+/// A Package whose minimal index agrees with its canonical records.
 pub fn proven_current_minimal_package() -> ScriptedFileSystem {
     let filesystem = minimal_package();
     filesystem.put_file(
@@ -883,14 +882,6 @@ pub fn proven_current_minimal_package() -> ScriptedFileSystem {
             "/../../contracts/fixtures/derived-index/minimal-deterministic.json"
         )),
     );
-    for path in [
-        "/package/.spielorders/config.toml",
-        "/package/.spielorders/version.json",
-        "/package/.spielorders/vendors.json",
-    ] {
-        filesystem.put_change_evidence(path, 1, 10);
-    }
-    filesystem.put_change_evidence("/package/.spielorders/index.json", 1, 20);
     filesystem
 }
 

@@ -75,6 +75,18 @@ a recognition and search aid, not an application account or purchasing actor. Pr
 names the principal scientific or administrative effort. Order Group is an intentionally
 user-defined grouping within a Project with no prescribed meaning.
 
+### Merging Orders
+
+Orders are merged by naming them in precedence order. The first is kept with its Order
+ID, Title, Date Ordered, Status, and every fact it has; each later Order in turn fills only
+what the result still lacks: a missing optional fact, an Order Group that comes with its
+Project or joins the same Project, and each Item the result does not already hold. Every
+entry of a later Order's directory that the result does not hold is moved into the kept
+Order at the same relative path, and an entry it already holds — the README included —
+stays behind. What remains of each later Order is removed as an Order removal removes
+one, so every entry left behind stays recoverable. A merge never renames the kept Order's
+directory.
+
 ### Lifecycle
 
 New Orders default to `In Preparation`; imported or adopted Orders may start at any

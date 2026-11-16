@@ -38,9 +38,10 @@ unchanged and every referencing Order immediately resolves the new name.
 When legacy or adoption evidence appears to duplicate an existing Vendor, the user selects
 the existing Vendor, creates a deliberately distinct Vendor, or leaves the Order without a
 Vendor; SpielOrders never merges on its own. The user may later **merge** Vendors
-deliberately: one chosen Vendor keeps its Vendor ID, Name, and shared facts and gains the
-others' Contacts, every Order referencing one of the others references it instead, and
-the others are deleted. Renaming a Vendor onto another Vendor's Name is offered as that
+deliberately, naming them in precedence order: the first keeps its Vendor ID, Name, and
+shared facts, each later one fills only the shared facts and Contacts it still lacks
+(Contacts matched by Name, a matched Contact's missing facts filled the same way), every
+Order referencing one of the others references it instead, and the others are deleted. Renaming a Vendor onto another Vendor's Name is offered as that
 merge.
 
 Deleting a Vendor removes its record and Contacts from `vendors.json` and cannot be

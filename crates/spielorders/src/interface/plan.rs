@@ -20,7 +20,7 @@ use crate::interface::{
     list::value_list,
     package::query,
     records::{ReadmeScope, contact_facts, document_facts, item_facts, path_text, vendor_facts},
-    text::texts,
+    text::{paths, texts},
 };
 use crate::{
     Change, ChangeResult, OrderRef, Plan, Report, Scope, VendorRef, package::ReusableValue,
@@ -28,7 +28,7 @@ use crate::{
 use std::{
     ffi::CString,
     panic::{AssertUnwindSafe, catch_unwind},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 /// One change a plan makes to a record, as the plan accessors read it.
@@ -75,6 +75,7 @@ struct SpielordersPlanData {
     operations: Vec<(SpielordersConstant, CString)>,
     changes: Vec<PlannedChange>,
     restored_order_id: CString,
+    directories: Vec<bool>,
 }
 
 fn operations(plan: &Plan) -> Vec<(SpielordersConstant, CString)> {
@@ -271,7 +272,7 @@ pub extern "C" fn spielorders_provision_agent(
 }
 
 impl SpielordersPlan {
-    fn of(
+    pub(crate) fn of(
         plan: crate::Plan,
         root: PathBuf,
         subject: Subject,
@@ -280,6 +281,7 @@ impl SpielordersPlan {
         Self {
             data: Box::new(SpielordersPlanData {
                 operations: operations(&plan),
+                directories: plan.operation_directories(),
                 changes: changes(&plan),
                 restored_order_id: c_text(plan.restored_order_id().unwrap_or_default()),
                 plan,
@@ -379,6 +381,43 @@ pub extern "C" fn spielorders_order_plan_remove(
             }),
             plan,
         )
+    })
+}
+
+/// Plans merging the `count` Orders whose Directories are at `merged` into `order`, in
+/// precedence order: `order` is kept, and each merged Order only fills the facts, Items,
+/// and directory entries the result still lacks, after which what remains of it is removed
+/// into the Removed Orders Directory. Its operations name every entry moved
+/// (SPIELORDERS_OPERATION_MOVE_MERGED_ENTRY) and discarded
+/// (SPIELORDERS_OPERATION_DISCARD_MERGED_ENTRY) by its path in the merged Order; a caller
+/// that confirms discards asks before committing. A merged Order that cannot be removed
+/// after its entries moved is SPIELORDERS_WARNING_ORDER_NOT_REMOVED. The report's Order is
+/// the kept one.
+#[unsafe(no_mangle)]
+pub extern "C" fn spielorders_order_plan_merge(
+    order: &SpielordersOrder,
+    merged: Option<std::ptr::NonNull<PathBytes<'_>>>,
+    count: i64,
+    token: u64,
+    plan: &mut Option<Box<SpielordersPlan>>,
+    outcome: Option<&mut Option<Box<SpielordersEntries>>>,
+) -> SpielordersResult {
+    fallible(outcome, |entries| {
+        let directory = order.directory().to_path_buf();
+        let result = paths(merged, count)
+            .ok_or(SPIELORDERS_RESULT_BAD_ARGUMENT)
+            .and_then(|merged| {
+                let change = Change::MergeOrders {
+                    orders: std::iter::once(directory.clone())
+                        .chain(merged.into_iter().map(Path::to_path_buf))
+                        .map(OrderRef::Directory)
+                        .collect(),
+                };
+                planned(&change, directory, Subject::Order, token, entries, |_| {
+                    Vec::new()
+                })
+            });
+        deliver(result, plan)
     })
 }
 
@@ -903,6 +942,18 @@ pub extern "C" fn spielorders_plan_operation_path(
     })
 }
 
+/// 1 when operation `index` acts on a directory — an entry of a merged Order that is a
+/// folder — otherwise 0, including out of range.
+#[unsafe(no_mangle)]
+pub extern "C" fn spielorders_plan_operation_directory(plan: &SpielordersPlan, index: i64) -> i32 {
+    quietly(0, || {
+        usize::try_from(index)
+            .ok()
+            .and_then(|index| plan.data.directories.get(index))
+            .map_or(0, |directory| i32::from(*directory))
+    })
+}
+
 /// How many changes `plan` makes to the record its draft edits.
 #[unsafe(no_mangle)]
 pub extern "C" fn spielorders_plan_change_count(plan: &SpielordersPlan) -> i64 {
@@ -987,7 +1038,14 @@ struct SpielordersReportData {
     final_path: CString,
 }
 
-fn refreshed(report: &Report, root: &std::path::Path, subject: Subject) -> SpielordersReportData {
+/// What `report` committed, read again through the commit's own `session`, which
+/// remembers the Package its refresh left.
+fn refreshed(
+    report: &Report,
+    root: &std::path::Path,
+    subject: Subject,
+    session: &Session,
+) -> SpielordersReportData {
     let (kind, result) = match report {
         Report::Unchanged { result, .. } => (SPIELORDERS_REPORT_UNCHANGED, result),
         Report::Committed { result, .. } | Report::CommittedWithWarning { result, .. } => {
@@ -1015,13 +1073,15 @@ fn refreshed(report: &Report, root: &std::path::Path, subject: Subject) -> Spiel
         ChangeResult::RestoreOrder(result) => {
             (None, Some(result.directory.absolute_path.clone()), None)
         }
+        ChangeResult::MergeOrders(result) => {
+            (None, Some(result.directory.absolute_path.clone()), None)
+        }
         ChangeResult::Vendor(result) => (None, None, Some(result.vendor_id.to_string())),
         _ => (None, None, None),
     };
-    let session = Session::uncancellable();
     let order = match (&written, subject) {
         (Some(directory), Subject::Order | Subject::Other) => {
-            crate::read_order(&OrderRef::Directory(directory.clone()), &session)
+            crate::read_order(&OrderRef::Directory(directory.clone()), session)
                 .result
                 .ok()
                 .map(SpielordersOrder::of)
@@ -1031,7 +1091,7 @@ fn refreshed(report: &Report, root: &std::path::Path, subject: Subject) -> Spiel
     let vendor = vendor_id
         .filter(|_| subject == Subject::Vendor)
         .and_then(|id| {
-            crate::read_vendor(root, &VendorRef::Id(id), &session)
+            crate::read_vendor(root, &VendorRef::Id(id), session)
                 .result
                 .ok()
                 .map(SpielordersVendor::of)
@@ -1098,7 +1158,12 @@ pub extern "C" fn spielorders_plan_commit(
                 }
             }
             SpielordersReport {
-                data: Box::new(refreshed(&done, &plan.data.root, plan.data.subject)),
+                data: Box::new(refreshed(
+                    &done,
+                    &plan.data.root,
+                    plan.data.subject,
+                    &session,
+                )),
             }
         });
         deliver(result, report)

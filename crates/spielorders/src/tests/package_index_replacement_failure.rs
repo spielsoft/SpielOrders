@@ -1,4 +1,4 @@
-//! Decision sources: Decide how Package Index freshness is proven without canonical rereads;
+//! Decision sources: Define durable metadata schemas and version evolution;
 //! Define the stable diagnostic vocabulary and evidence contract; Define the complete
 //! Package read projection and load-state contract.
 //! A deliberate Package Index rebuild whose replacement fails: evidence and effect budget.

@@ -968,12 +968,13 @@ fn block_index_refresh(root: &Path) {
 // second set of preparations is the shape in which two commands come to be asked about
 // different Packages and their answers compared anyway.
 
-/// Rewrites one Order record byte for byte, so the canonical input is newer than the index
-/// that projected it and nothing about the record itself has changed.
-pub fn touch_an_order_record(root: &Path) {
+/// Changes a canonical fact while leaving its prior index projection in place.
+pub fn change_order_record(root: &Path) {
     let record = order_directory(root, "Laser_components").join(".spielorders/order.json");
     let bytes = std::fs::read(&record).expect("the Order record can be read");
-    std::fs::write(&record, bytes).expect("the Order record is rewritten byte for byte");
+    let mut document: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    document["currency"] = serde_json::Value::String("EUR".into());
+    std::fs::write(&record, serde_json::to_vec_pretty(&document).unwrap()).unwrap();
 }
 
 pub fn remove_index(root: &Path) {
@@ -1666,4 +1667,25 @@ pub fn offered_vendor_id(root: &Path) -> String {
 /// The Vendor ID of the Vendor [`populated_package`] hides.
 pub fn hidden_vendor_id(root: &Path) -> String {
     vendor_id(root, "Nethermoor")
+}
+
+/// A file of batch operations beside [`populated_package`]'s Package: a Title edit of its
+/// first Order and a new Vendor, so the batch rewrites an Order record and the Vendor
+/// record together. Its path is returned.
+pub fn operations_file(root: &Path) -> PathBuf {
+    let order = order_directory(root, "Laser_components");
+    let path = root.join("operations.jsonl");
+    let lines = [
+        serde_json::json!(["order", "edit", "title=Laser parts", "--root", order]),
+        serde_json::json!(["add-vendor", "Elderglass Optics"]),
+    ];
+    std::fs::write(
+        &path,
+        lines
+            .iter()
+            .map(|line| format!("{line}\n"))
+            .collect::<String>(),
+    )
+    .expect("the operations file is written");
+    path
 }

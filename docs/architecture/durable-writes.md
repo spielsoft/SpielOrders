@@ -17,7 +17,9 @@ change a stage before publication.
 
 ## Preserve evidence and other writers
 
-Stage beside the destination and make the stage durable before atomic publication.
+Stage beside the destination and make the stage durable before atomic publication. A
+multi-file replacement stages every file first and makes them all durable with one full
+sync, which drains the device's whole cache, before publishing any of them.
 A leftover stage predating the operation is evidence, not cleanup debris. Promotion
 retains destination preconditions and durability without destroying that evidence on failure.
 
@@ -30,6 +32,9 @@ Multi-file rollback restores in reverse order only while a destination still con
 what this operation wrote. Preserve a later writer's work and report the restoration
 failure. Cleanup removes only artifacts the operation created; failures retain their
 locations and remain visible beside the initiating error.
+
+Atomicity is per file. Handled failures attempt rollback, but process or power interruption
+can leave part of a multi-file operation published.
 
 ## Planning reads; commit writes
 

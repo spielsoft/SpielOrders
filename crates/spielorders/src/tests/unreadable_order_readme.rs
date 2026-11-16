@@ -128,7 +128,7 @@ fn failing_the_refresh_load() -> ScriptedFileSystem {
         ".spielorders/order.json",
         listing,
     );
-    breaking_refresh_after(&filesystem, Operation::RenameNewDirectory, "", listing);
+    breaking_refresh_after(&filesystem, Operation::RenameNew, "", listing);
     filesystem
 }
 
@@ -204,14 +204,13 @@ fn a_stale_stored_index_is_left_intact_rather_than_overwritten_with_an_empty_rea
         assert_eq!(rebuilt_index(&root), std::str::from_utf8(README).unwrap());
         fs::read(&index_path).expect("a readable README produces an index")
     };
-    // The README is rewritten after the index, so its change evidence is no longer
-    // covered by the index's and the load must read it rather than trust the cache.
+    // Whatever made the README unreadable changed it after the index was written, as a
+    // permission change does, so the load must read it rather than trust the cache.
     fs::write(
         root.join("Orders/2026_08_22_Laser_components/README.md"),
         README,
     )
     .unwrap();
-
     let package = available(opened(&root, &unreadable_readme()).result);
 
     assert_eq!(
@@ -224,13 +223,10 @@ fn a_stale_stored_index_is_left_intact_rather_than_overwritten_with_an_empty_rea
         PackageIndexState::Stale,
         "an index this load could not refresh is reported stale rather than current"
     );
-    // Here the fast probe saw the README's change evidence overtake the index's, so
-    // `order_readme_changed` is an observation this load really made. The test below
-    // covers the case where it is not.
     assert_eq!(
         package.contents.index.stale_reasons,
-        [PackageIndexStaleReason::OrderReadmeChanged],
-        "the reported reason is the observation the load actually made"
+        [PackageIndexStaleReason::ChangeEvidenceUncertain],
+        "unreadable text has unknown freshness"
     );
     assert_eq!(
         package.contents.healthy_orders[0].readme_text, None,
@@ -255,17 +251,21 @@ fn an_unreadable_readme_is_never_itself_the_evidence_that_the_stored_text_change
         );
         fs::read(root.join(".spielorders/index.json")).expect("a readable rebuild writes an index")
     };
-    // The record, not the README, is what changed after the index was written. The
-    // README's own bytes are untouched and its change evidence still sits behind the
-    // index's, so nothing this load observes says its text differs from the stored one.
+    // A known record change and an unreadable README have distinct evidence.
     let record = order_directory(&root).join(".spielorders/order.json");
-    fs::write(&record, fs::read(&record).unwrap()).unwrap();
+    let prior = fs::read_to_string(&record).unwrap();
+    let changed = prior.replace("Laser components", "Lenses");
+    assert_ne!(prior, changed);
+    fs::write(&record, changed).unwrap();
 
     let package = available(opened(&root, &unreadable_readme()).result);
 
     assert_eq!(
         package.contents.index.stale_reasons,
-        [PackageIndexStaleReason::OrderMetadataChanged],
+        [
+            PackageIndexStaleReason::OrderMetadataChanged,
+            PackageIndexStaleReason::ChangeEvidenceUncertain
+        ],
         "a README this load could not read adds no reason of its own — reporting \
          order_readme_changed here would name a comparison the load never made"
     );

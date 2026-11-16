@@ -19,7 +19,7 @@ use crate::support::{
 fn merging_vendors_returns_the_kept_vendor_and_contacts() {
     let (_tree, root) = populated_package("vendor-merge-result");
     let kept = crate::support::hidden_vendor_id(&root);
-    let run = Invocation::new(&["vendor", "merge", "Tarnwick", "--keep", "Nethermoor", "--json"])
+    let run = Invocation::new(&["vendor", "merge", "Nethermoor", "Tarnwick", "--json"])
         .rooted_at(&root)
         .run();
     assert_eq!(run.status, Some(0), "{}", run.stdout_text());

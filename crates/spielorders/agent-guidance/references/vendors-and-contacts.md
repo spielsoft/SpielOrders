@@ -21,12 +21,13 @@ Vendor. Hiding affects selection for new use, never how an existing Order resolv
 live Vendor facts. `vendor delete` removes a Vendor and its Contacts; while Orders
 reference it, it refuses and lists them unless `--replacement NAME` re-points them to
 another Vendor or `--clear` leaves them with none. `vendor merge` makes duplicates one
-Vendor: the `--keep` Vendor keeps its facts and gains the others' Contacts, their Orders
-reference it, and the others are deleted. Deletion and merging cannot be undone; the
+Vendor. Names are in precedence order: the first is kept with its facts, each later one
+fills only the facts and Contacts (matched by Name) it still lacks, their Orders reference
+it, and the others are deleted. Deletion and merging cannot be undone; the
 response's `orders` is how many Orders changed.
 
 ```sh
 spielorders add-vendor --root "$package" name="Optics Supplier Inc"
-spielorders vendor merge "Optics Supplier" "Optics Supplier Inc" --keep "Optics Supplier" --root "$package" --dry-run
+spielorders vendor merge "Optics Supplier" "Optics Supplier Inc" --root "$package" --dry-run
 spielorders vendor delete "Optics Supplier Inc" --replacement "Optics Supplier" --root "$package"
 ```

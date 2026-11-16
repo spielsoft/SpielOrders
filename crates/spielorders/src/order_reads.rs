@@ -85,7 +85,18 @@ pub(crate) fn read_order<F: FileSystem>(
                 return Err(operation(order_directory, &error, filesystem));
             }
         }
-        let record = order_directory.join(".spielorders").join("order.json");
+        // A record reached through a linked metadata directory is not this Order's own;
+        // asking about the record alone would follow the link.
+        let metadata = order_directory.join(".spielorders");
+        if let Ok(Some(kind)) = filesystem.symlink_metadata(&metadata)
+            && kind != FileSystemEntryKind::Directory
+        {
+            return Err(Failure::DamagedRecord {
+                directory: as_given(order_directory),
+                field: None,
+            });
+        }
+        let record = metadata.join("order.json");
         match filesystem.symlink_metadata(&record) {
             Ok(Some(FileSystemEntryKind::File)) => {}
             // Nothing stands where an Order Directory keeps its record, so this directory is

@@ -18,7 +18,8 @@ struct MergeChoice {
     let orderCount: Int
 }
 
-/// Merge N …: which of the values to keep, each with the Orders choosing it changes.
+/// Merge N …: which spelling of the values to keep, each with the Orders choosing it changes.
+/// A value has no facts for later ones to fill, so the only choice is the spelling kept.
 struct MergeSheet: View {
     let title: String
     let explanation: String
@@ -27,14 +28,14 @@ struct MergeSheet: View {
     let complete: (Int?) -> Void
     @State private var chosen: Int
 
-    init(title: String, explanation: String, choices: [MergeChoice], chosen: Int = 0, identifier: String,
+    init(title: String, explanation: String, choices: [MergeChoice], identifier: String,
          complete: @escaping (Int?) -> Void) {
         self.title = title
         self.explanation = explanation
         self.choices = choices
         self.identifier = identifier
         self.complete = complete
-        _chosen = State(initialValue: chosen)
+        _chosen = State(initialValue: 0)
     }
 
     var body: some View {
@@ -66,6 +67,91 @@ struct MergeSheet: View {
         }
         .padding(20)
         .frame(width: 440)
+    }
+}
+
+/// Vendors in precedence order with the library's plan for merging them in that order.
+struct VendorMerge {
+    let vendors: [VendorRow]
+    let change: ValueChange
+}
+
+/// Merge N Vendors…: the Vendors in precedence order, which the owner sets by dragging, with
+/// how many Orders the plan for that order changes.
+struct VendorMergeSheet: View {
+    let title: String
+    let explanation: String
+    let plan: @MainActor ([VendorRow]) async throws -> VendorMerge
+    let complete: (VendorMerge?) -> Void
+    @State private var vendors: [VendorRow]
+    @State private var planned: VendorMerge
+    @State private var failure: Notice?
+
+    init(title: String, explanation: String, merge: VendorMerge,
+         plan: @escaping @MainActor ([VendorRow]) async throws -> VendorMerge,
+         complete: @escaping (VendorMerge?) -> Void) {
+        self.title = title
+        self.explanation = explanation
+        self.plan = plan
+        self.complete = complete
+        _vendors = State(initialValue: merge.vendors)
+        _planned = State(initialValue: merge)
+    }
+
+    /// The plan for the order shown, once the library has made it.
+    private var current: VendorMerge? {
+        planned.vendors.map(\.id) == vendors.map(\.id) ? planned : nil
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(title)
+                .font(.headline)
+                .accessibilityAddTraits(.isHeader)
+            Text(explanation)
+                .fixedSize(horizontal: false, vertical: true)
+            PrecedenceList(items: $vendors, identifier: "vendor.merge") { vendor in
+                Text(vendor.name)
+                    .lineLimit(1)
+            }
+            .frame(height: 120)
+            if let current {
+                Text(OrderChangeCount.text(current.change.orderCount))
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("vendor.merge.count")
+            } else if let failure {
+                PlanningFailure(failure: failure, identifier: "vendor.merge")
+            } else {
+                ProgressView("Checking affected Orders…")
+                    .controlSize(.small)
+                    .accessibilityIdentifier("vendor.merge.checking")
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { complete(nil) }
+                    .keyboardShortcut(.cancelAction)
+                    .accessibilityIdentifier("vendor.merge.cancel")
+                Button("Merge") { complete(current) }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(current == nil)
+                    .accessibilityIdentifier("vendor.merge.confirm")
+            }
+        }
+        .padding(20)
+        .frame(width: 460)
+        .task(id: vendors.map(\.id)) {
+            guard current == nil else { return }
+            failure = nil
+            do {
+                let merge = try await plan(vendors)
+                try Task.checkCancellation()
+                planned = merge
+            } catch {
+                guard !Task.isCancelled else { return }
+                failure = Notice((error as? ValueRefusal)?.summary ?? "The merge couldn’t be planned.",
+                                 details: error.localizedDescription)
+            }
+        }
     }
 }
 
@@ -171,11 +257,20 @@ struct ReplacementSheet: View {
 
 extension WindowDialogs {
     /// Asks which of `choices` a merge keeps; nil when cancelled.
-    func chooseKept(_ title: String, explanation: String, choices: [MergeChoice], chosen: Int = 0,
+    func chooseKept(_ title: String, explanation: String, choices: [MergeChoice],
                     identifier: String) async -> Int? {
         await ask(title, identifier: identifier) { complete in
-            MergeSheet(title: title, explanation: explanation, choices: choices, chosen: chosen,
-                       identifier: identifier, complete: complete)
+            MergeSheet(title: title, explanation: explanation, choices: choices, identifier: identifier,
+                       complete: complete)
+        }
+    }
+
+    /// Asks the owner to order a merge of Vendors, starting from `merge`; the plan they
+    /// approved, or nil when cancelled.
+    func reviewMerge(of merge: VendorMerge, title: String, explanation: String,
+                     plan: @escaping @MainActor ([VendorRow]) async throws -> VendorMerge) async -> VendorMerge? {
+        await ask(title, identifier: "vendor.merge") { complete in
+            VendorMergeSheet(title: title, explanation: explanation, merge: merge, plan: plan, complete: complete)
         }
     }
 

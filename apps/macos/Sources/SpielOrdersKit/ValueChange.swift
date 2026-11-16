@@ -195,11 +195,14 @@ extension PackageSession {
         (try? planDeleting(value, in: scope, replacement: .with(name), cancellation: LibraryCancellation())) != nil
     }
 
-    /// Plans merging the Vendors `ids` into the Vendor `kept`, which gains their Contacts and
-    /// every Order referencing one of them.
-    public func planMergingVendors(_ ids: [String], keeping kept: String,
-                                   cancellation: LibraryCancellation) throws -> ValueChange {
-        try planValueChange { package, plan, outcome in
+    /// Plans merging the Vendors `ids` in precedence order: the first is kept, each later one
+    /// only fills the facts and Contacts it still lacks, and every Order referencing one of
+    /// them references it.
+    public func planMergingVendors(_ ids: [String], cancellation: LibraryCancellation) throws -> ValueChange {
+        guard let kept = ids.first else {
+            throw ValueRefusal(LibraryFailure(result: SPIELORDERS_RESULT_BAD_ARGUMENT, entries: []))
+        }
+        return try planValueChange { package, plan, outcome in
             try withInterfaceTexts(ids) { texts in
                 try withInterfaceText(kept) { kept in
                     spielorders_package_plan_merge_vendors(package, texts.baseAddress, Int64(texts.count), kept,

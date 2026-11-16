@@ -655,7 +655,7 @@ fn failed_order_publication_rolls_back_its_values_without_overwriting_a_later_wr
                     .on(Operation::LinkNewFile)
                     .ending_in(".spielorders/order.json")
             } else {
-                filesystem.on(Operation::RenameNewDirectory)
+                filesystem.on(Operation::RenameNew)
             };
             if concurrent_writer {
                 let vendors = vendors.clone();
@@ -697,4 +697,84 @@ fn failed_order_publication_rolls_back_its_values_without_overwriting_a_later_wr
             }
         }
     }
+}
+
+#[test]
+fn a_merged_vendor_fills_only_what_the_kept_one_lacks_in_list_order() {
+    let (_tree, root) = initialized_package("vendor-merge-fill");
+    let vendor = |name: &str, id: &str, facts: &[(&str, &str)], contact: Option<(&str, &str)>| {
+        crate::tests::support::created_vendor(&root, name, id);
+        let mut assignments = Assignments::new();
+        for (field, value) in facts {
+            assignments = assignments.assign(*field, *value);
+        }
+        committed(
+            &crate::tests::support::edit_vendor(
+                root.clone(),
+                crate::VendorRef::Name(name.into()),
+                assignments,
+            ),
+            &effects(&PlatformFileSystem),
+        );
+        if let Some((contact, role)) = contact {
+            committed(
+                &crate::tests::support::add_contact(
+                    root.clone(),
+                    crate::VendorRef::Name(name.into()),
+                    Assignments::new()
+                        .assign("name", contact)
+                        .assign("role", role),
+                ),
+                &effects(&PlatformFileSystem),
+            );
+        }
+    };
+    vendor(
+        "Tarnwick",
+        VENDOR_ID,
+        &[("website", "https://example.com")],
+        Some(("Grace Hopper", "")),
+    );
+    vendor(
+        "Thor Labs",
+        NETHERMOOR,
+        &[("website", "https://example.org"), ("phone", "+1 555 0100")],
+        Some(("grace hopper", "Sales")),
+    );
+    vendor(
+        "Tarnwick Inc",
+        "33333333-3333-4333-8333-333333333333",
+        &[("phone", "+1 555 0199"), ("email", "sales@example.com")],
+        Some(("Ada Lovelace", "Accounts")),
+    );
+
+    change(crate::Change::MergeVendors {
+        root: root.clone(),
+        vendors: vec![
+            crate::VendorRef::Name("Thor Labs".into()),
+            crate::VendorRef::Name("Tarnwick Inc".into()),
+        ],
+        keep: crate::VendorRef::Name("Tarnwick".into()),
+    });
+
+    let package = opened(&root, &PlatformFileSystem).result.unwrap();
+    let [kept] = package.contents.vendors.as_slice() else {
+        panic!("one Vendor remains")
+    };
+    assert_eq!(kept.name.as_str(), "Tarnwick");
+    assert_eq!(kept.website.as_deref(), Some("https://example.com"));
+    assert_eq!(kept.phone.as_deref(), Some("+1 555 0100"));
+    assert_eq!(kept.email.as_deref(), Some("sales@example.com"));
+    let contacts = kept
+        .contacts
+        .iter()
+        .map(|contact| (contact.name.as_str(), contact.role.as_deref()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        contacts,
+        [
+            ("Grace Hopper", Some("Sales")),
+            ("Ada Lovelace", Some("Accounts"))
+        ]
+    );
 }

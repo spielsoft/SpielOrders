@@ -11,11 +11,14 @@
 
 use crate::{
     Answer, Failure,
-    canonical::{CurrentPackageCandidate, ReusableValueProjection, load_package},
+    canonical::{
+        CurrentPackageCandidate, ReusableValueProjection, Touched, load_every_record,
+        load_package_to_change,
+    },
     filesystem::{FileReplacement, replace_validated_files},
     metadata::{
-        NonBlankString, OrderDocument, StoredProject, StoredValues, VendorId, VendorsDocument,
-        Version1,
+        NonBlankString, OrderDocument, StoredProject, StoredValues, Vendor, VendorId,
+        VendorsDocument, Version1,
     },
     mutation::{IndexRefresh, MutationReport, OperationKind, PlannedOperation},
     package::PackageMetadata,
@@ -111,13 +114,29 @@ pub struct ValueChangeResult {
     pub(crate) vendor: Option<VendorRead>,
 }
 
+/// The Package as `request` must see it. Adding a value changes only the Vendor record;
+/// every other change selects the Orders it rewrites by what their records hold, so it
+/// reads every record.
+fn loaded<F: FileSystem>(
+    root: &Path,
+    request: &ValueRequest,
+    filesystem: &F,
+) -> Result<CurrentPackageCandidate, Failure> {
+    match request {
+        ValueRequest::Add { .. } => {
+            load_package_to_change(root, &Touched::default().with_vendors(true), filesystem)
+        }
+        _ => load_every_record(root, filesystem),
+    }
+}
+
 pub(crate) fn plan_value_change<F: FileSystem>(
     selected_root: &Path,
     request: &ValueRequest,
     filesystem: &F,
 ) -> Answer<ValueChangePlan> {
     Answer::of(|| {
-        let package = load_package(selected_root, filesystem)?;
+        let package = loaded(selected_root, request, filesystem)?;
         let rewrites = rewrites(request, &package)?;
         let mut operations = rewrites
             .orders
@@ -156,7 +175,7 @@ pub(crate) fn commit_value_change<F: FileSystem>(
     filesystem: &F,
 ) -> Answer<MutationReport<ValueChangeResult>> {
     Answer::of(|| {
-        let current = load_package(&plan.root, filesystem)?;
+        let current = loaded(&plan.root, &plan.request, filesystem)?;
         // The change planned again against the Package as it now stands must be the one
         // planned: the same records, holding the same facts, rewritten the same way.
         if rewrites(&plan.request, &current).as_ref() != Ok(&plan.rewrites) {
@@ -234,7 +253,14 @@ pub(crate) fn commit_value_change<F: FileSystem>(
                 .collect::<Vec<_>>();
             return Err(Failure::of_replacements(&plan.root, &destinations, error));
         }
-        Ok(IndexRefresh::after_commit(&plan.root, filesystem).report(result))
+        let touched = Touched::orders(
+            plan.rewrites
+                .orders
+                .iter()
+                .filter_map(|order| Some(order.path.parent()?.parent()?.to_path_buf())),
+        )
+        .with_vendors(plan.rewrites.candidate != plan.rewrites.prior);
+        Ok(IndexRefresh::after_commit(&plan.root, &touched, filesystem).report(result))
     })
 }
 
@@ -401,10 +427,10 @@ fn rewrites(
             }
             let kept_id = package.vendors[keep].vendor_id.clone();
             let mut survivor = package.vendors[keep].clone();
+            // The kept Vendor takes precedence, and each merged one after it only fills what
+            // the result still lacks, in the order named.
             for position in &merged {
-                survivor
-                    .contacts
-                    .extend(package.vendors[*position].contacts.iter().cloned());
+                fill_vendor(&mut survivor, &package.vendors[*position]);
             }
             let merged_ids = merged
                 .iter()
@@ -477,6 +503,34 @@ fn refuse_damaged_references(
             vendor_id: vendor.as_str().to_owned(),
             orders,
         })
+    }
+}
+
+/// Fills each fact and Contact `kept` lacks from `merged`: an absent fact takes
+/// `merged`'s, a Contact `kept` has by Name gains the Contact facts it lacks, and any other
+/// Contact is added after `kept`'s own.
+fn fill_vendor(kept: &mut Vendor, merged: &Vendor) {
+    fn fill(kept: &mut Option<String>, merged: &Option<String>) {
+        if kept.is_none() {
+            kept.clone_from(merged);
+        }
+    }
+    fill(&mut kept.phone, &merged.phone);
+    fill(&mut kept.email, &merged.email);
+    fill(&mut kept.website, &merged.website);
+    fill(&mut kept.address, &merged.address);
+    fill(&mut kept.purchasing_notes, &merged.purchasing_notes);
+    for contact in &merged.contacts {
+        match kept.contacts.iter_mut().find(|own| {
+            crate::vendors::vendor_names_match(own.name.as_str(), contact.name.as_str())
+        }) {
+            Some(own) => {
+                fill(&mut own.role, &contact.role);
+                fill(&mut own.phone, &contact.phone);
+                fill(&mut own.email, &contact.email);
+            }
+            None => kept.contacts.push(contact.clone()),
+        }
     }
 }
 

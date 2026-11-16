@@ -19,7 +19,7 @@ use std::ops::Deref;
 use crate::metadata::OrderStatus;
 use crate::{evidence::EvidenceOutcome, evidence::FactChange};
 
-use crate::ports::NewDirectoryRenameOutcome;
+use crate::ports::RenameOutcome;
 
 use crate::{Failure, Warning};
 use std::fs;
@@ -372,7 +372,7 @@ fn an_injected_rename_failure_leaves_the_whole_source_untouched() {
 
     let report = crate::commit(
         plan,
-        &effects(&ScriptedFileSystem::new().failing_ending_in(Operation::RenameNewDirectory, "")),
+        &effects(&ScriptedFileSystem::new().failing_ending_in(Operation::RenameNew, "")),
     )
     .result;
 
@@ -414,10 +414,8 @@ fn a_destination_taken_between_planning_and_commit_stops_the_rename() {
         &effects(&{
             let filesystem = ScriptedFileSystem::new();
             filesystem
-                .on(Operation::RenameNewDirectory)
-                .answers(Answer::Renamed(
-                    NewDirectoryRenameOutcome::DestinationExists,
-                ));
+                .on(Operation::RenameNew)
+                .answers(Answer::Renamed(RenameOutcome::DestinationExists));
             filesystem
         }),
     )
@@ -1234,6 +1232,6 @@ fn a_source_that_stopped_being_a_healthy_order_is_refused_before_the_rename() {
 /// built from the plan rather than from a refreshed Package.
 fn breaking_refresh_after_rename(breakage: RefreshBreakage) -> ScriptedFileSystem {
     let filesystem = ScriptedFileSystem::new();
-    breaking_refresh_after(&filesystem, Operation::RenameNewDirectory, "", breakage);
+    breaking_refresh_after(&filesystem, Operation::RenameNew, "", breakage);
     filesystem
 }

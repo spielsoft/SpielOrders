@@ -18,7 +18,7 @@ use crate::{evidence::EvidenceOutcome, evidence::FactChange};
 
 use crate::metadata::OrderDocument;
 
-use crate::ports::NewDirectoryRenameOutcome;
+use crate::ports::RenameOutcome;
 use crate::{Failure, Warning};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -335,7 +335,7 @@ fn no_disposition_enumerates_the_directory_it_moves() {
 /// Real effects, except that the whole-directory move fails.
 fn move_erroring() -> ScriptedFileSystem {
     let filesystem = ScriptedFileSystem::new();
-    filesystem.on(Operation::RenameNewDirectory).fails();
+    filesystem.on(Operation::RenameNew).fails();
     filesystem
 }
 
@@ -345,7 +345,7 @@ fn move_erroring() -> ScriptedFileSystem {
 fn move_erroring_after_arrival(arrival: &'static str) -> ScriptedFileSystem {
     let filesystem = ScriptedFileSystem::new();
     filesystem
-        .on(Operation::RenameNewDirectory)
+        .on(Operation::RenameNew)
         .preceded_by(move |outside| {
             let destination = &outside.call().path;
             outside.write(&destination.parent().unwrap().join(arrival), b"not ours\n");
@@ -360,10 +360,10 @@ fn move_erroring_with_undo_failing() -> ScriptedFileSystem {
     filesystem
 }
 
-fn move_reporting(outcome: NewDirectoryRenameOutcome) -> ScriptedFileSystem {
+fn move_reporting(outcome: RenameOutcome) -> ScriptedFileSystem {
     let filesystem = ScriptedFileSystem::new();
     filesystem
-        .on(Operation::RenameNewDirectory)
+        .on(Operation::RenameNew)
         .answers(Answer::Renamed(outcome));
     filesystem
 }
@@ -716,9 +716,7 @@ fn injected_disposition_failures_leave_the_order_active_and_whole() {
     .unwrap();
     let report = crate::commit(
         plan,
-        &effects(&move_reporting(
-            NewDirectoryRenameOutcome::DestinationExists,
-        )),
+        &effects(&move_reporting(RenameOutcome::DestinationExists)),
     )
     .result;
     assert!(
@@ -766,7 +764,7 @@ fn a_rejected_move_leaves_no_removed_orders_directory_it_created() {
         ("removal-rollback-move-error", move_erroring()),
         (
             "removal-rollback-move-collision",
-            move_reporting(NewDirectoryRenameOutcome::DestinationExists),
+            move_reporting(RenameOutcome::DestinationExists),
         ),
     ] {
         let (_tree, root, directory) = default_package(label);
@@ -1167,4 +1165,30 @@ fn a_removal_the_refresh_cannot_assess_at_all_still_names_what_changed() {
         "{warnings:?}"
     );
     assert!(!directory.exists(), "really disposed of it");
+}
+
+#[test]
+fn a_volume_without_exclusive_rename_is_named_as_the_obstacle() {
+    let (_tree, root, directory) = default_package("removal-unsupported");
+    let before = contents(&directory);
+    let plan = crate::plan(
+        &remove_order(directory.clone()),
+        &effects(&PlatformFileSystem),
+    )
+    .result
+    .unwrap();
+    let filesystem = ScriptedFileSystem::new();
+    filesystem
+        .on(Operation::RenameNew)
+        .fails_with(std::io::ErrorKind::Unsupported);
+
+    let failure = crate::commit(plan, &effects(&filesystem))
+        .result
+        .unwrap_err();
+    assert!(
+        matches!(failure, Failure::FilesystemUnsupported(_)),
+        "{failure:?}"
+    );
+    assert_eq!(contents(&directory), before);
+    assert!(!root.join("Removed").exists());
 }

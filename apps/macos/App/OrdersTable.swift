@@ -14,7 +14,7 @@ struct OrdersTable: NSViewRepresentable {
         table.setAccessibilityIdentifier("orders.table")
         table.usesAlternatingRowBackgroundColors = true
         table.rowHeight = 22
-        table.allowsMultipleSelection = false
+        table.allowsMultipleSelection = true
         table.allowsEmptySelection = true
         table.allowsColumnReordering = true
         table.allowsColumnResizing = true
@@ -155,28 +155,36 @@ struct OrdersTable: NSViewRepresentable {
             "orders.row." + (row.damage == nil ? row.id : "damaged:" + row.directoryName)
         }
 
-        func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
-            if model.committing, rows.indices.contains(row) {
-                let id = rows[row].id
-                _ = model.deferNavigation { [model] in model.selectOrder(id) }
-                return false
+        /// A selection made while a field's save settles waits for that save; none is made
+        /// while other work runs.
+        func tableView(_ tableView: NSTableView,
+                       selectionIndexesForProposedSelection proposed: IndexSet) -> IndexSet {
+            if model.committing {
+                let ids = identifiers(proposed)
+                _ = model.deferNavigation { [model] in model.selectOrders(ids) }
+                return tableView.selectedRowIndexes
             }
-            return !model.busy
+            return model.busy ? tableView.selectedRowIndexes : proposed
         }
 
         func tableViewSelectionDidChange(_ notification: Notification) {
             guard !updating, let table else { return }
-            let id = rows.indices.contains(table.selectedRow) ? rows[table.selectedRow].id : nil
-            model.selectOrder(id)
+            model.selectOrders(identifiers(table.selectedRowIndexes))
             updating = true
             synchronizeSelection()
             updating = false
         }
 
+        private func identifiers(_ indexes: IndexSet) -> [String] {
+            indexes.filter(rows.indices.contains).map { rows[$0].id }
+        }
+
         private func synchronizeSelection() {
             guard let table else { return }
-            let selected = rows.firstIndex { $0.id == model.selectedOrderID }
-            let indexes = selected.map { IndexSet(integer: $0) } ?? []
+            let selected = model.multipleSelection.isEmpty
+                ? [model.selectedOrderID].compactMap { $0 }
+                : model.multipleSelection
+            let indexes = IndexSet(rows.indices.filter { selected.contains(rows[$0].id) })
             if table.selectedRowIndexes != indexes { table.selectRowIndexes(indexes, byExtendingSelection: false) }
         }
 
@@ -223,6 +231,14 @@ struct OrdersTable: NSViewRepresentable {
                 menu.removeAllItems()
                 guard rows.indices.contains(table.clickedRow) else { return }
                 let row = rows[table.clickedRow]
+                // A click within several selected Orders acts on all of them.
+                if model.multipleSelection.contains(row.id) {
+                    let merge = NSMenuItem(title: model.mergeTitle, action: #selector(merge(_:)), keyEquivalent: "")
+                    merge.target = self
+                    merge.setAccessibilityIdentifier("orders.merge")
+                    menu.addItem(merge)
+                    return
+                }
                 let open = NSMenuItem(title: row.damage == nil ? "Open" : "Open Diagnostics", action: #selector(open(_:)), keyEquivalent: "")
                 open.representedObject = row.id
                 open.target = self
@@ -251,6 +267,7 @@ struct OrdersTable: NSViewRepresentable {
         }
 
         func validateMenuItem(_ item: NSMenuItem) -> Bool {
+            if item.action == #selector(merge(_:)) { return model.canMergeOrders }
             guard !model.busy, model.vendorSheet == nil,
                   let id = item.representedObject as? String,
                   let row = rows.first(where: { $0.id == id }) else { return false }
@@ -274,7 +291,7 @@ struct OrdersTable: NSViewRepresentable {
         }
 
         func openSelected() {
-            guard let table, rows.indices.contains(table.selectedRow) else { return }
+            guard let table, table.numberOfSelectedRows == 1, rows.indices.contains(table.selectedRow) else { return }
             model.openOrder(rows[table.selectedRow].id)
         }
 
@@ -286,6 +303,10 @@ struct OrdersTable: NSViewRepresentable {
         @objc private func reveal(_ sender: NSMenuItem) {
             guard let id = sender.representedObject as? String else { return }
             model.revealOrder(id)
+        }
+
+        @objc private func merge(_ sender: NSMenuItem) {
+            model.mergeOrders()
         }
 
         @objc private func align(_ sender: NSMenuItem) {
@@ -300,7 +321,8 @@ struct OrdersTable: NSViewRepresentable {
     }
 }
 
-/// Return focuses the selected Order's detail; Delete removes the Order.
+/// Return focuses the selected Order's detail; Delete removes the Order. Neither acts on
+/// several selected Orders.
 final class OrdersTableView: NSTableView {
     var open: () -> Void = {}
     var remove: () -> Void = {}

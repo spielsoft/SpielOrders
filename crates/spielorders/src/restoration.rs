@@ -4,7 +4,7 @@
 
 use crate::{
     Answer, Failure,
-    canonical::{CurrentPackageCandidate, load_package},
+    canonical::{CurrentPackageCandidate, Touched, load_package_to_change},
     evidence::EvidenceFingerprint,
     filesystem::{DestinationExpectation, replace_validated_file_expecting, staging_path},
     metadata::OrderDocument,
@@ -13,7 +13,7 @@ use crate::{
         PlannedOperation,
     },
     operations::{FailedOperation, FailedPath},
-    ports::{FileSystem, FileSystemEntryKind, NewDirectoryRenameOutcome},
+    ports::{FileSystem, FileSystemEntryKind, RenameOutcome},
     readme::{Location, located_in_package, package_relative_path_text},
 };
 use std::path::{Path, PathBuf};
@@ -51,7 +51,8 @@ pub(crate) fn plan_order_restore<F: FileSystem>(
     filesystem: &F,
 ) -> Answer<OrderRestorePlan> {
     Answer::of(|| {
-        let package = load_package(root, filesystem)?;
+        let package =
+            load_package_to_change(root, &Touched::default().with_vendors(true), filesystem)?;
         let (source, document) = removed_order(&package, removed, filesystem)?;
         let root = package.context.root.absolute_path.clone();
         let destination = restore_destination(&package, &source);
@@ -277,7 +278,12 @@ pub(crate) fn commit_order_restore<F: FileSystem>(
         let changed = || Failure::PreconditionsChanged {
             location: plan.source.clone(),
         };
-        let package = load_package(&plan.root, filesystem).map_err(|_| changed())?;
+        let package = load_package_to_change(
+            &plan.root,
+            &Touched::default().with_vendors(true),
+            filesystem,
+        )
+        .map_err(|_| changed())?;
         let (source, document) = removed_order(&package, &plan.source.absolute_path, filesystem)
             .map_err(|_| changed())?;
         let outcome = plan
@@ -303,11 +309,9 @@ pub(crate) fn commit_order_restore<F: FileSystem>(
         } else {
             None
         };
-        match filesystem
-            .rename_new_directory(&plan.source.absolute_path, &plan.destination.absolute_path)
-        {
-            Ok(NewDirectoryRenameOutcome::Renamed) => {}
-            Ok(NewDirectoryRenameOutcome::DestinationExists) | Err(_) => {
+        match filesystem.rename_new(&plan.source.absolute_path, &plan.destination.absolute_path) {
+            Ok(RenameOutcome::Renamed) => {}
+            Ok(RenameOutcome::DestinationExists) => {
                 let cleanup = rewritten.map_or_else(Vec::new, |(prior, candidate)| {
                     rollback_locator(&plan, &prior, &candidate, filesystem)
                 });
@@ -316,8 +320,23 @@ pub(crate) fn commit_order_restore<F: FileSystem>(
                     cleanup,
                 ));
             }
+            Err(error) => {
+                let cleanup = rewritten.map_or_else(Vec::new, |(prior, candidate)| {
+                    rollback_locator(&plan, &prior, &candidate, filesystem)
+                });
+                return Err(
+                    Failure::commit(CommitFailure::new(plan.destination.clone()), cleanup)
+                        .unless_unsupported(
+                            &plan.root,
+                            &plan.source.absolute_path,
+                            &error,
+                            filesystem,
+                        ),
+                );
+            }
         }
-        let refresh = IndexRefresh::after_commit(&plan.root, filesystem);
+        let touched = Touched::orders([plan.destination.absolute_path.clone()]);
+        let refresh = IndexRefresh::after_commit(&plan.root, &touched, filesystem);
         Ok(refresh.report(OrderRestoreResult {
             directory: plan.destination.clone(),
         }))

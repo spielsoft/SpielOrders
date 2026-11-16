@@ -1,0 +1,35 @@
+{
+  "contract": "spielorders.order.merge",
+  "contract_version": 1,
+  "ok": false,
+  "context": {
+    "root": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace"
+  },
+  "data": null,
+  "diagnostics": [
+    {
+      "code": "order_semantic_invalid",
+      "severity": "error",
+      "message": "Order semantic invalid",
+      "field": "date_ordered",
+      "reason": null,
+      "position": null,
+      "path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/order.json",
+      "before": null,
+      "after": "<ID-1>"
+    }
+  ],
+  "error": {
+    "code": "damaged_order",
+    "detail": {
+      "severity": "error",
+      "message": "Damaged order",
+      "field": null,
+      "reason": null,
+      "position": null,
+      "path": "Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace",
+      "before": null,
+      "after": null
+    }
+  }
+}

@@ -7,7 +7,7 @@
 
 use crate::{
     Answer, Failure, Warning,
-    canonical::{CurrentPackageCandidate, HealthyOrder},
+    canonical::{CurrentPackageCandidate, HealthyOrder, Touched},
     evidence::EvidenceFingerprint,
     filesystem::{DestinationExpectation, replace_validated_file_expecting},
     metadata::{OrderDocument, PackageRoot},
@@ -17,7 +17,7 @@ use crate::{
     },
     operations::FailedOperation,
     order_edits::resolve_order,
-    ports::{Effects, FileSystem, FileSystemEntryKind, NewDirectoryRenameOutcome},
+    ports::{Effects, FileSystem, FileSystemEntryKind, RenameOutcome},
     readme::{Location, package_relative_path_text},
 };
 use std::path::{Path, PathBuf};
@@ -286,18 +286,26 @@ pub(crate) fn commit_order_removal<E: Effects>(
         // One rename moves the complete tree. Nothing copies, enumerates, or
         // rewrites a child, so README, managed metadata, and Supporting Material
         // travel byte-identical.
-        let failure = match filesystem
-            .rename_new_directory(&plan.source.absolute_path, &destination.absolute_path)
-        {
-            Ok(NewDirectoryRenameOutcome::Renamed) => None,
-            Ok(NewDirectoryRenameOutcome::DestinationExists) => {
-                Some(CommitFailure::new(destination.clone()))
-            }
-            Err(_) => Some(CommitFailure::new(destination.clone())),
-        };
+        let (failure, error) =
+            match filesystem.rename_new(&plan.source.absolute_path, &destination.absolute_path) {
+                Ok(RenameOutcome::Renamed) => (None, None),
+                Ok(RenameOutcome::DestinationExists) => {
+                    (Some(CommitFailure::new(destination.clone())), None)
+                }
+                Err(error) => (Some(CommitFailure::new(destination.clone())), Some(error)),
+            };
         if let Some(failure) = failure {
             let cleanup_failures = undo_created_directory(&plan.root, created, filesystem);
-            return Err(rejected(failure, cleanup_failures));
+            let rejection = rejected(failure, cleanup_failures);
+            return Err(match error {
+                Some(error) => rejection.unless_unsupported(
+                    &plan.root,
+                    &plan.source.absolute_path,
+                    &error,
+                    filesystem,
+                ),
+                None => rejection,
+            });
         }
         // The locator is rewritten only after the directory has left active
         // scope, so a failure here cannot damage the Package the caller still
@@ -314,7 +322,8 @@ pub(crate) fn commit_order_removal<E: Effects>(
             warnings.push(Warning::LocatorUpdateFailed(failure));
         }
 
-        let refresh = IndexRefresh::after_commit(&plan.root, filesystem);
+        let touched = Touched::orders([plan.source.absolute_path.clone()]);
+        let refresh = IndexRefresh::after_commit(&plan.root, &touched, filesystem);
         warnings.extend(refresh.warning());
 
         let result = OrderRemovalResult {

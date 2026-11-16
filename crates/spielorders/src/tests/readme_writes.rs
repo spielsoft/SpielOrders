@@ -267,9 +267,13 @@ fn a_package_readme_commit_replaces_only_its_own_document() {
         "a Package README write lists no directory"
     );
     assert_no_metadata_write(&scripted, "a Package README write");
+    // The directory holding the document is observed, to refuse writing through a link,
+    // and nothing else is.
     for touched in touched(&scripted, root) {
         assert!(
-            touched.starts_with("README.md") || touched.starts_with(".README.md"),
+            touched.is_empty()
+                || touched.starts_with("README.md")
+                || touched.starts_with(".README.md"),
             "a Package README write touches only its own document, but touched {touched}"
         );
     }

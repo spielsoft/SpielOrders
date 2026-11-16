@@ -7,6 +7,7 @@
 //!
 //! Decision sources: Effect and adapter boundaries, Interface rules.
 
+mod batch;
 mod call;
 mod constants;
 mod diagnosis;
@@ -20,6 +21,7 @@ mod plan;
 mod records;
 mod text;
 
+pub use batch::*;
 pub use call::{spielorders_cancel_new, spielorders_cancel_release, spielorders_cancel_request};
 pub use constants::*;
 pub use diagnosis::*;

@@ -79,6 +79,8 @@ pub enum Failure {
     PackageAccessDenied(Box<OperationFailedProjection>),
     /// A filesystem operation failed for any other reason.
     PackageOperationFailed(Box<OperationFailedProjection>),
+    /// The filesystem holding the Package cannot perform an operation a change needs.
+    FilesystemUnsupported(Box<OperationFailedProjection>),
 
     // A validation verdict: some finding carries error severity. The detail is the
     // diagnosis that found it.
@@ -155,6 +157,9 @@ pub enum Failure {
         vendor_id: String,
         orders: Vec<crate::readme::Location>,
     },
+    /// A batch holds edits to existing Orders and Vendors and new Vendors, and this change
+    /// is none of those.
+    NotBatchable,
     /// The Package has no value of this field spelled so.
     UnknownValue {
         field: String,
@@ -385,6 +390,7 @@ impl Failure {
             Self::DamagedPackage(..) => "damaged_package",
             Self::PackageAccessDenied(..) => "package_access_denied",
             Self::PackageOperationFailed(..) => "package_operation_failed",
+            Self::FilesystemUnsupported(..) => "filesystem_unsupported",
             Self::PackageInvalid(..) => "package_invalid",
             Self::OrderInvalid(..) => "order_invalid",
             Self::Cancelled => "cancelled",
@@ -403,6 +409,7 @@ impl Failure {
             Self::VendorNameInUse { .. } => "vendor_name_in_use",
             Self::VendorReferenced { .. } => "vendor_referenced",
             Self::UnknownValue { .. } => "unknown_value",
+            Self::NotBatchable => "not_batchable",
             Self::ValueInUse { .. } => "value_in_use",
             Self::BlankValue { .. } => "blank_value",
             Self::OrderIdentityInUse { .. } => "order_identity_in_use",
@@ -522,6 +529,9 @@ pub enum Warning {
     /// A removed Order's technical locator could not be rewritten at its new path; the
     /// detail is the failed commit.
     LocatorUpdateFailed(Failure),
+    /// A merged Order's entries were merged but what remains of it could not be removed;
+    /// the detail is the failed removal.
+    OrderNotRemoved(Failure),
 }
 
 impl Warning {
@@ -533,6 +543,7 @@ impl Warning {
             Self::RediagnosisUnavailable => "rediagnosis_unavailable",
             Self::StagingCleanupFailed(..) => "staging_cleanup_failed",
             Self::LocatorUpdateFailed(..) => "locator_update_failed",
+            Self::OrderNotRemoved(..) => "order_not_removed",
         }
     }
 }

@@ -38,36 +38,29 @@ const MINIMAL_ORDER: &[u8] = include_bytes!(concat!(
 /// what state the index is in must be able to ask without changing it.
 #[test]
 fn assessing_the_derived_index_distinguishes_every_state_without_writing() {
-    // `current`: the index is deterministic, agrees with the canonical records, and the
-    // change evidence proves nothing has replaced an input since it was written.
+    // `current`: the deterministic index agrees with the canonical records.
     let current = fresh_index_filesystem();
     assert_eq!(assessed(&current), (PackageIndexState::Current, Vec::new()));
 
-    // `stale`: an Order Directory the stored index does not carry. The uncertainty
-    // stands beside the definite reason because the freshness question stops at the
-    // membership difference, before it has compared every input's own evidence.
+    // `stale`: an Order Directory the stored index does not carry.
     let stale = fresh_index_filesystem();
     add_order(&stale);
     assert_eq!(
         assessed(&stale),
         (
             PackageIndexState::Stale,
-            vec![
-                PackageIndexStaleReason::OrderMembershipChanged,
-                PackageIndexStaleReason::ChangeEvidenceUncertain,
-            ]
+            vec![PackageIndexStaleReason::OrderMembershipChanged,]
         )
     );
 
-    // `stale` for a second reason, so the reasons are the answer rather than the state
-    // alone: the Vendor records were replaced after the index was written.
+    // `stale` for a second reason: the Vendor record contains an uncached Vendor.
     let vendors_changed = fresh_index_filesystem();
-    vendors_changed.put_change_evidence("/package/.spielorders/vendors.json", 1, 30);
+    vendors_changed.put_file("/package/.spielorders/vendors.json", br#"{"schema_version":1,"vendors":[{"vendor_id":"11111111-1111-4111-8111-111111111111","name":"Example Supply","contacts":[]}]}"#);
     assert_eq!(
         assessed(&vendors_changed),
         (
             PackageIndexState::Stale,
-            vec![PackageIndexStaleReason::VendorsChanged]
+            vec![PackageIndexStaleReason::VendorsChanged,]
         )
     );
 
@@ -255,19 +248,10 @@ fn assert_wrote_nothing(filesystem: &ScriptedFileSystem) {
     assert_eq!(filesystem.effects(), [], "an assessment writes nothing");
 }
 
-/// A Package with no Orders whose stored index is deterministic, agrees with the
-/// canonical records, and carries change evidence newer than every input.
+/// A Package with no Orders whose deterministic index agrees with canonical records.
 fn fresh_index_filesystem() -> ScriptedFileSystem {
     let filesystem = minimal_package();
     filesystem.put_file("/package/.spielorders/index.json", MINIMAL_INDEX);
-    for path in [
-        "/package/.spielorders/config.toml",
-        "/package/.spielorders/version.json",
-        "/package/.spielorders/vendors.json",
-    ] {
-        filesystem.put_change_evidence(path, 1, 10);
-    }
-    filesystem.put_change_evidence("/package/.spielorders/index.json", 1, 20);
     filesystem
 }
 

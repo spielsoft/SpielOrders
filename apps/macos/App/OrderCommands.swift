@@ -21,6 +21,9 @@ struct OrderCommands: Commands {
             Button("Remove Order") { model.changeOrderDirectory(.remove) }
                 .disabled(!model.canChangeDirectory || model.vendorSheet != nil)
                 .accessibilityIdentifier("order.menu.remove")
+            Button(model.mergeTitle) { model.mergeOrders() }
+                .disabled(!model.canMergeOrders || model.vendorSheet != nil)
+                .accessibilityIdentifier("order.menu.merge")
             Divider()
             Button("Move to Trash…") { model.changeOrderDirectory(.trash) }
                 .disabled(!model.canChangeDirectory || model.vendorSheet != nil)

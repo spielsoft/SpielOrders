@@ -1,0 +1,107 @@
+{
+  "contract": "spielorders.order.merge",
+  "contract_version": 1,
+  "ok": true,
+  "context": {
+    "root": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace"
+  },
+  "data": {
+    "outcome": "committed_with_warning",
+    "committed": true,
+    "operations": [
+      {
+        "kind": "replace_order_record",
+        "path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace/.spielorders/order.json"
+      },
+      {
+        "kind": "discard_merged_entry",
+        "path": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/README.md"
+      },
+      {
+        "kind": "move_order_directory",
+        "path": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace"
+      },
+      {
+        "kind": "refresh_package_index",
+        "path": "<PACKAGE_ROOT>/.spielorders/index.json"
+      }
+    ],
+    "changes": [],
+    "order": {
+      "title": "Laser components",
+      "date_ordered": "2026-08-22",
+      "status": "in_preparation",
+      "vendor": "Tarnwick",
+      "orderer": "Ada Lovelace",
+      "ordering_institution": "Example Institute",
+      "currency": "USD",
+      "project": "Telescope",
+      "order_group": "Summer build",
+      "order_id": "<ID-1>",
+      "directory_name": "2026_08_22_Tarnwick_Laser_components_Ada_Lovelace",
+      "total": "254.5",
+      "damage": null,
+      "vendor_id": "<ID-2>",
+      "directory": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace",
+      "items": [
+        {
+          "position": 1,
+          "description": "Fiber collimator",
+          "quantity": "4",
+          "unit_price": "3",
+          "catalog_number": "F220APC",
+          "total": "12",
+          "notes": null
+        },
+        {
+          "position": 2,
+          "description": "Mirror mount",
+          "quantity": "2",
+          "unit_price": "84.5",
+          "catalog_number": null,
+          "total": "169",
+          "notes": null
+        },
+        {
+          "position": 3,
+          "description": "Post holder",
+          "quantity": "6",
+          "unit_price": "12.25",
+          "catalog_number": null,
+          "total": "73.5",
+          "notes": null
+        }
+      ],
+      "readme": {
+        "state": "present",
+        "path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace/README.md"
+      }
+    },
+    "final_path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace"
+  },
+  "diagnostics": [
+    {
+      "code": "index_refresh_failed",
+      "severity": "warning",
+      "message": "Index refresh failed",
+      "field": null,
+      "reason": null,
+      "position": null,
+      "path": ".spielorders/index.json",
+      "before": null,
+      "after": null
+    },
+    {
+      "code": "index_refresh_failed",
+      "severity": "warning",
+      "message": "Index refresh failed",
+      "field": null,
+      "reason": null,
+      "position": null,
+      "path": ".spielorders/index.json",
+      "before": null,
+      "after": null
+    }
+  ],
+  "error": null
+}

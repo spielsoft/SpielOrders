@@ -13,7 +13,7 @@ use crate::{
     order_reads::{self, OrderRead},
     ports::{
         Cancellation, DirectoryEntry, Effects, FileChangeObservation, FileSystem,
-        FileSystemEntryKind, NewDirectoryRenameOutcome, NewFileLinkOutcome,
+        FileSystemEntryKind, NewFileLinkOutcome, RenameOutcome,
     },
     readme::ReadmeRead,
     vendor_reads::{self, VendorRead},
@@ -156,6 +156,10 @@ impl<F: FileSystem> FileSystem for Cancellable<'_, F> {
         matches!(error, Interrupted::Failed(error) if self.inner.is_access_denied(error))
     }
 
+    fn is_unsupported(&self, error: &Self::Error) -> bool {
+        matches!(error, Interrupted::Failed(error) if self.inner.is_unsupported(error))
+    }
+
     fn read(&self, path: &Path) -> Result<Vec<u8>, Self::Error> {
         self.unless_cancelled(|inner| inner.read(path))
     }
@@ -168,6 +172,18 @@ impl<F: FileSystem> FileSystem for Cancellable<'_, F> {
         self.unless_cancelled(|inner| inner.sync_file(path))
     }
 
+    fn sync_file_contents(&self, path: &Path) -> Result<(), Self::Error> {
+        self.unless_cancelled(|inner| inner.sync_file_contents(path))
+    }
+
+    fn remembered_package(&self, root: &Path) -> Option<crate::canonical::CurrentPackageCandidate> {
+        self.inner.remembered_package(root)
+    }
+
+    fn remember_package(&self, package: &crate::canonical::CurrentPackageCandidate) {
+        self.inner.remember_package(package);
+    }
+
     fn replace_file(&self, source: &Path, destination: &Path) -> Result<(), Self::Error> {
         self.unless_cancelled(|inner| inner.replace_file(source, destination))
     }
@@ -178,6 +194,10 @@ impl<F: FileSystem> FileSystem for Cancellable<'_, F> {
 
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, Self::Error> {
         self.unless_cancelled(|inner| inner.canonicalize(path))
+    }
+
+    fn entry_name(&self, path: &Path) -> Result<Option<std::ffi::OsString>, Self::Error> {
+        self.unless_cancelled(|inner| inner.entry_name(path))
     }
 
     fn symlink_metadata(&self, path: &Path) -> Result<Option<FileSystemEntryKind>, Self::Error> {
@@ -208,11 +228,7 @@ impl<F: FileSystem> FileSystem for Cancellable<'_, F> {
         self.unless_cancelled(|inner| inner.link_new_file(source, destination))
     }
 
-    fn rename_new_directory(
-        &self,
-        source: &Path,
-        destination: &Path,
-    ) -> Result<NewDirectoryRenameOutcome, Self::Error> {
-        self.unless_cancelled(|inner| inner.rename_new_directory(source, destination))
+    fn rename_new(&self, source: &Path, destination: &Path) -> Result<RenameOutcome, Self::Error> {
+        self.unless_cancelled(|inner| inner.rename_new(source, destination))
     }
 }

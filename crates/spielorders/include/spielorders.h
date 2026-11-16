@@ -94,6 +94,9 @@ typedef const char *_Nullable SpielordersOptionalPathBytes;
 // The `flags` bit of a Vendor list call that includes Hidden Vendors.
 #define SPIELORDERS_LIST_INCLUDE_HIDDEN 2
 
+// A batch of record changes, holding the Package as its changes so far leave it.
+typedef struct Batch Batch;
+
 typedef struct SpielordersDiagnosisData SpielordersDiagnosisData;
 
 typedef struct SpielordersDraftData SpielordersDraftData;
@@ -128,10 +131,10 @@ typedef struct SpielordersPackage {
   struct SpielordersPackageData *_Nonnull data;
 } SpielordersPackage;
 
-// A diagnosis of a whole Package or of one Order Directory, healthy or damaged.
-typedef struct SpielordersDiagnosis {
-  struct SpielordersDiagnosisData *_Nonnull data;
-} SpielordersDiagnosis;
+// Record changes planned one after another against one load of a Package.
+typedef struct SpielordersBatch {
+  struct Batch *_Nonnull data;
+} SpielordersBatch;
 
 // A list of failures, warnings, and findings. Read it with the
 // `spielorders_entries_*` accessors, each of which reads a NULL Entries as empty.
@@ -139,20 +142,25 @@ typedef struct SpielordersEntries {
   struct SpielordersEntriesData *_Nonnull data;
 } SpielordersEntries;
 
-// A member of one of the `SPIELORDERS_*` constant families, or -1 for none.
-typedef int32_t SpielordersConstant;
-
 // An editor's draft of one Order, one Vendor, or one file's text. Use it from one thread
 // at a time. Its strings live until the next call that changes it.
 typedef struct SpielordersDraft {
   struct SpielordersDraftData *_Nonnull data;
 } SpielordersDraft;
 
+// A member of one of the `SPIELORDERS_*` constant families, or -1 for none.
+typedef int32_t SpielordersConstant;
+
 // A validated change that has written nothing: its operations, the changes it makes to
 // its record, and the evidence its commit re-checks.
 typedef struct SpielordersPlan {
   struct SpielordersPlanData *_Nonnull data;
 } SpielordersPlan;
+
+// A diagnosis of a whole Package or of one Order Directory, healthy or damaged.
+typedef struct SpielordersDiagnosis {
+  struct SpielordersDiagnosisData *_Nonnull data;
+} SpielordersDiagnosis;
 
 // A fresh read of one healthy Order: its facts, its Item rows, and its README.
 typedef struct SpielordersOrder {
@@ -301,6 +309,9 @@ typedef struct SpielordersReport {
 
 // `package_operation_failed`. A filesystem operation failed for any other reason.
 #define SPIELORDERS_FAILURE_PACKAGE_OPERATION_FAILED 1005
+
+// `filesystem_unsupported`. The filesystem holding the Package cannot perform an operation a change needs, such as moving an entry without replacing one that may appear at its destination.
+#define SPIELORDERS_FAILURE_FILESYSTEM_UNSUPPORTED 1085
 
 // `package_invalid`.
 #define SPIELORDERS_FAILURE_PACKAGE_INVALID 1006
@@ -536,6 +547,9 @@ typedef struct SpielordersReport {
 // `blank_value`. A value is required and blank.
 #define SPIELORDERS_FAILURE_BLANK_VALUE 1083
 
+// `not_batchable`. A batch holds edits to existing Orders and Vendors and new Vendors, and this change is none of those.
+#define SPIELORDERS_FAILURE_NOT_BATCHABLE 1084
+
 // What a committed change warns of beside its result: an entry code.
 // `index_refresh_failed`. The derived Package Index could not be refreshed after the commit.
 #define SPIELORDERS_WARNING_INDEX_REFRESH_FAILED 2000
@@ -551,6 +565,9 @@ typedef struct SpielordersReport {
 
 // `locator_update_failed`. A removed Order's technical locator could not be rewritten at its new path; the detail is the failed commit.
 #define SPIELORDERS_WARNING_LOCATOR_UPDATE_FAILED 2004
+
+// `order_not_removed`. A merged Order's entries were merged but what remains of it could not be removed; the detail is the failed removal.
+#define SPIELORDERS_WARNING_ORDER_NOT_REMOVED 2006
 
 // What a Package load, a validation, or a diagnosis found: an entry code.
 // `configuration_path_invalid`.
@@ -922,6 +939,12 @@ typedef struct SpielordersReport {
 // `replace_file`. Agent provisioning replaces a guidance file that differs from the current one.
 #define SPIELORDERS_OPERATION_REPLACE_FILE 19023
 
+// `move_merged_entry`. A merge moves this entry of a merged Order into the kept Order at the same relative path.
+#define SPIELORDERS_OPERATION_MOVE_MERGED_ENTRY 19024
+
+// `discard_merged_entry`. A merge leaves this entry of a merged Order, whose path the kept Order already holds, to be removed with that Order.
+#define SPIELORDERS_OPERATION_DISCARD_MERGED_ENTRY 19025
+
 // One change a plan makes to a record.
 // `fact`. A fact changes from `before` to `after`; a row of -1 is the record's own fact.
 #define SPIELORDERS_CHANGE_FACT 20000
@@ -1023,6 +1046,55 @@ typedef struct SpielordersReport {
 
 // `query_refused`. It could not look: the query was refused.
 #define SPIELORDERS_PROVIDER_STATE_QUERY_REFUSED 25006
+
+// A new, empty batch over `package` as it was opened.
+SpielordersResult spielorders_package_batch(const struct SpielordersPackage *_Nonnull package,
+                                            struct SpielordersBatch *_Nullable *_Nonnull batch,
+                                            struct SpielordersEntries *_Nullable *_Nullable outcome);
+
+// A draft of the Order at `directory` as `batch` holds it, saved by adding it to the
+// batch. Refuses SPIELORDERS_FAILURE_PRECONDITIONS_CHANGED for a directory that holds no
+// healthy Order of the Package.
+SpielordersResult spielorders_batch_order_draft(const struct SpielordersBatch *_Nonnull batch,
+                                                SpielordersPathBytes directory,
+                                                struct SpielordersDraft *_Nullable *_Nonnull draft,
+                                                struct SpielordersEntries *_Nullable *_Nullable outcome);
+
+// A draft of the Vendor `selector` (SPIELORDERS_VENDOR_SELECTOR_NAME or _ID) and `text`
+// select as `batch` holds it, saved by adding it to the batch.
+SpielordersResult spielorders_batch_vendor_draft(const struct SpielordersBatch *_Nonnull batch,
+                                                 SpielordersConstant selector,
+                                                 SpielordersText text,
+                                                 struct SpielordersDraft *_Nullable *_Nonnull draft,
+                                                 struct SpielordersEntries *_Nullable *_Nullable outcome);
+
+// A draft of a new Vendor in `batch`, saved by adding it to the batch, where it is given
+// its Vendor ID so that later changes in the batch can name it.
+SpielordersResult spielorders_batch_new_vendor_draft(const struct SpielordersBatch *_Nonnull batch,
+                                                     struct SpielordersDraft *_Nullable *_Nonnull draft);
+
+// Plans saving `draft` against the Package as `batch` holds it and, where every rule
+// holds, adds it to the batch; a refused draft leaves the batch unchanged, its entries
+// located by field and row. A batch holds edits to existing Orders and Vendors and new
+// Vendors; any other draft refuses SPIELORDERS_FAILURE_NOT_BATCHABLE.
+SpielordersResult spielorders_batch_add(struct SpielordersBatch *_Nonnull batch,
+                                        const struct SpielordersDraft *_Nonnull draft,
+                                        uint64_t token,
+                                        struct SpielordersEntries *_Nullable *_Nullable outcome);
+
+// How many changes `batch` holds.
+int64_t spielorders_batch_count(const struct SpielordersBatch *_Nonnull batch);
+
+// Plans committing every change `batch` holds as one guarded write of the records they
+// touched, refused at commit when any of those records changed since the batch's
+// Package was opened. spielorders_plan_order_count is how many Orders it rewrites.
+SpielordersResult spielorders_batch_plan(const struct SpielordersBatch *_Nonnull batch,
+                                         uint64_t token,
+                                         struct SpielordersPlan *_Nullable *_Nonnull plan,
+                                         struct SpielordersEntries *_Nullable *_Nullable outcome);
+
+// Frees `batch`. Freeing NULL does nothing.
+void spielorders_batch_free(struct SpielordersBatch *_Nullable batch);
 
 // A new cancellation token: never 0 and never reused. Pass it to calls that take a
 // token, request it from any thread to cancel them, and release it when done.
@@ -1569,7 +1641,8 @@ int64_t spielorders_package_index_reason_count(const struct SpielordersPackage *
 SpielordersConstant spielorders_package_index_reason(const struct SpielordersPackage *_Nonnull package,
                                                      int64_t index);
 
-// Reads the healthy Order at `order_directory` afresh, with the findings local to it.
+// Reads the healthy Order at `order_directory`, with the findings local to it: from
+// `package` as opened while nothing has written to the Package since, otherwise afresh.
 // The read is the evidence a draft of it saves against.
 SpielordersResult spielorders_package_read_order(const struct SpielordersPackage *_Nonnull package,
                                                  SpielordersPathBytes order_directory,
@@ -1630,6 +1703,22 @@ SpielordersResult spielorders_order_plan_remove(const struct SpielordersOrder *_
                                                 uint64_t token,
                                                 struct SpielordersPlan *_Nullable *_Nonnull plan,
                                                 struct SpielordersEntries *_Nullable *_Nullable outcome);
+
+// Plans merging the `count` Orders whose Directories are at `merged` into `order`, in
+// precedence order: `order` is kept, and each merged Order only fills the facts, Items,
+// and directory entries the result still lacks, after which what remains of it is removed
+// into the Removed Orders Directory. Its operations name every entry moved
+// (SPIELORDERS_OPERATION_MOVE_MERGED_ENTRY) and discarded
+// (SPIELORDERS_OPERATION_DISCARD_MERGED_ENTRY) by its path in the merged Order; a caller
+// that confirms discards asks before committing. A merged Order that cannot be removed
+// after its entries moved is SPIELORDERS_WARNING_ORDER_NOT_REMOVED. The report's Order is
+// the kept one.
+SpielordersResult spielorders_order_plan_merge(const struct SpielordersOrder *_Nonnull order,
+                                               SpielordersPathBytes *_Nullable merged,
+                                               int64_t count,
+                                               uint64_t token,
+                                               struct SpielordersPlan *_Nullable *_Nonnull plan,
+                                               struct SpielordersEntries *_Nullable *_Nullable outcome);
 
 // Plans hiding (`hidden` 1) or unhiding (0) `vendor`.
 SpielordersResult spielorders_vendor_plan_hidden(const struct SpielordersVendor *_Nonnull vendor,
@@ -1788,6 +1877,11 @@ SpielordersConstant spielorders_plan_operation_kind(const struct SpielordersPlan
 // The path operation `index` acts on; "" out of range.
 SpielordersPathBytes spielorders_plan_operation_path(const struct SpielordersPlan *_Nonnull plan,
                                                      int64_t index);
+
+// 1 when operation `index` acts on a directory — an entry of a merged Order that is a
+// folder — otherwise 0, including out of range.
+int32_t spielorders_plan_operation_directory(const struct SpielordersPlan *_Nonnull plan,
+                                             int64_t index);
 
 // How many changes `plan` makes to the record its draft edits.
 int64_t spielorders_plan_change_count(const struct SpielordersPlan *_Nonnull plan);

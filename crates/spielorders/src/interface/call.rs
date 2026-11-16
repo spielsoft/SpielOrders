@@ -11,7 +11,7 @@ use crate::{
     Answer, Failure,
     ports::{
         Cancellation, DirectoryEntry, Effects, FileChangeObservation, FileSystem,
-        FileSystemEntryKind, LocalDate, NewDirectoryRenameOutcome, NewFileLinkOutcome,
+        FileSystemEntryKind, LocalDate, NewFileLinkOutcome, RenameOutcome,
     },
 };
 use std::{
@@ -138,6 +138,8 @@ pub extern "C" fn spielorders_cancel_release(token: u64) {
 pub(crate) struct Session {
     cancel: Arc<AtomicBool>,
     wrote: AtomicBool,
+    /// The Package this call last loaded, forgotten at its next write.
+    remembered: std::sync::Mutex<Option<crate::canonical::CurrentPackageCandidate>>,
 }
 
 impl Session {
@@ -150,6 +152,7 @@ impl Session {
         Self {
             cancel,
             wrote: AtomicBool::new(false),
+            remembered: std::sync::Mutex::new(None),
         }
     }
 
@@ -177,6 +180,9 @@ impl Session {
     ) -> Result<T, Interrupted> {
         if self.is_cancelled() {
             return Err(Interrupted::Cancelled);
+        }
+        if writes && let Ok(mut remembered) = self.remembered.lock() {
+            *remembered = None;
         }
         let result = effect(&PlatformFileSystem).map_err(Interrupted::Failed);
         if writes && result.is_ok() {
@@ -224,6 +230,10 @@ impl FileSystem for Session {
         matches!(error, Interrupted::Failed(error) if PlatformFileSystem.is_access_denied(error))
     }
 
+    fn is_unsupported(&self, error: &Interrupted) -> bool {
+        matches!(error, Interrupted::Failed(error) if PlatformFileSystem.is_unsupported(error))
+    }
+
     fn read(&self, path: &Path) -> Result<Vec<u8>, Interrupted> {
         self.effect(false, |fs| fs.read(path))
     }
@@ -236,6 +246,24 @@ impl FileSystem for Session {
         self.effect(false, |fs| fs.sync_file(path))
     }
 
+    fn sync_file_contents(&self, path: &Path) -> Result<(), Interrupted> {
+        self.effect(false, |fs| fs.sync_file_contents(path))
+    }
+
+    fn remembered_package(&self, root: &Path) -> Option<crate::canonical::CurrentPackageCandidate> {
+        let remembered = self.remembered.lock().ok()?;
+        remembered
+            .as_ref()
+            .filter(|package| package.context.root.absolute_path == root)
+            .cloned()
+    }
+
+    fn remember_package(&self, package: &crate::canonical::CurrentPackageCandidate) {
+        if let Ok(mut remembered) = self.remembered.lock() {
+            *remembered = Some(package.clone());
+        }
+    }
+
     fn replace_file(&self, source: &Path, destination: &Path) -> Result<(), Interrupted> {
         self.effect(true, |fs| fs.replace_file(source, destination))
     }
@@ -246,6 +274,10 @@ impl FileSystem for Session {
 
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, Interrupted> {
         self.effect(false, |fs| fs.canonicalize(path))
+    }
+
+    fn entry_name(&self, path: &Path) -> Result<Option<std::ffi::OsString>, Interrupted> {
+        self.effect(false, |fs| fs.entry_name(path))
     }
 
     fn symlink_metadata(&self, path: &Path) -> Result<Option<FileSystemEntryKind>, Interrupted> {
@@ -276,11 +308,7 @@ impl FileSystem for Session {
         self.effect(true, |fs| fs.link_new_file(source, destination))
     }
 
-    fn rename_new_directory(
-        &self,
-        source: &Path,
-        destination: &Path,
-    ) -> Result<NewDirectoryRenameOutcome, Interrupted> {
-        self.effect(true, |fs| fs.rename_new_directory(source, destination))
+    fn rename_new(&self, source: &Path, destination: &Path) -> Result<RenameOutcome, Interrupted> {
+        self.effect(true, |fs| fs.rename_new(source, destination))
     }
 }

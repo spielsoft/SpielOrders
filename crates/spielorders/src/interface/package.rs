@@ -288,7 +288,8 @@ pub extern "C" fn spielorders_package_index_reason(
     })
 }
 
-/// Reads the healthy Order at `order_directory` afresh, with the findings local to it.
+/// Reads the healthy Order at `order_directory`, with the findings local to it: from
+/// `package` as opened while nothing has written to the Package since, otherwise afresh.
 /// The read is the evidence a draft of it saves against.
 #[unsafe(no_mangle)]
 pub extern "C" fn spielorders_package_read_order(
@@ -299,17 +300,11 @@ pub extern "C" fn spielorders_package_read_order(
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
     fallible(outcome, |entries| {
-        let session = Session::new(token);
+        let directory = OrderRef::Directory(order_directory.as_path().to_path_buf());
         let result = package.healthy(entries).and_then(|_| {
-            settle(
-                crate::read_order(
-                    &OrderRef::Directory(order_directory.as_path().to_path_buf()),
-                    &session,
-                ),
-                &session,
-                Subject::Order,
-                entries,
-            )
+            let session = Session::new(token);
+            let answer = crate::read_order(&directory, &session);
+            settle(answer, &session, Subject::Order, entries)
         });
         if let Ok(read) = &result {
             entries.extend(read.diagnostics.iter().map(Entry::finding));
@@ -339,14 +334,10 @@ pub extern "C" fn spielorders_package_read_vendor(
             SPIELORDERS_VENDOR_SELECTOR_NAME => VendorRef::Name(text.to_owned()),
             _ => return deliver(Err(SPIELORDERS_RESULT_BAD_ARGUMENT), vendor),
         };
-        let session = Session::new(token);
         let result = package.healthy(entries).and_then(|_| {
-            settle(
-                crate::read_vendor(package.root(), &named, &session),
-                &session,
-                Subject::Vendor,
-                entries,
-            )
+            let session = Session::new(token);
+            let answer = crate::read_vendor(package.root(), &named, &session);
+            settle(answer, &session, Subject::Vendor, entries)
         });
         if let Ok(read) = &result {
             entries.extend(read.diagnostics.iter().map(Entry::finding));

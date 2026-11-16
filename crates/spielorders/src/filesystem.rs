@@ -7,7 +7,7 @@
 
 use crate::{
     operations::{FailedOperation, FailedPath},
-    ports::FileSystem,
+    ports::{FileSystem, FileSystemEntryKind},
 };
 use std::{
     collections::BTreeSet,
@@ -92,7 +92,8 @@ pub(crate) struct RollbackFailure<V> {
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct MultiFileReplacementError<V> {
-    pub(crate) failure: MultiFileReplacementFailure<V>,
+    pub(crate) failure: Box<MultiFileReplacementFailure<V>>,
+    pub(crate) cleanup_failures: Vec<FailedOperation>,
     pub(crate) rollback_failures: Vec<RollbackFailure<V>>,
     /// Restorations declined because another writer had since changed the
     /// destination. Empty on every uncontended path.
@@ -141,7 +142,8 @@ where
 
     if !failures.is_empty() {
         return Err(MultiFileReplacementError {
-            failure: MultiFileReplacementFailure::InvalidPlan(failures),
+            failure: Box::new(MultiFileReplacementFailure::InvalidPlan(failures)),
+            cleanup_failures: Vec::new(),
             rollback_failures: Vec::new(),
             refused_rollbacks: Vec::new(),
         });
@@ -153,10 +155,11 @@ where
             Ok(contents) => prior_contents.push(contents),
             Err(error) => {
                 return Err(MultiFileReplacementError {
-                    failure: MultiFileReplacementFailure::PriorRead {
+                    failure: Box::new(MultiFileReplacementFailure::PriorRead {
                         destination: replacement.destination.to_path_buf(),
                         error: failed(replacement.destination, &error, filesystem),
-                    },
+                    }),
+                    cleanup_failures: Vec::new(),
                     rollback_failures: Vec::new(),
                     refused_rollbacks: Vec::new(),
                 });
@@ -164,20 +167,62 @@ where
         }
     }
 
+    // Every candidate is staged and handed to the device first, and one full sync then
+    // makes them all durable together, before any destination is taken over: a full
+    // sync drains the device's whole cache, so one per plan does what one per file did.
+    let mut staged = Vec::with_capacity(plan.len());
+    for replacement in plan {
+        match stage_candidate(replacement, filesystem, &validate) {
+            Ok(staging) => staged.push(staging),
+            Err(error) => {
+                let cleanup_failures = remove_stages(&staged, filesystem);
+                let destination = replacement.destination.to_path_buf();
+                return Err(MultiFileReplacementError {
+                    failure: Box::new(MultiFileReplacementFailure::Replacement {
+                        destination,
+                        error,
+                    }),
+                    cleanup_failures,
+                    rollback_failures: Vec::new(),
+                    refused_rollbacks: Vec::new(),
+                });
+            }
+        }
+    }
+    if let Some(last) = staged.last()
+        && let Err(error) = filesystem.sync_file(last)
+    {
+        let failure = ValidatedReplacementError {
+            failure: ValidatedReplacementFailure::Durability(failed(last, &error, filesystem)),
+            cleanup_failure: None,
+        };
+        let cleanup_failures = remove_stages(&staged, filesystem);
+        return Err(MultiFileReplacementError {
+            failure: Box::new(MultiFileReplacementFailure::Replacement {
+                destination: plan[plan.len() - 1].destination.to_path_buf(),
+                error: failure,
+            }),
+            cleanup_failures,
+            rollback_failures: Vec::new(),
+            refused_rollbacks: Vec::new(),
+        });
+    }
+
     for (operation_index, replacement) in plan.iter().enumerate() {
         // Each destination carries what this operation observed there, so a write by
         // anyone else since that observation is refused rather than overwritten.
-        if let Err(error) = replace_validated_file_expecting(
+        if let Err(error) = promote_stage(
+            &staged[operation_index],
             replacement.destination,
-            replacement.candidate,
             DestinationExpectation::Exactly(
                 replacement
                     .observed
                     .unwrap_or(&prior_contents[operation_index]),
             ),
             filesystem,
-            |bytes| validate(replacement.destination, bytes),
         ) {
+            // The refused stage attempted its own cleanup; later stages were never promoted.
+            let mut cleanup_failures = remove_stages(&staged[operation_index + 1..], filesystem);
             let (rollback_failures, refused_rollbacks) = roll_back(
                 plan,
                 &prior_contents,
@@ -187,12 +232,14 @@ where
             );
             let destination = replacement.destination.to_path_buf();
             let failure = if refused_for_changed_destination(&error) {
+                cleanup_failures.extend(error.cleanup_failure);
                 MultiFileReplacementFailure::DestinationChanged { destination }
             } else {
                 MultiFileReplacementFailure::Replacement { destination, error }
             };
             return Err(MultiFileReplacementError {
-                failure,
+                failure: Box::new(failure),
+                cleanup_failures,
                 rollback_failures,
                 refused_rollbacks,
             });
@@ -200,6 +247,109 @@ where
     }
 
     Ok(())
+}
+
+/// Whether `destination` sits in an ordinary directory rather than one reached through a
+/// link: a record behind a linked directory is not the Package's own, and nothing is ever
+/// written through one.
+fn in_ordinary_directory<F: FileSystem>(destination: &Path, filesystem: &F) -> bool {
+    destination.parent().is_some_and(|parent| {
+        matches!(
+            filesystem.symlink_metadata(parent),
+            Ok(Some(FileSystemEntryKind::Directory))
+        )
+    })
+}
+
+/// Validates `replacement`'s candidate and writes it to its stage, handing its contents
+/// to the device; the stage, or why there is none, cleaned up after itself.
+fn stage_candidate<F, V, ValidationError>(
+    replacement: &FileReplacement<'_>,
+    filesystem: &F,
+    validate: &V,
+) -> Result<PathBuf, ValidatedReplacementError<ValidationError>>
+where
+    F: FileSystem,
+    V: Fn(&Path, &[u8]) -> Result<(), ValidationError>,
+{
+    let staging = staging_path(replacement.destination)
+        .filter(|_| in_ordinary_directory(replacement.destination, filesystem))
+        .ok_or(ValidatedReplacementError {
+            failure: ValidatedReplacementFailure::InvalidDestination,
+            cleanup_failure: None,
+        })?;
+    if let Err(error) = validate(replacement.destination, replacement.candidate) {
+        return Err(ValidatedReplacementError {
+            failure: ValidatedReplacementFailure::CandidateValidation(error),
+            cleanup_failure: None,
+        });
+    }
+    filesystem
+        .write_new(&staging, replacement.candidate)
+        .map_err(|error| ValidatedReplacementError {
+            failure: ValidatedReplacementFailure::StagingWrite(failed(
+                &staging, &error, filesystem,
+            )),
+            cleanup_failure: None,
+        })?;
+    if let Err(error) = filesystem.sync_file_contents(&staging) {
+        return Err(with_cleanup(
+            ValidatedReplacementFailure::Durability(failed(&staging, &error, filesystem)),
+            &staging,
+            filesystem,
+        ));
+    }
+    Ok(staging)
+}
+
+/// Takes `destination` over with the durable `staging`, refusing when the destination no
+/// longer matches what the caller observed; the stage is cleaned up on refusal.
+fn promote_stage<F: FileSystem, V>(
+    staging: &Path,
+    destination: &Path,
+    expected: DestinationExpectation<'_>,
+    filesystem: &F,
+) -> Result<(), ValidatedReplacementError<V>> {
+    match verify_destination(&expected, destination, filesystem) {
+        DestinationVerdict::Satisfied => {}
+        DestinationVerdict::Changed => {
+            return Err(with_cleanup(
+                ValidatedReplacementFailure::DestinationChanged,
+                staging,
+                filesystem,
+            ));
+        }
+        DestinationVerdict::Unreadable(error) => {
+            return Err(with_cleanup(
+                ValidatedReplacementFailure::DestinationUnreadable(error),
+                staging,
+                filesystem,
+            ));
+        }
+    }
+    filesystem
+        .replace_file(staging, destination)
+        .map_err(|error| {
+            with_cleanup(
+                ValidatedReplacementFailure::Replacement(failed(destination, &error, filesystem)),
+                staging,
+                filesystem,
+            )
+        })
+}
+
+/// Removes every unpromoted stage and reports any evidence left behind alongside the
+/// failure that stopped the commit.
+fn remove_stages<F: FileSystem>(stages: &[PathBuf], filesystem: &F) -> Vec<FailedOperation> {
+    stages
+        .iter()
+        .filter_map(|staging| {
+            filesystem
+                .remove_file(staging)
+                .err()
+                .map(|error| failed(staging, &error, filesystem))
+        })
+        .collect()
 }
 
 /// Whether a replacement stopped because the destination no longer matched, rather
@@ -377,10 +527,12 @@ where
     F: FileSystem,
     V: FnOnce(&[u8]) -> Result<(), ValidationError>,
 {
-    let staging = staging_path(destination).ok_or(ValidatedReplacementError {
-        failure: ValidatedReplacementFailure::InvalidDestination,
-        cleanup_failure: None,
-    })?;
+    let staging = staging_path(destination)
+        .filter(|_| in_ordinary_directory(destination, filesystem))
+        .ok_or(ValidatedReplacementError {
+            failure: ValidatedReplacementFailure::InvalidDestination,
+            cleanup_failure: None,
+        })?;
 
     // The candidate is validated before anything is written. A capability that cannot
     // produce a valid candidate is a bug in this code, and it fails here with no

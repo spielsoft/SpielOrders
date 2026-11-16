@@ -1,0 +1,23 @@
+{
+  "contract": "spielorders.order.merge",
+  "contract_version": 1,
+  "ok": false,
+  "context": {
+    "root": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace"
+  },
+  "data": null,
+  "diagnostics": [],
+  "error": {
+    "code": "invalid_facts",
+    "detail": {
+      "severity": "error",
+      "message": "Invalid facts",
+      "field": null,
+      "reason": null,
+      "position": null,
+      "path": null,
+      "before": null,
+      "after": null
+    }
+  }
+}

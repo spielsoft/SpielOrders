@@ -122,6 +122,11 @@ const DECIDED_COMMANDS: &[(&[&str], Disposition)] = &[
         Disposition::Own(ResponseContract::OrderRemove),
     ),
     (
+        &["order", "merge"],
+        Disposition::Own(ResponseContract::OrderMerge),
+    ),
+    (&["apply"], Disposition::Own(ResponseContract::Apply)),
+    (
         &["order", "validate"],
         Disposition::Own(ResponseContract::OrderValidate),
     ),
@@ -420,6 +425,8 @@ fn matrix(contract: ResponseContract) -> [(&'static str, Supply); 5] {
         | ResponseContract::OrderItemRemove
         | ResponseContract::OrderAlign
         | ResponseContract::OrderRemove
+        | ResponseContract::OrderMerge
+        | ResponseContract::Apply
         | ResponseContract::AddOrder
         | ResponseContract::AdoptOrder
         | ResponseContract::AddVendor
@@ -752,6 +759,11 @@ enum Subject {
     /// One Order Directory of that Package. An `order` command's `--root` names the Order
     /// Directory and never the Root above it.
     OrderRoot,
+    /// The Root of that Package, with a file of batch operations named positionally.
+    PackageRootWithOperations,
+    /// One Order Directory of that Package, with its other Order named positionally: the
+    /// Order a merge keeps and the one it merges.
+    OrderRootWithAnotherOrder,
     /// A directory that is not a Package, which is the only subject `init` accepts.
     UnmanagedDirectory,
     /// A Package Root with one unmanaged candidate under its Orders Directory, which the
@@ -883,6 +895,18 @@ fn shape(contract: ResponseContract) -> Shape {
             arguments: &[],
             mutating: true,
         },
+        ResponseContract::Apply => Shape {
+            line: &["apply"],
+            subject: Subject::PackageRootWithOperations,
+            arguments: &[],
+            mutating: true,
+        },
+        ResponseContract::OrderMerge => Shape {
+            line: &["order", "merge"],
+            subject: Subject::OrderRootWithAnotherOrder,
+            arguments: &["--yes"],
+            mutating: true,
+        },
         ResponseContract::OrderRemove => Shape {
             line: &["order", "remove"],
             subject: Subject::OrderRoot,
@@ -944,7 +968,7 @@ fn shape(contract: ResponseContract) -> Shape {
         ResponseContract::VendorMerge => Shape {
             line: &["vendor", "merge"],
             subject: Subject::PackageRootWithAnUnusedVendor,
-            arguments: &["Tarnwick", "Elderglass Optics", "--keep", "Tarnwick"],
+            arguments: &["Tarnwick", "Elderglass Optics"],
             mutating: true,
         },
         ResponseContract::ValueAdd => Shape {
@@ -962,7 +986,7 @@ fn shape(contract: ResponseContract) -> Shape {
         ResponseContract::ValueMerge => Shape {
             line: &["value", "merge"],
             subject: Subject::PackageRoot,
-            arguments: &["project", "Telescope", "--keep", "TeleScope"],
+            arguments: &["project", "TeleScope", "Telescope"],
             mutating: true,
         },
         ResponseContract::ValueDelete => Shape {
@@ -1095,6 +1119,27 @@ fn prepare(contract: ResponseContract, label: &str) -> Prepared {
                 root: directory,
                 package_root: root,
                 positional: None,
+            }
+        }
+        Subject::PackageRootWithOperations => {
+            let (tree, root) = populated_package(label);
+            let operations = crate::support::operations_file(&root);
+            Prepared {
+                _tree: tree,
+                package_root: root.clone(),
+                root,
+                positional: Some(operations),
+            }
+        }
+        Subject::OrderRootWithAnotherOrder => {
+            let (tree, root) = populated_package(label);
+            let directory = order_directory(&root, "Laser_components");
+            let other = order_directory(&root, "Mirror_mounts");
+            Prepared {
+                _tree: tree,
+                root: directory,
+                package_root: root,
+                positional: Some(other),
             }
         }
         Subject::UnmanagedDirectory => {
@@ -1651,6 +1696,12 @@ fn interrupted(contract: ResponseContract) -> Interrupted {
             "a staging name already standing in the candidate is refused while the \
              adoption is planned, so there is no commit left to refuse",
         ),
+        // A merge replaces the kept Order's record before it moves anything, and the Order
+        // these sweeps keep gains the other's Items.
+        ResponseContract::OrderMerge => Interrupted::Refused(Staged::OrderRecord),
+        // A batch writes the Vendor record its new Vendor joins together with the Order
+        // record it edits.
+        ResponseContract::Apply => Interrupted::Refused(Staged::VendorRecord),
         ResponseContract::OrderAlign | ResponseContract::OrderRemove => Interrupted::Unreached(
             "its commit relocates the whole Order Directory intact rather than replacing \
              any record inside it",

@@ -4,7 +4,7 @@
 
 use std::{
     ffi::OsString,
-    io::{self, IsTerminal},
+    io::{self, BufRead, IsTerminal, Write},
 };
 
 /// The process arguments, including the program name clap expects first.
@@ -45,4 +45,26 @@ pub(crate) fn stdout_is_terminal() -> bool {
 /// Whether this process's standard error is an interactive terminal.
 pub(crate) fn stderr_is_terminal() -> bool {
     io::stderr().is_terminal()
+}
+
+/// The answer an interactive caller gives to `question`, asked on standard error and read
+/// from standard input; `None` where either is not a terminal, so nothing is there to ask.
+pub(crate) fn confirm(question: &str) -> Option<bool> {
+    if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
+        return None;
+    }
+    let mut stderr = io::stderr().lock();
+    write!(stderr, "{question} [y/N] ").ok()?;
+    stderr.flush().ok()?;
+    let mut answer = String::new();
+    io::stdin().lock().read_line(&mut answer).ok()?;
+    Some(matches!(answer.trim(), "y" | "Y" | "yes" | "Yes" | "YES"))
+}
+
+/// The text of an operations file, or of standard input for `-` or no file.
+pub(crate) fn operations(file: Option<&std::path::Path>) -> io::Result<String> {
+    match file {
+        Some(path) if path.as_os_str() != "-" => std::fs::read_to_string(path),
+        _ => io::read_to_string(io::stdin()),
+    }
 }

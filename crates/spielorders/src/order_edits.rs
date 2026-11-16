@@ -13,7 +13,7 @@ use crate::vendors::vendor_aggregate;
 use crate::{
     Answer, Failure,
     answer::DraftFailure,
-    canonical::{CurrentPackageCandidate, HealthyOrder, load_package},
+    canonical::{CurrentPackageCandidate, HealthyOrder, Touched, load_package_to_change},
     filesystem::{
         DestinationExpectation, FileReplacement, replace_validated_file_expecting,
         replace_validated_files,
@@ -231,6 +231,11 @@ impl OrderEditPlan {
         self
     }
 
+    /// The new values this edit adds to those the Package keeps.
+    pub(crate) fn additions(&self) -> &StoredValues {
+        &self.additions
+    }
+
     /// Whether committing this plan would change the canonical Order record.
     pub fn changes_canonical_order(&self) -> bool {
         self.facts.document != self.prior_document
@@ -255,7 +260,7 @@ pub(crate) fn plan_order_save<F: FileSystem>(
 /// The plan that rewrites `order` with `assignments` over its stored facts and, where
 /// given, `items` in place of its stored Items; or every rule that broke, the facts' in
 /// adjudication order and then each row's.
-fn edited_order(
+pub(crate) fn edited_order(
     package: &CurrentPackageCandidate,
     order: &HealthyOrder,
     assignments: &Assignments,
@@ -705,6 +710,12 @@ pub(crate) fn resolve_order<F: FileSystem>(
         directory: FailedPath::Unlocated(order_directory.to_path_buf()),
         field: field.map(str::to_owned),
     };
+    // A record reached through a linked metadata directory is not this Order's own.
+    if let Ok(Some(kind)) = filesystem.symlink_metadata(&order_directory.join(".spielorders"))
+        && kind != FileSystemEntryKind::Directory
+    {
+        return Err(damaged_record(None));
+    }
     // A missing, unreadable, wrongly typed, or unparseable record is a damaged record;
     // an edit never repairs or adopts it. Only a failure to observe the path at all
     // remains an operation failure, matching how the Package loader classifies a
@@ -752,7 +763,10 @@ pub(crate) fn resolve_order<F: FileSystem>(
         });
     };
 
-    let package = load_package(&root, filesystem)?;
+    // The Order this resolves is the record a change will rewrite, so it is read from
+    // disk with the Vendor record it may reference, never taken from the index.
+    let changed = Touched::orders([directory.clone()]).with_vendors(true);
+    let package = load_package_to_change(&root, &changed, filesystem)?;
     if let Some(order) = package
         .healthy_orders
         .iter()
@@ -798,7 +812,8 @@ fn commit_edit<F: FileSystem>(
     plan: OrderEditPlan,
     filesystem: &F,
 ) -> Result<OrderEditReport, Failure> {
-    let current = load_package(&plan.root, filesystem)?;
+    let changed = Touched::orders([plan.directory.absolute_path.clone()]).with_vendors(true);
+    let current = load_package_to_change(&plan.root, &changed, filesystem)?;
     let Some(order) = current
         .healthy_orders
         .iter()
@@ -885,7 +900,9 @@ fn commit_edit<F: FileSystem>(
     };
     replacement?;
 
-    let refresh = IndexRefresh::after_commit(&plan.root, filesystem);
+    let touched = Touched::orders([plan.directory.absolute_path.clone()])
+        .with_vendors(crate::mutation::replaces_vendors(&plan.operations));
+    let refresh = IndexRefresh::after_commit(&plan.root, &touched, filesystem);
     Ok(MutationReport::committed(
         OrderEditResult {
             directory: plan.directory.clone(),

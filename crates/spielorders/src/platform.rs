@@ -4,7 +4,7 @@
 //! system calls and nothing else: no OS-native service, so the library ports to another
 //! OS unchanged. The per-OS code here is the durable-write calls the
 //! [durable writes](../../../docs/architecture/durable-writes.md) contract needs: a
-//! full flush and an exclusive directory rename.
+//! full flush and an exclusive rename.
 //!
 //! Decision sources: Effect and adapter boundaries; Durable managed-file writes.
 
@@ -26,13 +26,13 @@
 
 use crate::ports::{
     DirectoryEntry, Effects, FileChangeEvidence, FileChangeObservation, FileSystem,
-    FileSystemEntryKind, LocalDate, NewDirectoryRenameOutcome, NewFileLinkOutcome,
+    FileSystemEntryKind, LocalDate, NewFileLinkOutcome, RenameOutcome,
 };
 use std::{
+    ffi::OsString,
     fs::OpenOptions,
     io::{self, Write},
     path::{Path, PathBuf},
-    time::UNIX_EPOCH,
 };
 
 /// The platform filesystem, as the core's `FileSystem`.
@@ -46,6 +46,10 @@ impl FileSystem for PlatformFileSystem {
 
     fn is_access_denied(&self, error: &Self::Error) -> bool {
         error.kind() == io::ErrorKind::PermissionDenied
+    }
+
+    fn is_unsupported(&self, error: &Self::Error) -> bool {
+        error.kind() == io::ErrorKind::Unsupported
     }
 
     fn read(&self, path: &Path) -> Result<Vec<u8>, Self::Error> {
@@ -62,6 +66,13 @@ impl FileSystem for PlatformFileSystem {
         full_sync(&file)
     }
 
+    /// `fsync`, which on Apple platforms leaves the drive's cache to the next
+    /// `F_FULLFSYNC`; elsewhere it is the full sync itself.
+    fn sync_file_contents(&self, path: &Path) -> Result<(), Self::Error> {
+        let file = OpenOptions::new().read(true).open(path)?;
+        contents_sync(&file)
+    }
+
     fn replace_file(&self, source: &Path, destination: &Path) -> Result<(), Self::Error> {
         std::fs::rename(source, destination)
     }
@@ -72,6 +83,10 @@ impl FileSystem for PlatformFileSystem {
 
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, Self::Error> {
         std::fs::canonicalize(path)
+    }
+
+    fn entry_name(&self, path: &Path) -> Result<Option<OsString>, Self::Error> {
+        entry_name(path)
     }
 
     /// An absent entry is an answer; every other failure is a failure.
@@ -88,26 +103,12 @@ impl FileSystem for PlatformFileSystem {
         }
     }
 
-    /// Modification time as the comparable sequence the derived Package Index proves
-    /// itself current against.
-    ///
-    /// Every observation this adapter makes is one wall-clock modification time of the
-    /// same kind, so they all share one comparison domain and the constant `0` names
-    /// it. Two files on different volumes are still both wall-clock readings; what
-    /// separates comparable evidence from uncertain evidence here is whether a
-    /// timestamp could be read at all, not which volume it came from.
+    /// Status-change time as the comparable sequence the derived Package Index proves
+    /// itself current against, within the device that holds the entry.
     fn observe_file_change(&self, path: &Path) -> Result<FileChangeObservation, Self::Error> {
         match std::fs::symlink_metadata(path) {
             Ok(metadata) => {
-                let evidence = metadata
-                    .modified()
-                    .ok()
-                    .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-                    .map(|since_epoch| FileChangeEvidence::Comparable {
-                        comparison_domain: 0,
-                        sequence: since_epoch.as_nanos(),
-                    })
-                    .unwrap_or(FileChangeEvidence::Uncertain);
+                let evidence = status_change(&metadata);
                 Ok(FileChangeObservation {
                     kind: Some(entry_kind(&metadata.file_type())),
                     evidence,
@@ -163,15 +164,11 @@ impl FileSystem for PlatformFileSystem {
         }
     }
 
-    fn rename_new_directory(
-        &self,
-        source: &Path,
-        destination: &Path,
-    ) -> Result<NewDirectoryRenameOutcome, Self::Error> {
+    fn rename_new(&self, source: &Path, destination: &Path) -> Result<RenameOutcome, Self::Error> {
         match rename_exclusive(source, destination) {
-            Ok(()) => Ok(NewDirectoryRenameOutcome::Renamed),
+            Ok(()) => Ok(RenameOutcome::Renamed),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                Ok(NewDirectoryRenameOutcome::DestinationExists)
+                Ok(RenameOutcome::DestinationExists)
             }
             Err(error) => Err(error),
         }
@@ -266,6 +263,25 @@ fn full_sync(file: &std::fs::File) -> io::Result<()> {
     file.sync_all()
 }
 
+/// Plain `fsync`. The standard library's `sync_all` is `F_FULLFSYNC` on Apple platforms,
+/// which is the full sync this is the weaker sibling of.
+#[cfg(target_vendor = "apple")]
+fn contents_sync(file: &std::fs::File) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+
+    // SAFETY: the descriptor is owned by `file`, which outlives the call.
+    if unsafe { libc::fsync(file.as_raw_fd()) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(target_vendor = "apple"))]
+fn contents_sync(file: &std::fs::File) -> io::Result<()> {
+    file.sync_all()
+}
+
 /// Renames `source` onto an unoccupied `destination` in one filesystem operation,
 /// reporting [`io::ErrorKind::AlreadyExists`] when anything already holds the name.
 ///
@@ -274,7 +290,7 @@ fn full_sync(file: &std::fs::File) -> io::Result<()> {
 /// destroys a directory created inside that window — which is what a user making a
 /// folder at the same name does. An exclusive rename refuses an occupied destination
 /// in the kernel, which is the only form that keeps
-/// [`FileSystem::rename_new_directory`]'s promise.
+/// [`FileSystem::rename_new`]'s promise.
 ///
 /// A filesystem that has no exclusive rename reports [`io::ErrorKind::Unsupported`]
 /// rather than an opaque errno, so it cannot be mistaken for an ordinary publication
@@ -320,7 +336,7 @@ fn rename_exclusive(source: &Path, destination: &Path) -> io::Result<()> {
 fn rename_exclusive(_source: &Path, _destination: &Path) -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
-        "no exclusive directory rename is available on this platform",
+        "no exclusive rename is available on this platform",
     ))
 }
 
@@ -346,10 +362,10 @@ const RENAME_UNSUPPORTED: &[std::ffi::c_int] = &[libc::ENOTSUP, libc::ENOSYS];
 const RENAME_UNSUPPORTED: &[std::ffi::c_int] = &[libc::ENOTSUP, libc::ENOSYS, libc::EINVAL];
 
 #[cfg(target_vendor = "apple")]
-const RENAME_UNSUPPORTED_MESSAGE: &str = "this filesystem has no exclusive directory rename";
+const RENAME_UNSUPPORTED_MESSAGE: &str = "this filesystem has no exclusive rename";
 
 #[cfg(target_os = "linux")]
-const RENAME_UNSUPPORTED_MESSAGE: &str = "this filesystem has no exclusive directory rename, or the rename itself was \
+const RENAME_UNSUPPORTED_MESSAGE: &str = "this filesystem has no exclusive rename, or the rename itself was \
      invalid — this kernel reports both the same way";
 
 #[cfg(any(target_vendor = "apple", target_os = "linux"))]
@@ -394,5 +410,116 @@ fn entry_kind(file_type: &std::fs::FileType) -> FileSystemEntryKind {
     }
 }
 
+/// The entry's status-change time (ctime), comparable only within its device.
+///
+/// Every write, rename, copy, restore, sync, permission change, and timestamp change sets
+/// it to the present, and no ordinary tool sets it back, so a record changed after the
+/// index was written cannot look older than the index. Modification time is not this
+/// evidence: restores, copies, and syncs preserve it.
+#[cfg(unix)]
+fn status_change(metadata: &std::fs::Metadata) -> FileChangeEvidence {
+    use std::os::unix::fs::MetadataExt;
+    match (
+        u128::try_from(metadata.ctime()),
+        u128::try_from(metadata.ctime_nsec()),
+    ) {
+        (Ok(seconds), Ok(nanoseconds)) => FileChangeEvidence::Comparable {
+            comparison_domain: metadata.dev(),
+            sequence: seconds * 1_000_000_000 + nanoseconds,
+        },
+        _ => FileChangeEvidence::Uncertain,
+    }
+}
+
+#[cfg(not(unix))]
+fn status_change(_metadata: &std::fs::Metadata) -> FileChangeEvidence {
+    FileChangeEvidence::Uncertain
+}
+
 #[cfg(test)]
 mod tests;
+
+// The name belongs to the directory entry, not its inode or a symlink's target.
+// ATTR_CMN_FULLPATH is deliberately not requested: Apple documents ambiguous
+// results for hard links there. ATTR_CMN_NAME retains the selected link's name.
+#[cfg(target_vendor = "apple")]
+fn entry_name(path: &Path) -> io::Result<Option<OsString>> {
+    use std::os::unix::ffi::OsStringExt;
+    let path = nul_terminated(path)?;
+    let mut request = libc::attrlist {
+        bitmapcount: libc::ATTR_BIT_MAP_COUNT,
+        reserved: 0,
+        commonattr: libc::ATTR_CMN_NAME,
+        volattr: 0,
+        dirattr: 0,
+        fileattr: 0,
+        forkattr: 0,
+    };
+    let mut buffer = [0u8; 4096];
+    // SAFETY: the request and buffer are writable and live through the call; path
+    // is NUL terminated. NOFOLLOW requests the entry, including a dangling link.
+    let status = unsafe {
+        libc::getattrlist(
+            path.as_ptr(),
+            (&raw mut request).cast(),
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+            libc::FSOPT_NOFOLLOW,
+        )
+    };
+    if status != 0 {
+        let error = io::Error::last_os_error();
+        return if error.kind() == io::ErrorKind::NotFound {
+            Ok(None)
+        } else {
+            Err(error)
+        };
+    }
+    let invalid = || io::Error::new(io::ErrorKind::InvalidData, "invalid directory-entry name");
+    let size = u32::from_ne_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]) as usize;
+    let offset = i32::from_ne_bytes([buffer[4], buffer[5], buffer[6], buffer[7]]);
+    let length = u32::from_ne_bytes([buffer[8], buffer[9], buffer[10], buffer[11]]) as usize;
+    let start = usize::try_from(offset)
+        .ok()
+        .and_then(|offset| offset.checked_add(4))
+        .ok_or_else(invalid)?;
+    let end = start.checked_add(length).ok_or_else(invalid)?;
+    if size > buffer.len() || start < 12 || end > size || length < 2 || buffer[end - 1] != 0 {
+        return Err(invalid());
+    }
+    Ok(Some(OsString::from_vec(buffer[start..end - 1].to_vec())))
+}
+
+// On a case-folding volume (ext4 casefold, or a case-insensitive mount) the dentry,
+// and so procfs, may carry the spelling of the first lookup rather than the name on
+// disk. A merge then plans a differently spelled name as a new entry; its exclusive
+// move into the existing one refuses, and the merge rolls back with nothing lost.
+// This is untested in CI.
+#[cfg(target_os = "linux")]
+fn entry_name(path: &Path) -> io::Result<Option<OsString>> {
+    use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
+    let entry = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+    {
+        Ok(entry) => entry,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    // O_PATH holds the directory entry without reading a file or following its final
+    // symlink. procfs reports this descriptor's entry path, keeping hard-link names.
+    let resolved = std::fs::read_link(format!("/proc/self/fd/{}", entry.as_raw_fd()))?;
+    resolved
+        .file_name()
+        .map(|name| Some(name.to_owned()))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing directory-entry name"))
+}
+
+#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+fn entry_name(_path: &Path) -> io::Result<Option<OsString>> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "directory-entry name lookup is unavailable",
+    ))
+}

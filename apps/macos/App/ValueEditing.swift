@@ -132,14 +132,21 @@ extension DesktopModel {
         }
     }
 
-    /// Merge N Vendors…: asks which Vendor to keep, which gains the others' Contacts and Orders.
-    func mergeVendors(_ ids: [String]) {
+    /// Merge N Vendors…: asks for the Vendors in precedence order, starting with the one the
+    /// detail shows, which the owner selected first, and then the others as listed. The first
+    /// is kept, each later one fills only the facts and Contacts it lacks, and every Order
+    /// using one of them uses it.
+    func mergeVendors(_ ids: Set<String>) {
         if deferNavigation({ [self] in mergeVendors(ids) }) { return }
         guard confirmDiscard(retry: { [self] in mergeVendors(ids) }) else { return }
+        let shown = [selectedVendorID].compactMap { $0 }.filter(ids.contains)
+        let ordered = shown + vendors.map(\.id).filter { ids.contains($0) && !shown.contains($0) }
         changeValues("Couldn’t merge the Vendors") { [self] session, cancellation in
-            try await chooseVendorMerge(ids, title: "Merge \(ids.count) Vendors",
-                                        explanation: "Choose the Vendor to keep. It gains the others’ Contacts, "
-                                            + "and every Order using one of them uses it.",
+            try await chooseVendorMerge(ordered, title: "Merge \(ordered.count) Vendors",
+                                        explanation: "The first Vendor is kept. Each Vendor after it only fills "
+                                            + "what the kept one still lacks: missing facts, and Contacts by Name. "
+                                            + "Every Order using one of them uses the kept Vendor. "
+                                            + "Drag the Vendors to change their order.",
                                         session: session, cancellation: cancellation)
         }
     }
@@ -151,9 +158,10 @@ extension DesktopModel {
         let name = editor.field(SPIELORDERS_VENDOR_FIELD_NAME)
         changeValues("Couldn’t merge the Vendors") { [self] session, cancellation in
             let other = try await session.vendorID(named: name)
-            let explanation = "Another Vendor is already named “\(name)”. Merging the two keeps one of them, "
-                + "which gains the other’s Contacts and Orders."
-            return try await chooseVendorMerge([id, other], kept: 1, title: "Merge with “\(name)”?",
+            let explanation = "Another Vendor is already named “\(name)”. Merging the two keeps the first, "
+                + "which fills what it lacks from the second and gains its Orders. "
+                + "Drag the Vendors to change their order."
+            return try await chooseVendorMerge([other, id], title: "Merge with “\(name)”?",
                                                explanation: explanation, session: session, cancellation: cancellation)
         }
     }
@@ -196,21 +204,26 @@ extension DesktopModel {
         return plans[kept]
     }
 
-    private func chooseVendorMerge(_ ids: [String], kept chosen: Int = 0, title: String, explanation: String,
+    /// Asks for the Vendors `ids` in precedence order, planning each order the owner sets.
+    private func chooseVendorMerge(_ ids: [String], title: String, explanation: String,
                                    session: PackageSession,
                                    cancellation: LibraryCancellation) async throws -> ValueChange? {
-        let vendors = try await listVendors(session)
-        var choices: [MergeChoice] = []
-        var plans: [ValueChange] = []
-        for id in ids {
-            let plan = try await session.planMergingVendors(ids, keeping: id, cancellation: cancellation)
-            plans.append(plan)
-            choices.append(MergeChoice(name: vendors.first { $0.id == id }?.name ?? id, orderCount: plan.orderCount))
+        let change = try await session.planMergingVendors(ids, cancellation: cancellation)
+        let listed = try await listVendors(session)
+        let vendors = ids.compactMap { id in listed.first { $0.id == id } }
+        let planning = Planning()
+        let plan: @MainActor ([VendorRow]) async throws -> VendorMerge = { vendors in
+            let change = try await planning.run { cancellation in
+                try await session.planMergingVendors(vendors.map(\.id), cancellation: cancellation)
+            }
+            return VendorMerge(vendors: vendors, change: change)
         }
-        guard let kept = await dialogs.chooseKept(title, explanation: explanation, choices: choices, chosen: chosen,
-                                                  identifier: "vendor.merge") else { return nil }
-        selectedVendorID = ids[kept]
-        return plans[kept]
+        let initial = VendorMerge(vendors: vendors, change: change)
+        let answer = await dialogs.reviewMerge(of: initial, title: title, explanation: explanation, plan: plan)
+        await planning.finish()
+        guard let merge = answer else { return nil }
+        selectedVendorID = merge.vendors[0].id
+        return merge.change
     }
 
     /// Asks what replaces `subject` in the Orders using it: None where the library accepts

@@ -24,7 +24,7 @@ use crate::{
     },
     ports::{
         DirectoryEntry, FileChangeEvidence, FileChangeObservation, FileSystem, FileSystemEntryKind,
-        NewDirectoryRenameOutcome, NewFileLinkOutcome,
+        NewFileLinkOutcome, RenameOutcome,
     },
     readme::{
         ConfigurationPathKind, ConfigurationPathReason, ConfiguredOrdersDirectoryReason,
@@ -146,6 +146,17 @@ pub struct HealthyOrder {
 }
 
 impl HealthyOrder {
+    /// This Order holding `document` instead, its totals recalculated; `None` for a
+    /// document that does not validate.
+    pub(crate) fn with_document(&self, document: &OrderDocument) -> Option<Self> {
+        let validated = document.validate().ok()?;
+        Some(healthy_order_from_validated(
+            self.paths.clone(),
+            &validated,
+            self.readme_text.clone(),
+        ))
+    }
+
     /// This Order's technical locator, which a healthy Order always carries: being healthy
     /// is the load having followed that locator from this Directory to this Root.
     pub(crate) fn package_root(&self) -> &PackageRoot {
@@ -207,6 +218,39 @@ impl CurrentPackageCandidate {
     /// and case-insensitively.
     pub fn order_groups_of(&self, project: Option<&str>) -> Vec<ReusableValueProjection> {
         self.projections.order_groups_of(project).to_vec()
+    }
+
+    /// Puts `order` in place of the healthy Order at `position`, and `values` in place of
+    /// the kept values, recomputing the value projections only where a value changed.
+    pub(crate) fn replace_order(
+        &mut self,
+        position: usize,
+        order: HealthyOrder,
+        values: StoredValues,
+    ) {
+        let before = &self.healthy_orders[position].document;
+        let values_changed = values != self.values
+            || before.orderer != order.document.orderer
+            || before.ordering_institution != order.document.ordering_institution
+            || before.project != order.document.project
+            || before.order_group != order.document.order_group;
+        self.healthy_orders[position] = order;
+        self.values = values;
+        if values_changed {
+            self.recompute_projections();
+        }
+    }
+
+    /// Puts `vendors` in place of the Package's Vendors.
+    pub(crate) fn replace_vendors(&mut self, vendors: Vec<Vendor>) {
+        self.vendors = vendors;
+    }
+
+    fn recompute_projections(&mut self) {
+        self.projections = crate::values::project(
+            &self.values,
+            self.healthy_orders.iter().map(|order| &order.document),
+        );
     }
 
     /// The Vendor the healthy Order at `order_index` references, Hidden Vendors included.
@@ -660,8 +704,8 @@ fn recognized_staging_destination<'a>(name: &str, expected: &'a [&str]) -> Optio
 /// nothing.
 struct Assessed {
     package: CurrentPackageCandidate,
-    /// The stored index, where it was not proven current and so a rebuild would replace
-    /// it.
+    /// The stored index, where change evidence did not prove it current and so a rebuild
+    /// would replace it.
     replaceable: Option<StoredIndex>,
 }
 
@@ -675,48 +719,48 @@ struct StoredIndex {
 }
 
 /// The Package at `selected_root` with its stored Package Index assessed: from the index
-/// itself where it is proven current, and from the canonical records otherwise.
+/// itself where change evidence proves it current, and from the canonical records
+/// otherwise.
 fn assessed<F: FileSystem>(selected_root: &Path, filesystem: &F) -> Result<Assessed, Failure> {
-    let filesystem = PackageOpenFileSystem::new(filesystem);
-    let mut fast_stale_reasons = Vec::new();
-    if let Some(package) =
-        try_open_current_index(selected_root, &filesystem, &mut fast_stale_reasons)
+    // A Package this call already proved current, with nothing written since, is still
+    // that Package.
+    if refuse_linked_root(selected_root, filesystem).is_ok()
+        && let Ok(root) = filesystem.canonicalize(selected_root)
+        && let Some(package) = filesystem.remembered_package(&root)
+        && package.index.state == PackageIndexState::Current
     {
         return Ok(Assessed {
             package,
             replaceable: None,
         });
     }
-    let mut package = load_package(selected_root, &filesystem)
-        .map_err(|unusable| assessed_without_freshness(unusable, &filesystem))?;
-    let assessment = assess_index(package.index.clone(), &filesystem)
-        .map_err(|failure| Failure::from(failure.under(&package.context.root)))?;
-    let observed_absent = assessment.record.state == PackageIndexState::Missing;
-    package.index = assessment.record;
-    if package.index.state == PackageIndexState::NotAssessed {
-        package.index.stale_reasons = merged_stale_reasons(
-            stale_index_reasons(
-                assessment
-                    .document
-                    .as_ref()
-                    .expect("a valid deterministic index remains available"),
-                &package,
-            ),
-            fast_stale_reasons,
-        );
-        package.index.state = PackageIndexState::Stale;
+    let filesystem = PackageOpenFileSystem::new(filesystem);
+    if let Some(package) = try_open_current_index(selected_root, &filesystem) {
+        return Ok(Assessed {
+            package,
+            replaceable: None,
+        });
     }
+    let package = load_canonical(selected_root, &filesystem)
+        .map_err(|unusable| assessed_without_freshness(unusable, &filesystem))?;
+    let context = package.context.clone();
+    let StoredIndexAssessment {
+        package,
+        stored_bytes,
+        observed_absent,
+    } = assess_stored_index(package, &filesystem)
+        .map_err(|failure| Failure::from(failure.under(&context.root)))?;
     Ok(Assessed {
         package,
         replaceable: Some(StoredIndex {
-            bytes: assessment.bytes,
+            bytes: stored_bytes,
             observed_absent,
         }),
     })
 }
 
-/// The Package at `selected_root`, its derived Package Index rebuilt where the stored one
-/// is not current: the refresh after a committed canonical write.
+/// The Package at `selected_root`, its derived Package Index rebuilt from canonical
+/// records where change evidence does not prove the stored one current.
 pub(crate) fn load_package_and_index<F: FileSystem>(
     selected_root: &Path,
     filesystem: &F,
@@ -725,14 +769,18 @@ pub(crate) fn load_package_and_index<F: FileSystem>(
         mut package,
         replaceable,
     } = assessed(selected_root, filesystem)?;
-    let Some(stored) = replaceable else {
+    let Some(StoredIndex {
+        bytes: stored_bytes,
+        observed_absent,
+    }) = replaceable
+    else {
+        filesystem.remember_package(&package);
         return Ok(PackageLoad::Available(package));
     };
     // A load that could not read an Order README has nothing to cache for it, so it
     // caches nothing: the stored index keeps whatever a load that could read it left
-    // there, and its assessment stands as found. Caching an empty README instead would
-    // turn a momentary read failure into a permanent silent one, because the next load
-    // proves that record current against change evidence.
+    // there, and its assessment stands as found. A failed read is not evidence that the
+    // document is empty, so the projection must not replace its last known text with "".
     let Some(index) = index_document(&package) else {
         return Ok(PackageLoad::Available(package));
     };
@@ -743,7 +791,7 @@ pub(crate) fn load_package_and_index<F: FileSystem>(
     let replacement = replace_validated_file_expecting(
         &index_path,
         &candidate,
-        index_expectation(stored.bytes.as_deref(), stored.observed_absent),
+        index_expectation(stored_bytes.as_deref(), observed_absent),
         filesystem,
         |_| Ok::<(), Never>(()),
     );
@@ -758,6 +806,7 @@ pub(crate) fn load_package_and_index<F: FileSystem>(
         ));
     }
     mark_index_rebuilt(&mut package.index);
+    filesystem.remember_package(&package);
     Ok(PackageLoad::Available(package))
 }
 
@@ -808,10 +857,8 @@ pub(crate) type PackageIndexRebuildReport = MutationReport<()>;
 /// Plans a deliberate replacement of the derived Package Index from healthy canonical
 /// records.
 ///
-/// **The canonical records are the source, never the stored index.** The current-index
-/// path projects a Package *out of* the index, so a rebuild planned from it would rebuild
-/// the index from itself and could never correct one — which is why this takes the
-/// canonical load and asks the freshness question only for the state it reports.
+/// The canonical records are the source, never the stored index. The comparison against
+/// the stored projection supplies the state the rebuild reports.
 ///
 /// Nothing here writes. [`commit_package_index_rebuild`] is what replaces the file, and a
 /// plan that is never committed is the dry run.
@@ -831,14 +878,14 @@ fn plan_index_rebuild<F: FileSystem>(
     // project, and the index is never evidence for what they should have been. The
     // index's own validity is still assessed, because that is what the refusal is about
     // the index of.
-    let package = load_package(selected_root, &filesystem)
+    let package = load_canonical(selected_root, &filesystem)
         .map_err(|unusable| assessed_without_freshness(unusable, &filesystem))?;
     let context = package.context.clone();
     let StoredIndexAssessment {
         package,
         stored_bytes,
         observed_absent,
-    } = assess_stored_index(selected_root, package, &filesystem)
+    } = assess_stored_index(package, &filesystem)
         .map_err(|failure| Failure::from(failure.under(&context.root)))?;
     let Some(document) = index_document(&package) else {
         return Err(Failure::OrderReadmeTextUnavailable(Box::new(package)));
@@ -888,31 +935,6 @@ pub(crate) fn commit_package_index_rebuild<F: FileSystem>(
     .into()
 }
 
-/// Every reason one stored index is stale: what comparing it with the canonical records
-/// found, refined by what the change evidence proved.
-///
-/// **The evidence refines the comparison rather than replacing it.** Comparing content
-/// cannot prove that no input has been rewritten since the index was, so the canonical
-/// comparison always ends in `ChangeEvidenceUncertain`; where the evidence *is*
-/// comparable it names which input changed, and the uncertainty is no longer part of the
-/// answer. One home for that rule, because an open and a rebuild's plan owe the same
-/// reasons about the same Package.
-fn merged_stale_reasons(
-    mut compared: Vec<PackageIndexStaleReason>,
-    evidence: Vec<PackageIndexStaleReason>,
-) -> Vec<PackageIndexStaleReason> {
-    if evidence.is_empty() {
-        return compared;
-    }
-    if !evidence.contains(&PackageIndexStaleReason::ChangeEvidenceUncertain) {
-        compared.retain(|reason| *reason != PackageIndexStaleReason::ChangeEvidenceUncertain);
-    }
-    compared.extend(evidence);
-    compared.sort();
-    compared.dedup();
-    compared
-}
-
 /// One assessment of the stored derived Package Index, having written nothing.
 struct StoredIndexAssessment {
     /// The canonical Package, its index record carrying the assessed state.
@@ -929,7 +951,6 @@ struct StoredIndexAssessment {
 ///
 /// **Nothing here writes**, per Durable managed-file writes.
 fn assess_stored_index<F: FileSystem>(
-    selected_root: &Path,
     mut package: CurrentPackageCandidate,
     filesystem: &F,
 ) -> Result<StoredIndexAssessment, FailedOperation> {
@@ -938,22 +959,15 @@ fn assess_stored_index<F: FileSystem>(
     let stored_bytes = assessment.bytes;
     package.index = assessment.record;
     if package.index.state == PackageIndexState::NotAssessed {
-        let compared = stale_index_reasons(
-            assessment
-                .document
-                .as_ref()
-                .expect("a valid deterministic index remains available"),
-            &package,
-        );
-        // The stored index is a valid, deterministic projection; whether it is *current*
-        // is the freshness question, and the current-index path is the one place that
-        // answers it — it proves every canonical input older than the index rather than
-        // comparing content, which content comparison cannot do.
-        let mut evidence = Vec::new();
-        if try_open_current_index(selected_root, filesystem, &mut evidence).is_some() {
+        let document = assessment
+            .document
+            .as_ref()
+            .expect("a valid deterministic index remains available");
+        if package.damaged_orders.is_empty() && index_document(&package).as_ref() == Some(document)
+        {
             package.index.state = PackageIndexState::Current;
         } else {
-            package.index.stale_reasons = merged_stale_reasons(compared, evidence);
+            package.index.stale_reasons = stale_index_reasons(document, &package);
             package.index.state = PackageIndexState::Stale;
         }
     }
@@ -974,11 +988,70 @@ fn assessed_without_freshness<F: FileSystem>(mut unusable: Failure, filesystem: 
     unusable
 }
 
+/// The Package the stored index proves current, read from it rather than from every
+/// record.
 fn try_open_current_index<F: FileSystem>(
     selected_root: &Path,
     filesystem: &F,
-    stale_reasons: &mut Vec<PackageIndexStaleReason>,
 ) -> Option<CurrentPackageCandidate> {
+    open_index(selected_root, filesystem, &Touched::default()).map(|(package, _)| package)
+}
+
+/// The last index document this process judged valid, with the exact bytes it was read
+/// from, so that the same bytes are not judged again.
+static ASSESSED_INDEX: std::sync::Mutex<Option<(Vec<u8>, IndexDocument)>> =
+    std::sync::Mutex::new(None);
+
+/// The document `bytes` hold, where this process already judged exactly these bytes a
+/// valid index.
+fn remembered_index(bytes: &[u8]) -> Option<IndexDocument> {
+    let remembered = ASSESSED_INDEX.lock().ok()?;
+    let (own, document) = remembered.as_ref()?;
+    (own.as_slice() == bytes).then(|| document.clone())
+}
+
+fn remember_index(bytes: &[u8], document: &IndexDocument) {
+    if let Ok(mut remembered) = ASSESSED_INDEX.lock() {
+        *remembered = Some((bytes.to_vec(), document.clone()));
+    }
+}
+
+/// The records a committed change wrote: the Order Directories it created, rewrote,
+/// moved, or removed, and whether it replaced the Vendor record.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Touched {
+    pub(crate) orders: std::collections::BTreeSet<PathBuf>,
+    pub(crate) vendors: bool,
+}
+
+impl Touched {
+    pub(crate) fn orders(orders: impl IntoIterator<Item = PathBuf>) -> Self {
+        Self {
+            orders: orders.into_iter().collect(),
+            vendors: false,
+        }
+    }
+
+    pub(crate) fn with_vendors(mut self, vendors: bool) -> Self {
+        self.vendors |= vendors;
+        self
+    }
+
+    fn is_empty(&self) -> bool {
+        self.orders.is_empty() && !self.vendors
+    }
+}
+
+/// The Package the stored index and `touched` together prove, with the stored index
+/// bytes: every record `touched` names is read from disk, and every other one must be
+/// proven unchanged since the index was written. `None` wherever anything is in doubt,
+/// including a touched record that is not plainly healthy, so the caller reads every
+/// record instead.
+fn open_index<F: FileSystem>(
+    selected_root: &Path,
+    filesystem: &F,
+    touched: &Touched,
+) -> Option<(CurrentPackageCandidate, Vec<u8>)> {
     refuse_linked_root(selected_root, filesystem).ok()?;
     let root = filesystem.canonicalize(selected_root).ok()?;
     if filesystem
@@ -1034,6 +1107,7 @@ fn try_open_current_index<F: FileSystem>(
         return None;
     }
     let index = assessment.document?;
+    let assessed_bytes = assessment.bytes?;
 
     let vendors_observation = filesystem
         .observe_file_change(&context_without_paths.vendors.absolute_path)
@@ -1041,22 +1115,13 @@ fn try_open_current_index<F: FileSystem>(
     if vendors_observation.kind != Some(FileSystemEntryKind::File) {
         return None;
     }
-    for observation in [config_observation, version_observation] {
-        if let Some(reason) = cutoff_reason(
-            index_observation,
-            observation,
-            PackageIndexStaleReason::ChangeEvidenceUncertain,
-        ) {
-            stale_reasons.push(reason);
-        }
+    if !newer(index_observation, config_observation)
+        || !newer(index_observation, version_observation)
+        || (!touched.vendors && !newer(index_observation, vendors_observation))
+    {
+        return None;
     }
-    if let Some(reason) = cutoff_reason(
-        index_observation,
-        vendors_observation,
-        PackageIndexStaleReason::VendorsChanged,
-    ) {
-        stale_reasons.push(reason);
-    }
+    let stored_bytes = assessed_bytes;
     let tracking_filesystem = InspectionFileSystem::new(filesystem);
     let layout = resolve_package_layout(&root, &config, &tracking_filesystem).ok()?;
     let layout = discover_order_direct_children(layout, &tracking_filesystem).ok()?;
@@ -1073,6 +1138,11 @@ fn try_open_current_index<F: FileSystem>(
         .map(|entry| (relative_path(&root, &entry.path), entry.path.to_path_buf()))
         .collect::<Vec<_>>();
     candidate_paths.sort_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
+    let touched_paths = touched
+        .orders
+        .iter()
+        .map(|directory| relative_path(&root, directory))
+        .collect::<std::collections::BTreeSet<_>>();
     let indexed_paths = index
         .orders
         .iter()
@@ -1081,10 +1151,12 @@ fn try_open_current_index<F: FileSystem>(
     if indexed_paths
         .iter()
         .copied()
+        .filter(|path| !touched_paths.contains(*path))
         .collect::<std::collections::BTreeSet<_>>()
         != candidate_paths
             .iter()
             .map(|(relative, _)| relative.as_str())
+            .filter(|path| !touched_paths.contains(*path))
             .collect::<std::collections::BTreeSet<_>>()
     {
         return None;
@@ -1103,42 +1175,50 @@ fn try_open_current_index<F: FileSystem>(
     }
 
     for (_, order_directory) in &candidate_paths {
+        // A record reached through a linked metadata directory is not this Order's own.
+        if filesystem
+            .symlink_metadata(&order_directory.join(".spielorders"))
+            .ok()?
+            != Some(FileSystemEntryKind::Directory)
+        {
+            return None;
+        }
         let paths = order_paths(&root, order_directory);
+        if touched_paths.contains(&relative_path(&root, order_directory)) {
+            continue;
+        }
         let order_observation = filesystem
             .observe_file_change(&paths.order.absolute_path)
             .ok()?;
         if order_observation.kind != Some(FileSystemEntryKind::File) {
             return None;
         }
-        if let Some(reason) = cutoff_reason(
-            index_observation,
-            order_observation,
-            PackageIndexStaleReason::OrderMetadataChanged,
-        ) {
-            stale_reasons.push(reason);
+        if !newer(index_observation, order_observation) {
+            return None;
         }
         let readme_observation = filesystem
             .observe_file_change(&paths.readme.location.absolute_path)
             .ok()?;
         match readme_observation.kind {
-            None | Some(FileSystemEntryKind::File) => {
-                if let Some(reason) = cutoff_reason(
-                    index_observation,
-                    readme_observation,
-                    PackageIndexStaleReason::OrderReadmeChanged,
-                ) {
-                    stale_reasons.push(reason);
+            Some(FileSystemEntryKind::File) => {
+                if !newer(index_observation, readme_observation) {
+                    return None;
+                }
+            }
+            // An absent README has no status of its own. Its Order Directory's does: an
+            // entry added, removed, or renamed there since the index was written makes
+            // the directory newer, so an older directory proves the README still absent.
+            None => {
+                let directory = filesystem.observe_file_change(order_directory).ok()?;
+                if directory.kind != Some(FileSystemEntryKind::Directory)
+                    || !newer(index_observation, directory)
+                {
+                    return None;
                 }
             }
             Some(_) => return None,
         }
     }
-    stale_reasons.sort();
-    stale_reasons.dedup();
-    if !stale_reasons.is_empty() {
-        return None;
-    }
-
     let mut package_diagnostics = layout
         .direct_children
         .iter()
@@ -1155,9 +1235,35 @@ fn try_open_current_index<F: FileSystem>(
         }]
     };
     sort_diagnostic_groups(&mut diagnostic_groups);
-    let healthy_orders = index
+    let (vendors, values) = if touched.vendors {
+        let document = VendorsDocument::from_json_bytes(
+            &filesystem
+                .read(&context_without_paths.vendors.absolute_path)
+                .ok()?,
+        )
+        .ok()?;
+        let validated = PackageMetadata::new(&[], &document).validate().ok()?;
+        let normalized = validated.vendors().clone();
+        (normalized.vendors, normalized.values)
+    } else {
+        (index.vendors, index.values)
+    };
+    let mut healthy_orders = Vec::new();
+    for (relative, order_directory) in &candidate_paths {
+        if touched_paths.contains(relative) {
+            healthy_orders.push(touched_order(
+                &root,
+                &layout.orders_directory,
+                order_directory,
+                &vendors,
+                filesystem,
+            )?);
+        }
+    }
+    let untouched = index
         .orders
         .iter()
+        .filter(|entry| !touched_paths.contains(entry.order_directory.as_str()))
         .map(|entry| {
             let order_directory = root.join(entry.order_directory.as_str());
             let validated = entry
@@ -1174,52 +1280,155 @@ fn try_open_current_index<F: FileSystem>(
             )
         })
         .collect::<Vec<_>>();
-    Some(current_package_candidate(
-        context,
-        healthy_orders,
-        Vec::new(),
-        index.vendors,
-        index.values,
-        diagnostic_groups,
-        PackageIndexRecord {
-            location: context_without_paths.index,
-            state: PackageIndexState::Current,
-            malformed_reasons: Vec::new(),
-            stale_reasons: Vec::new(),
-        },
+    healthy_orders.extend(untouched);
+    if !touched.is_empty() {
+        // The records read here join the proven ones only as a valid Package would hold
+        // them: one Order per identity, and every Vendor Reference resolving.
+        let identities = healthy_orders
+            .iter()
+            .map(|order| order.document.order_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let references_resolve =
+            healthy_orders.iter().all(|order| {
+                order.document.vendor_id.as_ref().is_none_or(|vendor_id| {
+                    vendors.iter().any(|vendor| vendor.vendor_id == *vendor_id)
+                })
+            });
+        if identities.len() != healthy_orders.len() || !references_resolve {
+            return None;
+        }
+        sort_healthy_orders(&mut healthy_orders);
+    }
+    Some((
+        current_package_candidate(
+            context,
+            healthy_orders,
+            Vec::new(),
+            vendors,
+            values,
+            diagnostic_groups,
+            PackageIndexRecord {
+                location: context_without_paths.index,
+                state: PackageIndexState::Current,
+                malformed_reasons: Vec::new(),
+                stale_reasons: Vec::new(),
+            },
+        ),
+        stored_bytes,
     ))
 }
 
-fn cutoff_reason(
-    index: FileChangeObservation,
-    input: FileChangeObservation,
-    changed_reason: PackageIndexStaleReason,
-) -> Option<PackageIndexStaleReason> {
-    match (index.evidence, input.evidence) {
-        (
-            FileChangeEvidence::Comparable {
-                comparison_domain: index_domain,
-                sequence: index_sequence,
-            },
-            FileChangeEvidence::Comparable {
-                comparison_domain: input_domain,
-                sequence: input_sequence,
-            },
-        ) if index_domain == input_domain && index_sequence > input_sequence => None,
-        (
-            FileChangeEvidence::Comparable {
-                comparison_domain: index_domain,
-                sequence: index_sequence,
-            },
-            FileChangeEvidence::Comparable {
-                comparison_domain: input_domain,
-                sequence: input_sequence,
-            },
-        ) if index_domain == input_domain && input_sequence > index_sequence => {
-            Some(changed_reason)
-        }
-        _ => Some(PackageIndexStaleReason::ChangeEvidenceUncertain),
+/// The Order at `order_directory`, read from its records, where it is plainly healthy: its
+/// record valid, its locator resolving to `root` from a direct child of the Orders
+/// Directory, its Vendor Reference resolving, and its README readable without findings.
+fn touched_order<F: FileSystem>(
+    root: &Path,
+    orders_directory: &Path,
+    order_directory: &Path,
+    vendors: &[Vendor],
+    filesystem: &F,
+) -> Option<HealthyOrder> {
+    let paths = order_paths(root, order_directory);
+    if filesystem
+        .symlink_metadata(&paths.order.absolute_path)
+        .ok()?
+        != Some(FileSystemEntryKind::File)
+    {
+        return None;
     }
+    let order =
+        OrderDocument::from_json_bytes(&filesystem.read(&paths.order.absolute_path).ok()?).ok()?;
+    let validated = order.validate().ok()?;
+    let resolved = filesystem.canonicalize(order_directory).ok()?;
+    let PackageRootLocator::Spelled(locator) = &validated.order().package_root else {
+        return None;
+    };
+    if resolved.parent() != Some(orders_directory)
+        || !locator_resolves_to_root(&resolved, locator, root)
+    {
+        return None;
+    }
+    if validated
+        .order()
+        .vendor_id
+        .as_ref()
+        .is_some_and(|vendor_id| !vendors.iter().any(|vendor| vendor.vendor_id == *vendor_id))
+    {
+        return None;
+    }
+    let readme = read_document(&paths.readme, filesystem).ok()?;
+    if !readme.diagnostics.is_empty() {
+        return None;
+    }
+    let text = readme.text?;
+    Some(healthy_order_from_validated(paths, &validated, Some(text)))
+}
+
+/// The Package at `root` after a committed change that wrote the records `touched`
+/// names, with its derived index updated from those records alone where every other
+/// record is proven unchanged, and otherwise rebuilt as [`load_package_and_index`]
+/// rebuilds it.
+pub(crate) fn load_package_and_refresh_index<F: FileSystem>(
+    root: &Path,
+    touched: &Touched,
+    filesystem: &F,
+) -> Result<PackageLoad, Failure> {
+    if touched.is_empty() {
+        return load_package_and_index(root, filesystem);
+    }
+    let cached = PackageOpenFileSystem::new(filesystem);
+    let Some((mut package, stored)) = open_index(root, &cached, touched) else {
+        return load_package_and_index(root, filesystem);
+    };
+    let Some(index) = index_document(&package) else {
+        return load_package_and_index(root, filesystem);
+    };
+    let index_path = package.context.index.absolute_path.clone();
+    let candidate = index
+        .to_json_bytes()
+        .expect("validated canonical facts serialize as metadata version 1");
+    if candidate == stored {
+        filesystem.remember_package(&package);
+        return Ok(PackageLoad::Available(package));
+    }
+    if let Err(error) = replace_validated_file_expecting(
+        &index_path,
+        &candidate,
+        DestinationExpectation::Exactly(&stored),
+        filesystem,
+        |_| Ok::<(), Never>(()),
+    ) {
+        let failure =
+            Failure::of_replacement(&package.context.root.absolute_path, &index_path, error);
+        return Ok(PackageLoad::PackageIndexReplacementFailed(
+            IndexReplacementFailedProjection {
+                canonical_evidence: package,
+                failure,
+            },
+        ));
+    }
+    mark_index_rebuilt(&mut package.index);
+    filesystem.remember_package(&package);
+    Ok(PackageLoad::Available(package))
+}
+
+/// Whether the evidence proves `input` unchanged since `index` was written: both
+/// comparable in one domain, the index strictly later. Equal, uncertain, or
+/// incomparable evidence proves nothing.
+fn newer(index: FileChangeObservation, input: FileChangeObservation) -> bool {
+    matches!(
+        (index.evidence, input.evidence),
+        (
+            FileChangeEvidence::Comparable {
+                comparison_domain: index_domain,
+                sequence: index_sequence,
+            },
+            FileChangeEvidence::Comparable {
+                comparison_domain: input_domain,
+                sequence: input_sequence,
+            },
+        ) if index_domain == input_domain && index_sequence > input_sequence
+    )
 }
 
 /// The index this Package's canonical facts would be cached as, or `None` when one
@@ -1316,18 +1525,29 @@ fn assess_index<F: FileSystem>(
             });
         }
     };
-    if let Some(observed) = recognizable_version(&bytes, "schema_version")
-        && observed != 1
-    {
-        record.state = PackageIndexState::WrongVersion;
+    // Exactly the bytes of an index this process already judged valid are that index.
+    if let Some(document) = remembered_index(&bytes) {
         return Ok(IndexAssessment {
             record,
             bytes: Some(bytes),
-            document: None,
+            document: Some(document),
         });
     }
     let document = match IndexDocument::from_json_bytes(&bytes) {
         Ok(document) => document,
+        // Only a document this build cannot read can be at another version, so the
+        // untyped look at its version is taken only then.
+        Err(_)
+            if recognizable_version(&bytes, "schema_version")
+                .is_some_and(|observed| observed != 1) =>
+        {
+            record.state = PackageIndexState::WrongVersion;
+            return Ok(IndexAssessment {
+                record,
+                bytes: Some(bytes),
+                document: None,
+            });
+        }
         Err(error) => {
             record.state = PackageIndexState::Malformed;
             record.malformed_reasons = vec![match error.kind() {
@@ -1350,6 +1570,8 @@ fn assess_index<F: FileSystem>(
     } else if document.to_json_bytes().ok().as_deref() != Some(bytes.as_slice()) {
         record.state = PackageIndexState::Malformed;
         record.malformed_reasons = vec![PackageIndexMalformedReason::NonDeterministicSerialization];
+    } else {
+        remember_index(&bytes, &document);
     }
     Ok(IndexAssessment {
         record,
@@ -1380,6 +1602,11 @@ fn stale_index_reasons(
                 .expect("discovered Order paths are established")
         })
         .collect::<std::collections::BTreeSet<_>>();
+    let diagnostics = package
+        .diagnostic_groups
+        .iter()
+        .flat_map(|group| &group.diagnostics)
+        .collect::<Vec<_>>();
     let mut reasons = Vec::new();
     if indexed_paths != discovered_paths {
         reasons.push(PackageIndexStaleReason::OrderMembershipChanged);
@@ -1423,7 +1650,37 @@ fn stale_index_reasons(
             .iter()
             .find(|entry| entry.order_directory.as_str() == path)
             .is_some_and(|entry| entry.order != order.document)
+    }) || package.damaged_orders.iter().any(|order| {
+        let path = order
+            .paths
+            .directory
+            .package_relative_path
+            .as_deref()
+            .expect("discovered Order paths are established");
+        let Some(entry) = index
+            .orders
+            .iter()
+            .find(|entry| entry.order_directory.as_str() == path)
+        else {
+            return false;
+        };
+        order.order_id.as_ref().is_some_and(|id| {
+            *id != entry.order.order_id || order.vendor_id != entry.order.vendor_id
+        }) || diagnostics.iter().any(|diagnostic| {
+            diagnostic.primary_location == order.paths.order
+                && matches!(
+                    diagnostic.code,
+                    DiagnosticCode::ManagedArtifactInvalidEncoding
+                        | DiagnosticCode::ManagedArtifactInvalidShape
+                        | DiagnosticCode::ManagedArtifactInvalidSyntax
+                        | DiagnosticCode::ManagedArtifactWrongVersion
+                        | DiagnosticCode::ManagedArtifactMissing
+                        | DiagnosticCode::OrderSemanticInvalid
+                        | DiagnosticCode::OrderPackageLocatorMismatch
+                )
+        })
     }) {
+        // Invalid bytes cannot agree with the valid Order stored in the index.
         reasons.push(PackageIndexStaleReason::OrderMetadataChanged);
     }
     if package.healthy_orders.iter().any(|order| {
@@ -1447,10 +1704,32 @@ fn stale_index_reasons(
                     .as_deref()
                     .is_some_and(|text| entry.readme != text)
             })
+    }) || diagnostics.iter().any(|diagnostic| {
+        matches!(
+            diagnostic.evidence,
+            DiagnosticEvidence::ReadmeUnavailable {
+                document_kind: ReadmeKind::OrderReadme,
+                reason: crate::readme::ReadmeUnavailableReason::WrongKind
+                    | crate::readme::ReadmeUnavailableReason::InvalidEncoding,
+            }
+        )
     }) {
         reasons.push(PackageIndexStaleReason::OrderReadmeChanged);
     }
-    reasons.push(PackageIndexStaleReason::ChangeEvidenceUncertain);
+    let unknown = diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == DiagnosticCode::ManagedArtifactUnreadable
+            || matches!(
+                diagnostic.evidence,
+                DiagnosticEvidence::ReadmeUnavailable {
+                    document_kind: ReadmeKind::OrderReadme,
+                    reason: crate::readme::ReadmeUnavailableReason::Unreadable
+                        | crate::readme::ReadmeUnavailableReason::AccessDenied,
+                }
+            )
+    });
+    if reasons.is_empty() || unknown {
+        reasons.push(PackageIndexStaleReason::ChangeEvidenceUncertain);
+    }
     reasons
 }
 
@@ -1468,7 +1747,63 @@ struct ExhaustiveInspectionEvidence {
 /// The current candidate at `selected_root`, or why there is none. It loads without
 /// rebuilding the index, per `docs/architecture/durable-writes.md`, which makes it the
 /// Package-load guard every capability consults.
+///
+/// A stored index that change evidence proves current supplies the facts, so the load
+/// reads it instead of every Order record; any doubt reads the records. What it loads
+/// serves a display; a change loads with [`load_package_to_change`].
 pub(crate) fn load_package<F: FileSystem>(
+    selected_root: &Path,
+    filesystem: &F,
+) -> Result<CurrentPackageCandidate, Failure> {
+    // Loading the same Package twice in one call, with nothing written between, finds
+    // the same Package; the seam remembers it until its next write.
+    if refuse_linked_root(selected_root, filesystem).is_ok()
+        && let Ok(root) = filesystem.canonicalize(selected_root)
+        && let Some(package) = filesystem.remembered_package(&root)
+    {
+        return Ok(package);
+    }
+    let cached = PackageOpenFileSystem::new(filesystem);
+    let package = match try_open_current_index(selected_root, &cached) {
+        Some(package) => package,
+        None => load_canonical(selected_root, &cached)?,
+    };
+    filesystem.remember_package(&package);
+    Ok(package)
+}
+
+/// The Package at `selected_root` as a change to the records `changed` names sees it:
+/// those records, and the Vendor record where it names that, are read from disk, and
+/// the rest come from a stored index that change evidence proves current. A stale index
+/// can mislead a display, never a write.
+pub(crate) fn load_package_to_change<F: FileSystem>(
+    selected_root: &Path,
+    changed: &Touched,
+    filesystem: &F,
+) -> Result<CurrentPackageCandidate, Failure> {
+    let cached = PackageOpenFileSystem::new(filesystem);
+    let package = match open_index(selected_root, &cached, changed) {
+        Some((package, _)) => package,
+        None => load_canonical(selected_root, &cached)?,
+    };
+    filesystem.remember_package(&package);
+    Ok(package)
+}
+
+/// The Package at `selected_root` read from every record, for a change that selects the
+/// records it rewrites by what they hold.
+pub(crate) fn load_every_record<F: FileSystem>(
+    selected_root: &Path,
+    filesystem: &F,
+) -> Result<CurrentPackageCandidate, Failure> {
+    let package = load_canonical(selected_root, &PackageOpenFileSystem::new(filesystem))?;
+    filesystem.remember_package(&package);
+    Ok(package)
+}
+
+/// The current candidate at `selected_root` read from every canonical record, never from
+/// the stored index.
+fn load_canonical<F: FileSystem>(
     selected_root: &Path,
     filesystem: &F,
 ) -> Result<CurrentPackageCandidate, Failure> {
@@ -2043,9 +2378,8 @@ fn orders_directory_entry_name_unusable_diagnostic(
 /// What one direct child of the Orders Directory that is not an Order candidate
 /// reports, or `None` when it reports nothing.
 ///
-/// The ordinary load and the current-index fast path both walk the same
-/// classified list and owe the same answer for it, so they read that answer here
-/// rather than each carrying a copy of the mapping.
+/// Classification determines whether a direct child is ignored, diagnosed, or read
+/// as an Order.
 fn unusable_direct_child_diagnostic(
     root: &Path,
     observation: &DirectChildObservation,
@@ -2334,6 +2668,10 @@ impl<F: FileSystem> FileSystem for PackageOpenFileSystem<'_, F> {
         self.inner.is_access_denied(error)
     }
 
+    fn is_unsupported(&self, error: &Self::Error) -> bool {
+        self.inner.is_unsupported(error)
+    }
+
     fn read(&self, path: &Path) -> Result<Vec<u8>, Self::Error> {
         self.inner.read(path)
     }
@@ -2346,6 +2684,18 @@ impl<F: FileSystem> FileSystem for PackageOpenFileSystem<'_, F> {
         self.inner.sync_file(path)
     }
 
+    fn sync_file_contents(&self, path: &Path) -> Result<(), Self::Error> {
+        self.inner.sync_file_contents(path)
+    }
+
+    fn remembered_package(&self, root: &Path) -> Option<CurrentPackageCandidate> {
+        self.inner.remembered_package(root)
+    }
+
+    fn remember_package(&self, package: &CurrentPackageCandidate) {
+        self.inner.remember_package(package);
+    }
+
     fn replace_file(&self, source: &Path, destination: &Path) -> Result<(), Self::Error> {
         self.inner.replace_file(source, destination)
     }
@@ -2356,6 +2706,10 @@ impl<F: FileSystem> FileSystem for PackageOpenFileSystem<'_, F> {
 
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, Self::Error> {
         self.inner.canonicalize(path)
+    }
+
+    fn entry_name(&self, path: &Path) -> Result<Option<std::ffi::OsString>, Self::Error> {
+        self.inner.entry_name(path)
     }
 
     fn symlink_metadata(&self, path: &Path) -> Result<Option<FileSystemEntryKind>, Self::Error> {
@@ -2393,12 +2747,8 @@ impl<F: FileSystem> FileSystem for PackageOpenFileSystem<'_, F> {
         self.inner.link_new_file(source, destination)
     }
 
-    fn rename_new_directory(
-        &self,
-        source: &Path,
-        destination: &Path,
-    ) -> Result<NewDirectoryRenameOutcome, Self::Error> {
-        self.inner.rename_new_directory(source, destination)
+    fn rename_new(&self, source: &Path, destination: &Path) -> Result<RenameOutcome, Self::Error> {
+        self.inner.rename_new(source, destination)
     }
 }
 
@@ -2450,6 +2800,10 @@ impl<F: FileSystem> FileSystem for InspectionFileSystem<'_, F> {
         self.inner.is_access_denied(error)
     }
 
+    fn is_unsupported(&self, error: &Self::Error) -> bool {
+        self.inner.is_unsupported(error)
+    }
+
     fn read(&self, path: &Path) -> Result<Vec<u8>, Self::Error> {
         self.record_failure(path, self.inner.read(path))
     }
@@ -2462,6 +2816,18 @@ impl<F: FileSystem> FileSystem for InspectionFileSystem<'_, F> {
         self.inner.sync_file(path)
     }
 
+    fn sync_file_contents(&self, path: &Path) -> Result<(), Self::Error> {
+        self.inner.sync_file_contents(path)
+    }
+
+    fn remembered_package(&self, root: &Path) -> Option<CurrentPackageCandidate> {
+        self.inner.remembered_package(root)
+    }
+
+    fn remember_package(&self, package: &CurrentPackageCandidate) {
+        self.inner.remember_package(package);
+    }
+
     fn replace_file(&self, source: &Path, destination: &Path) -> Result<(), Self::Error> {
         self.inner.replace_file(source, destination)
     }
@@ -2472,6 +2838,10 @@ impl<F: FileSystem> FileSystem for InspectionFileSystem<'_, F> {
 
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, Self::Error> {
         self.record_failure(path, self.inner.canonicalize(path))
+    }
+
+    fn entry_name(&self, path: &Path) -> Result<Option<std::ffi::OsString>, Self::Error> {
+        self.record_failure(path, self.inner.entry_name(path))
     }
 
     fn symlink_metadata(&self, path: &Path) -> Result<Option<FileSystemEntryKind>, Self::Error> {
@@ -2498,12 +2868,8 @@ impl<F: FileSystem> FileSystem for InspectionFileSystem<'_, F> {
         self.inner.link_new_file(source, destination)
     }
 
-    fn rename_new_directory(
-        &self,
-        source: &Path,
-        destination: &Path,
-    ) -> Result<NewDirectoryRenameOutcome, Self::Error> {
-        self.inner.rename_new_directory(source, destination)
+    fn rename_new(&self, source: &Path, destination: &Path) -> Result<RenameOutcome, Self::Error> {
+        self.inner.rename_new(source, destination)
     }
 }
 

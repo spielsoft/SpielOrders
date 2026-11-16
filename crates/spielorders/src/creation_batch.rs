@@ -205,6 +205,10 @@ pub(crate) fn commit_creation<F: FileSystem>(
                             ));
                         }
                     }
+                    // Linking and unlinking change the status of the file this commit
+                    // created, so each of its names is observed again after them.
+                    let mut tracked_stage = tracked_stage;
+                    tracked_stage.observation = filesystem.observe_file_change(&stage);
                     created_files.push(track_created(
                         operation.path().to_path_buf(),
                         FileSystemEntryKind::File,
@@ -224,6 +228,9 @@ pub(crate) fn commit_creation<F: FileSystem>(
                             created_directories,
                             filesystem,
                         ));
+                    }
+                    if let Some(created) = created_files.last_mut() {
+                        created.observation = filesystem.observe_file_change(&created.path);
                     }
                     refresh_containing_directories(&stage, &mut created_directories, filesystem);
                 }
@@ -405,7 +412,18 @@ fn cleanup_creation<F: FileSystem>(
         },
         StageCleanup::Tracked(stage) => {
             let stage_path = stage.path.clone();
+            let staged = stage.observation.as_ref().ok().copied();
             if remove_tracked(root, stage, filesystem, &mut cleanup_failures) {
+                // A name already linked to the staged file shares its status, which
+                // removing the stage just changed.
+                for file in &mut created_files {
+                    if staging_path(&file.path).as_deref() == Some(stage_path.as_path())
+                        && staged.is_some()
+                        && file.observation.as_ref().ok().copied() == staged
+                    {
+                        file.observation = filesystem.observe_file_change(&file.path);
+                    }
+                }
                 refresh_containing_directories(&stage_path, &mut created_directories, filesystem);
             }
         }

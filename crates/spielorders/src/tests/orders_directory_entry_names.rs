@@ -149,8 +149,8 @@ fn an_entry_of_any_kind_whose_name_cannot_be_expressed_is_reported_by_kind() {
 }
 
 #[test]
-fn the_current_index_fast_path_reports_an_entry_it_cannot_name() {
-    let (_tree, root) = initialized_package("unnamable-fast-path");
+fn indexed_package_reports_unusable_name() {
+    let (_tree, root) = initialized_package("unnamable-index");
     adopted_order(
         &root,
         "2026_08_22_Laser",
@@ -166,16 +166,6 @@ fn the_current_index_fast_path_reports_an_entry_it_cannot_name() {
         panic!("an entry this application cannot name leaves the Package usable")
     };
 
-    // The fast path proves the written index current from change evidence alone. A
-    // canonical rebuild would have read the Order's record, so the absence of that
-    // read is what identifies which path ran.
-    assert!(
-        filesystem
-            .paths(Operation::Read)
-            .iter()
-            .all(|path| !path.ends_with("order.json")),
-        "the canonical path ran instead of the current-index fast path"
-    );
     assert_eq!(package.contents.index.state, PackageIndexState::Current);
     assert_eq!(package.contents.healthy_orders.len(), 1);
     let diagnostics = diagnostics(&package);

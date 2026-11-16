@@ -9,7 +9,7 @@
 
 use crate::{
     Failure,
-    canonical::load_package,
+    canonical::load_every_record,
     filesystem::{FileReplacement, replace_validated_files},
     metadata::{OrderDocument, Vendor, VendorsDocument},
     mutation::{OperationKind, PlannedOperation},
@@ -432,7 +432,7 @@ fn generated_identity_verdict<F: FileSystem>(
     order_id: &str,
     filesystem: &F,
 ) -> GeneratedIdentityVerdict {
-    let package = match load_package(&plan.root, filesystem) {
+    let package = match load_every_record(&plan.root, filesystem) {
         Ok(package) => package,
         // Unmanaged, damaged, and outright failure alike: without a trustworthy view of
         // the Package an identity cannot be shown to be free, so it is refused rather

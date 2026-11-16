@@ -84,6 +84,9 @@ pub const SPIELORDERS_FAILURE_PACKAGE_ACCESS_DENIED: SpielordersConstant =
 /// `package_operation_failed`. A filesystem operation failed for any other reason.
 pub const SPIELORDERS_FAILURE_PACKAGE_OPERATION_FAILED: SpielordersConstant =
     SpielordersConstant(1005);
+/// `filesystem_unsupported`. The filesystem holding the Package cannot perform an operation a change needs, such as moving an entry without replacing one that may appear at its destination.
+pub const SPIELORDERS_FAILURE_FILESYSTEM_UNSUPPORTED: SpielordersConstant =
+    SpielordersConstant(1085);
 /// `package_invalid`.
 pub const SPIELORDERS_FAILURE_PACKAGE_INVALID: SpielordersConstant = SpielordersConstant(1006);
 /// `order_invalid`.
@@ -274,6 +277,8 @@ pub const SPIELORDERS_FAILURE_UNKNOWN_VALUE: SpielordersConstant = SpielordersCo
 pub const SPIELORDERS_FAILURE_VALUE_IN_USE: SpielordersConstant = SpielordersConstant(1082);
 /// `blank_value`. A value is required and blank.
 pub const SPIELORDERS_FAILURE_BLANK_VALUE: SpielordersConstant = SpielordersConstant(1083);
+/// `not_batchable`. A batch holds edits to existing Orders and Vendors and new Vendors, and this change is none of those.
+pub const SPIELORDERS_FAILURE_NOT_BATCHABLE: SpielordersConstant = SpielordersConstant(1084);
 
 /// What a committed change warns of beside its result: an entry code.
 /// `index_refresh_failed`. The derived Package Index could not be refreshed after the commit.
@@ -289,6 +294,8 @@ pub const SPIELORDERS_WARNING_STAGING_CLEANUP_FAILED: SpielordersConstant =
 /// `locator_update_failed`. A removed Order's technical locator could not be rewritten at its new path; the detail is the failed commit.
 pub const SPIELORDERS_WARNING_LOCATOR_UPDATE_FAILED: SpielordersConstant =
     SpielordersConstant(2004);
+/// `order_not_removed`. A merged Order's entries were merged but what remains of it could not be removed; the detail is the failed removal.
+pub const SPIELORDERS_WARNING_ORDER_NOT_REMOVED: SpielordersConstant = SpielordersConstant(2006);
 
 /// What a Package load, a validation, or a diagnosis found: an entry code.
 /// `configuration_path_invalid`.
@@ -602,6 +609,11 @@ pub const SPIELORDERS_OPERATION_PRESERVE_DIRECTORY: SpielordersConstant =
 pub const SPIELORDERS_OPERATION_PRESERVE_FILE: SpielordersConstant = SpielordersConstant(19022);
 /// `replace_file`. Agent provisioning replaces a guidance file that differs from the current one.
 pub const SPIELORDERS_OPERATION_REPLACE_FILE: SpielordersConstant = SpielordersConstant(19023);
+/// `move_merged_entry`. A merge moves this entry of a merged Order into the kept Order at the same relative path.
+pub const SPIELORDERS_OPERATION_MOVE_MERGED_ENTRY: SpielordersConstant = SpielordersConstant(19024);
+/// `discard_merged_entry`. A merge leaves this entry of a merged Order, whose path the kept Order already holds, to be removed with that Order.
+pub const SPIELORDERS_OPERATION_DISCARD_MERGED_ENTRY: SpielordersConstant =
+    SpielordersConstant(19025);
 
 /// One change a plan makes to a record.
 /// `fact`. A fact changes from `before` to `after`; a row of -1 is the record's own fact.
@@ -757,6 +769,10 @@ pub(crate) const NAMES: &[(SpielordersConstant, &CStr)] = &[
     (
         SPIELORDERS_FAILURE_PACKAGE_OPERATION_FAILED,
         c"package_operation_failed",
+    ),
+    (
+        SPIELORDERS_FAILURE_FILESYSTEM_UNSUPPORTED,
+        c"filesystem_unsupported",
     ),
     (SPIELORDERS_FAILURE_PACKAGE_INVALID, c"package_invalid"),
     (SPIELORDERS_FAILURE_ORDER_INVALID, c"order_invalid"),
@@ -965,6 +981,7 @@ pub(crate) const NAMES: &[(SpielordersConstant, &CStr)] = &[
     (SPIELORDERS_FAILURE_UNKNOWN_VALUE, c"unknown_value"),
     (SPIELORDERS_FAILURE_VALUE_IN_USE, c"value_in_use"),
     (SPIELORDERS_FAILURE_BLANK_VALUE, c"blank_value"),
+    (SPIELORDERS_FAILURE_NOT_BATCHABLE, c"not_batchable"),
     (
         SPIELORDERS_WARNING_INDEX_REFRESH_FAILED,
         c"index_refresh_failed",
@@ -985,6 +1002,7 @@ pub(crate) const NAMES: &[(SpielordersConstant, &CStr)] = &[
         SPIELORDERS_WARNING_LOCATOR_UPDATE_FAILED,
         c"locator_update_failed",
     ),
+    (SPIELORDERS_WARNING_ORDER_NOT_REMOVED, c"order_not_removed"),
     (
         SPIELORDERS_FINDING_CONFIGURATION_PATH_INVALID,
         c"configuration_path_invalid",
@@ -1247,6 +1265,14 @@ pub(crate) const NAMES: &[(SpielordersConstant, &CStr)] = &[
     ),
     (SPIELORDERS_OPERATION_PRESERVE_FILE, c"preserve_file"),
     (SPIELORDERS_OPERATION_REPLACE_FILE, c"replace_file"),
+    (
+        SPIELORDERS_OPERATION_MOVE_MERGED_ENTRY,
+        c"move_merged_entry",
+    ),
+    (
+        SPIELORDERS_OPERATION_DISCARD_MERGED_ENTRY,
+        c"discard_merged_entry",
+    ),
     (SPIELORDERS_CHANGE_FACT, c"fact"),
     (SPIELORDERS_CHANGE_ROW_ADDED, c"row_added"),
     (SPIELORDERS_CHANGE_ROW_REMOVED, c"row_removed"),

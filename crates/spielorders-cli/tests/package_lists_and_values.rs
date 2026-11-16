@@ -585,15 +585,7 @@ fn value_mutations_return_the_resulting_values() {
             vec!["Emmy Noether", "Grace Hopper"],
         ),
         (
-            vec![
-                "value",
-                "merge",
-                "orderer",
-                "Emmy Noether",
-                "Grace Hopper",
-                "--keep",
-                "Grace Hopper",
-            ],
+            vec!["value", "merge", "orderer", "Grace Hopper", "Emmy Noether"],
             vec!["Grace Hopper"],
         ),
         (vec!["value", "delete", "orderer", "Grace Hopper"], vec![]),

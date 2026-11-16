@@ -55,7 +55,7 @@ fn failing_at(boundary: CreationBoundary) -> ScriptedFileSystem {
         }
         CreationBoundary::WriteReadme => filesystem.on(Operation::WriteNew).ending_in("README.md"),
         CreationBoundary::SyncReadme => filesystem.on(Operation::SyncFile).ending_in("README.md"),
-        CreationBoundary::CommitDirectory => filesystem.on(Operation::RenameNewDirectory),
+        CreationBoundary::CommitDirectory => filesystem.on(Operation::RenameNew),
         CreationBoundary::CorruptOrderRecord => {
             filesystem
                 .on(Operation::Read)
@@ -68,7 +68,7 @@ fn failing_at(boundary: CreationBoundary) -> ScriptedFileSystem {
             // Delegating after the outside directory lands leaves the collision for
             // the adapter to detect, so no answer here is one it would not give.
             filesystem
-                .on(Operation::RenameNewDirectory)
+                .on(Operation::RenameNew)
                 .once()
                 .preceded_by(|outside| outside.create_directory(&outside.call().path))
                 .proceeds();
@@ -78,7 +78,7 @@ fn failing_at(boundary: CreationBoundary) -> ScriptedFileSystem {
             filesystem
                 .on(Operation::SymlinkMetadata)
                 .ending_in(".spielorders/index.json")
-                .after_any(Operation::RenameNewDirectory)
+                .after_any(Operation::RenameNew)
                 .fails();
             return filesystem;
         }
@@ -107,7 +107,7 @@ fn failing_index_replacement() -> ScriptedFileSystem {
 /// damaged rather than healthy.
 fn vanishing_after_publish(filesystem: ScriptedFileSystem) -> ScriptedFileSystem {
     filesystem
-        .on(Operation::RenameNewDirectory)
+        .on(Operation::RenameNew)
         .once()
         .followed_by(|outside| outside.remove_file(&outside.call().path.join(ORDER_RECORD)))
         .proceeds();

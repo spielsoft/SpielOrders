@@ -234,6 +234,40 @@ int main(int argc, char **argv) {
                                         &other, NULL) == SPIELORDERS_RESULT_CANCELLED,
          "a cancelled read");
   expect(other == NULL, "a cancelled read gives no handle");
+  /* A cancelled addition is absent even if the remaining batch is committed. */
+  spielorders_package_free(package);
+  package = NULL;
+  expect(spielorders_package_open(root, 0, &package, NULL) == SPIELORDERS_RESULT_OK,
+         "opening the current Package for a batch");
+  SpielordersBatch *batch = NULL;
+  SpielordersDraft *cancelled = NULL;
+  expect(spielorders_package_batch(package, &batch, NULL) == SPIELORDERS_RESULT_OK,
+         "creating a batch");
+  expect(spielorders_batch_new_vendor_draft(batch, &cancelled) == SPIELORDERS_RESULT_OK,
+         "a batch Vendor draft");
+  expect(spielorders_draft_set(cancelled, SPIELORDERS_VENDOR_FIELD_NAME,
+                               "Cancelled Supply", NULL) == SPIELORDERS_RESULT_OK,
+         "naming the cancelled Vendor");
+  expect(spielorders_batch_add(batch, cancelled, token, NULL) == SPIELORDERS_RESULT_CANCELLED,
+         "a cancelled batch addition");
+  expect(spielorders_batch_count(batch) == 0, "cancellation leaves the batch empty");
+  expect(spielorders_batch_plan(batch, 0, &plan, NULL) == SPIELORDERS_RESULT_OK,
+         "planning the remaining batch");
+  expect(commit(plan, &report) == SPIELORDERS_RESULT_OK, "committing the remaining batch");
+  spielorders_report_free(report);
+  spielorders_plan_free(plan);
+  spielorders_draft_free(cancelled);
+  spielorders_batch_free(batch);
+  SpielordersPackage *reopened = NULL;
+  SpielordersList *vendors = NULL;
+  expect(spielorders_package_open(root, 0, &reopened, NULL) == SPIELORDERS_RESULT_OK,
+         "reopening after the batch");
+  expect(spielorders_package_vendors(reopened, "Cancelled Supply", 0, -1, 0, 0,
+                                     &vendors, NULL) == SPIELORDERS_RESULT_OK,
+         "reading Vendors after the batch");
+  expect(spielorders_list_count(vendors) == 0, "the cancelled Vendor was not saved");
+  spielorders_list_free(vendors);
+  spielorders_package_free(reopened);
   spielorders_cancel_release(token);
 
   spielorders_order_free(order);

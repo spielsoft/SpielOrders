@@ -187,7 +187,7 @@ fn failing_at(boundary: Boundary) -> ScriptedFileSystem {
             .ending_in(INDEX)
             .fails(),
         Boundary::DirectoryMoveAndUndo => {
-            filesystem.on(Operation::RenameNewDirectory).fails();
+            filesystem.on(Operation::RenameNew).fails();
             filesystem.on(Operation::RemoveDirectory).fails();
         }
     }

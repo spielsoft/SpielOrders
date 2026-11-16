@@ -94,6 +94,22 @@ pub(crate) fn texts<'a>(first: Option<NonNull<Text<'a>>>, count: i64) -> Option<
     texts.iter().map(|text| text.to_str()).collect()
 }
 
+/// The `count` paths a C caller passed as an array beginning at `first`; `None` for a
+/// negative count or a NULL array of some.
+pub(crate) fn paths<'a>(
+    first: Option<NonNull<PathBytes<'a>>>,
+    count: i64,
+) -> Option<Vec<&'a Path>> {
+    let count = usize::try_from(count).ok()?;
+    if count == 0 {
+        return Some(Vec::new());
+    }
+    // SAFETY: the header's contract is that a non-NULL `first` points at `count` paths
+    // valid for the call.
+    let paths = unsafe { std::slice::from_raw_parts(first?.as_ptr(), count) };
+    Some(paths.iter().map(|path| path.as_path()).collect())
+}
+
 impl<'a> From<&'a CStr> for OptionalText<'a> {
     fn from(text: &'a CStr) -> Self {
         Self::new(text)

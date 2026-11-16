@@ -79,6 +79,7 @@ extension DesktopModel {
         if deferNavigation({ [self] in selectOrder(id, focus: focus) }) { return }
         guard !busy, folder != nil,
               confirmDiscard(retry: { [self] in selectOrder(id, focus: focus) }) else { return }
+        multipleSelection = []
         guard let row = orderRow(id) else {
             discardEditors()
             selectedOrderID = nil
@@ -338,6 +339,7 @@ extension DesktopModel {
         if opened.draft.kind == .order {
             orderEditor = editor
             destination = .orders
+            multipleSelection = []
             selectedOrderID = opened.draft.recordID
             orderContext = opened.order
             inspection = opened.orderDetails
