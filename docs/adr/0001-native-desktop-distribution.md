@@ -30,8 +30,9 @@ distribution still needs a GitHub-hosted bootstrap and prebuilt CLI with matchin
 That installer selects the platform and architecture, verifies the downloaded payload's
 checksum before extraction or execution, stages the complete installation, preserves
 unrelated prefix and shell contents, and rolls back a failed publication or PATH check.
-Signing, notarization,
-release assets, and Store submission belong to the release milestone.
+The prebuilt CLI release
+assets and that installer belong to release readiness; app signing, notarization, and
+Store submission belong to the Store release.
 
 An unsandboxed development pass does not establish Store feasibility. An observed
 incompatibility is brought to the owner with evidence; it does not silently change

@@ -38,12 +38,21 @@ decisions govern compatibility. A different frontend alone needs no metadata cha
 | M11 — MVP acceptance | Accepted | M9 and M10 |
 | M12 — Value management | Accepted | M11 |
 | M13 — Bulk performance | Accepted | M12 |
-| M14 — App Store release | Not started | M13 |
+| M14 — Release readiness | Not started | M13 |
+| M15 — App Store release | Not started | M14 |
 
 Native controls and their standard interaction behavior apply throughout the desktop;
 broader visual refinement follows core functionality.
 
-## M14 — App Store release
+## M14 — Release readiness
+
+Outcome: everything short of Store submission is ready to release. A GitHub workflow
+builds the CLI for each supported platform and architecture, with its matching agent
+guidance, and publishes them with checksums as release assets, and a public bootstrap
+installer installs them as [Native desktop distribution](../../docs/adr/0001-native-desktop-distribution.md)
+requires. The desktop's open macOS-convention issues from the design review are settled.
+
+## M15 — App Store release
 
 Outcome: the accepted MVP is packaged, signed, submitted, and distributed through the
 chosen Store channel.
@@ -51,5 +60,3 @@ chosen Store channel.
 Gate: release configuration, entitlements, nested executables, Store materials, and
 submission validation are complete; Apple accepts the release. Functional MVP acceptance
 does not claim Store approval, and Store work is not deferred permission-system design.
-The independent public CLI installer and its matching release assets follow
-[Native desktop distribution](../../docs/adr/0001-native-desktop-distribution.md).
