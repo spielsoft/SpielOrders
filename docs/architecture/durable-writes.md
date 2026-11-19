@@ -2,7 +2,8 @@
 
 Decision sources: [Define the SpielOrders package topology](../../issues/wayfinder/spielorders-product-architecture/tickets/002-package-topology.md) and [Define integrity, validation, and repair boundaries](../../issues/wayfinder/spielorders-product-architecture/tickets/008-integrity-repair.md).
 
-[Core filesystem primitives](../../crates/spielorders/src/filesystem.rs) and their
+[The commit journal](../../crates/spielorders/src/journal.rs), the
+[core filesystem primitives](../../crates/spielorders/src/filesystem.rs), and their
 behavior tests define the implementation. These constraints explain the safety boundary.
 
 ## Validate where trust changes
@@ -28,10 +29,15 @@ single-record semantic edits, exact bytes where text or damaged content is the s
 and observed absence only when absence was actually established. An unreadable existing
 destination is not absent. Comparison uses the same normalized meaning planning used.
 
-Multi-file rollback restores in reverse order only while a destination still contains
-what this operation wrote. Preserve a later writer's work and report the restoration
-failure. Cleanup removes only artifacts the operation created; failures retain their
-locations and remain visible beside the initiating error.
+A commit undoes its completed steps in reverse order: a created entry only while change
+evidence proves it is the one the operation created, and a replaced file only while it
+holds exactly the bytes the operation wrote. A moved entry goes back by a no-replace move,
+which needs only its old name to be free: that move destroys nothing whatever stands at
+the new name, so it asks no proof of ownership. An undo never guesses. On a volume that keeps no comparable change evidence,
+nothing proves a created entry is the operation's own, so the undo removes or restores
+nothing it cannot prove it made and names each entry it left behind instead. Preserve a
+later writer's work; what the undo could not do keeps its location and remains visible
+beside the initiating error.
 
 Atomicity is per file. Handled failures attempt rollback, but process or power interruption
 can leave part of a multi-file operation published.
@@ -44,6 +50,8 @@ rollback failures; do not collapse those different outcomes.
 
 Canonical commit and derived-index refresh are different results. If canonical data
 committed and refresh failed, report a committed warning, not a rejection inviting retry.
+Steps after a commit's last publishing step only tidy up; their failure is a committed
+warning.
 
 A cache cannot invent missing evidence. If a required README exists but its text is
 unavailable, do not replace that fact with an empty cached document. Missing README and
@@ -58,5 +66,7 @@ rollback can mistake a user's directory for its own.
 
 These primitives are not filesystem locking or compare-and-swap. Revalidate immediately
 before effects, preserve concurrent work where detected, and report the remaining limits.
-Whole-directory creation and disposition retain their separate core operation contracts.
+Whole-directory creation and disposition are their own steps in a commit — a no-replace
+directory creation and a no-replace move — never file replacements; their undo follows
+the same ownership rule.
 No file-write abstraction grants authority to inspect Supporting Material.

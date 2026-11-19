@@ -10,14 +10,13 @@ struct CreationBar: View {
         VStack(spacing: 0) {
             Divider()
             HStack {
-                Button(title, systemImage: "plus", action: action)
-                    .labelStyle(.iconOnly)
+                Button(action: action) { IconLabel(title, systemImage: "plus") }
                     .buttonStyle(.borderless)
                     .help(title)
                     .accessibilityIdentifier(identifier)
                 Spacer()
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 12)
             .frame(height: 28)
         }
     }

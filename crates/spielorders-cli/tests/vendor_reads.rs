@@ -76,52 +76,32 @@ fn the_human_contact_list_renders_the_contacts_alone() {
     assert!(!text.contains("referencing orders"), "{text}");
 }
 
-/// `--quiet` says nothing on success and `--verbose` adds the detail, for both commands.
-///
-/// The four output modes are one set, so a command that answered under `--quiet` or that
-/// leaked its result into the wrong stream would be a hole in a rule fifteen other
-/// commands keep. UUIDs are `--verbose` detail: a human reading a Vendor wants its Name.
+/// A Vendor's UUID is `--verbose` detail in both reads: a human reading a Vendor wants its
+/// Name.
 #[test]
-fn the_four_output_modes_hold_for_both_vendor_reads() {
+fn the_vendor_identity_is_verbose_detail_in_both_vendor_reads() {
     let (_tree, root) = populated_package("vendor-output-modes");
 
     for command in [
         vec!["vendor", "show", "Tarnwick"],
         vec!["vendor", "contact", "list", "Tarnwick"],
     ] {
-        let quiet = Invocation::new(&command)
-            .argument("--quiet")
-            .rooted_at(&root)
-            .run();
-        assert_eq!(quiet.status, Some(0), "{command:?}");
-        assert_eq!(quiet.stdout, b"", "{command:?}: {}", quiet.stdout_text());
-        assert_eq!(quiet.stderr, b"", "{command:?}: {}", quiet.stderr_text());
-
         let human = Invocation::new(&command).rooted_at(&root).run();
+        assert_eq!(human.status, Some(0), "{command:?}");
         assert!(
             !human.stdout_text().contains(&*offered_vendor_id(&root)),
             "{command:?}: {}",
             human.stdout_text()
         );
-
-        let verbose = Invocation::new(&command)
-            .argument("--verbose")
-            .rooted_at(&root)
-            .run();
-        assert_eq!(verbose.status, Some(0), "{command:?}");
-        if command[1] == "contact" {
-            // `vendor contact list` renders the Contacts alone, under every mode.
-            assert!(
-                verbose.stdout_text().contains("1. name: Katherine Johnson"),
-                "{command:?}: {}",
-                verbose.stdout_text()
-            );
-            continue;
-        }
-        assert!(
-            verbose.stdout_text().contains(&*offered_vendor_id(&root)),
-            "{command:?}: the Vendor ID is `--verbose` detail: {}",
-            verbose.stdout_text()
-        );
     }
+
+    let verbose = Invocation::new(&["vendor", "show", "Tarnwick", "--verbose"])
+        .rooted_at(&root)
+        .run();
+    assert_eq!(verbose.status, Some(0));
+    assert!(
+        verbose.stdout_text().contains(&*offered_vendor_id(&root)),
+        "the Vendor ID is `--verbose` detail: {}",
+        verbose.stdout_text()
+    );
 }

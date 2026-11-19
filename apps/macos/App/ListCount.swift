@@ -20,3 +20,30 @@ struct ListCount: View {
         return "\(shown) of \(counted)"
     }
 }
+
+/// What a record table shows while it lists nothing: Reload Required while the Package must be
+/// reloaded, that there are none yet, or No Results for a search that matches nothing.
+struct EmptyRecordList: View {
+    @Bindable var model: DesktopModel
+    /// The records before search.
+    let total: Int
+    /// What one row is, such as Order.
+    let noun: String
+    /// How to add one, such as “Add one with + or ⌘N.”
+    let hint: String
+
+    var body: some View {
+        if let reason = model.reloadReason {
+            ReloadRequired(model: model, reason: reason)
+        } else if total == 0 {
+            ContentUnavailableView("No \(noun)s", systemImage: "tray", description: Text(hint))
+        } else if !model.search.text.isEmpty, !model.contents.gathering {
+            ContentUnavailableView {
+                Label("No Results for “\(model.search.text)”", systemImage: "magnifyingglass")
+            } description: {
+                Text("Searched in \(model.search.extent)")
+            }
+            .accessibilityIdentifier("search.noResults")
+        }
+    }
+}

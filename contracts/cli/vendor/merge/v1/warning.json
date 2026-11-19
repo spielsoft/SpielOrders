@@ -18,7 +18,16 @@
         "path": "<PACKAGE_ROOT>/.spielorders/index.json"
       }
     ],
-    "changes": [],
+    "changes": [
+      {
+        "kind": "record_removed",
+        "field": "name",
+        "position": null,
+        "before": "Elderglass Optics",
+        "after": null,
+        "reuse": null
+      }
+    ],
     "vendor": {
       "name": "Tarnwick",
       "phone": "+1 555 0123",

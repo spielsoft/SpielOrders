@@ -8,14 +8,15 @@
 use crate::{
     Answer, Failure, Warning,
     canonical::{CurrentPackageCandidate, HealthyOrder, Touched, load_package_to_change},
-    filesystem::{DestinationExpectation, replace_validated_file_expecting},
-    metadata::OrderDocument,
-    mutation::{IndexRefresh, MutationReport, Never, OperationKind, PlannedOperation},
+    change::PlannedAct,
+    journal::{Journal, ManagedRecord, Subject},
+    metadata::{OrderDocument, OrderItem, Vendor},
+    mutation::{MutationReport, OperationKind},
     operations::{FailedOperation, FailedPath},
-    ports::{Effects, FileSystem, FileSystemEntryKind, RenameOutcome},
+    ports::{Effects, FileSystem, FileSystemEntryKind},
     readme::{Location, located_in_package},
-    removal::{commit_order_removal, plan_order_removal},
-    values::same_value,
+    removal::{self, plan_order_removal},
+    values::same_optional,
 };
 use std::path::{Path, PathBuf};
 
@@ -48,8 +49,22 @@ pub struct OrderMergePlan {
     prior: OrderDocument,
     merged_documents: Vec<OrderDocument>,
     candidate: OrderDocument,
-    pub(crate) entries: Vec<MergeEntry>,
-    pub(crate) operations: Vec<PlannedOperation>,
+    /// The Vendor the kept Order references before the merge, and after it.
+    vendors: [Option<Vendor>; 2],
+    entries: Vec<MergeEntry>,
+    /// Every operation the merge performs, its merged Orders' removals among them.
+    pub(crate) journal: Journal,
+}
+
+impl OrderMergePlan {
+    /// The kept Order's record before the merge fills it, and after, each with the Vendor
+    /// it references.
+    pub(crate) fn records(&self) -> [(&OrderDocument, Option<&Vendor>); 2] {
+        [
+            (&self.prior, self.vendors[0].as_ref()),
+            (&self.candidate, self.vendors[1].as_ref()),
+        ]
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -69,11 +84,12 @@ fn resolved<'a>(
             .healthy_orders
             .iter()
             .find(|order| order.paths.directory.absolute_path == *directory)
-            .ok_or_else(|| Failure::PreconditionsChanged {
-                location: located_in_package(
+            .ok_or_else(|| Failure::OrderNotFound {
+                directory: crate::operations::FailedPath::inside(
                     &package.context.root.absolute_path,
                     directory.clone(),
                 ),
+                root: Some(package.context.root.absolute_path.clone()),
             })?;
         if found
             .iter()
@@ -89,35 +105,53 @@ fn resolved<'a>(
     Ok(found)
 }
 
-/// `kept` with each fact it lacks taken from `merged`, and each of `merged`'s Items it does
-/// not already hold added after its own. An Order Group comes only with its Project, or to
-/// an Order in the same Project.
-fn fill_order(kept: &mut OrderDocument, merged: &OrderDocument) {
+/// `kept` with each fact it lacks taken from `merged`, and each of `merged`'s Items that
+/// the kept Order did not hold before the merge (`original`) added after its own. An Order
+/// Group comes only with its Project, or to an Order in the same Project; an Order gaining
+/// a Project takes that Project's group with it, as an edit changing the Project would
+/// clear its own. Refused where `merged` would add Items priced in another currency.
+fn fill_order(
+    kept: &mut OrderDocument,
+    original: &[OrderItem],
+    merged: &OrderDocument,
+    location: &Location,
+) -> Result<(), Failure> {
     fn fill<T: Clone>(kept: &mut Option<T>, merged: &Option<T>) {
         if kept.is_none() {
             kept.clone_from(merged);
         }
     }
+    let added = merged
+        .items
+        .iter()
+        .filter(|item| !original.contains(item))
+        .cloned()
+        .collect::<Vec<_>>();
+    // Prices are never relabeled, and having no currency is a currency of its own: Items join
+    // only Items priced in the same currency. A result with no Items has no prices, so it
+    // takes the currency of the first Order that brings some, unless it states another; an
+    // Order that brings no Items changes nothing about currency.
+    if !added.is_empty() {
+        let priced = !kept.items.is_empty() || kept.currency.is_some();
+        if priced && kept.currency != merged.currency {
+            return Err(Failure::CurrencyDiffers {
+                location: location.clone(),
+            });
+        }
+        kept.currency.clone_from(&merged.currency);
+    }
     fill(&mut kept.vendor_id, &merged.vendor_id);
     fill(&mut kept.orderer, &merged.orderer);
     fill(&mut kept.ordering_institution, &merged.ordering_institution);
-    fill(&mut kept.currency, &merged.currency);
-    let same_project = match (&kept.project, &merged.project) {
-        (None, None) => true,
-        (Some(kept), Some(merged)) => same_value(kept, merged),
-        _ => false,
-    };
+    let same_project = same_optional(kept.project.as_deref(), merged.project.as_deref());
     if kept.project.is_none() && merged.project.is_some() {
         kept.project.clone_from(&merged.project);
-        fill(&mut kept.order_group, &merged.order_group);
+        kept.order_group.clone_from(&merged.order_group);
     } else if same_project {
         fill(&mut kept.order_group, &merged.order_group);
     }
-    for item in &merged.items {
-        if !kept.items.contains(item) {
-            kept.items.push(item.clone());
-        }
-    }
+    kept.items.extend(added);
+    Ok(())
 }
 
 /// Where an entry already stands in the kept Order as the merge leaves it so far: on disk,
@@ -278,7 +312,12 @@ fn merged<F: FileSystem>(
     let mut moved = Vec::new();
     let mut entries = Vec::new();
     for order in &found[1..] {
-        fill_order(&mut candidate, &order.document);
+        fill_order(
+            &mut candidate,
+            &kept.document.items,
+            &order.document,
+            &order.paths.directory,
+        )?;
         walk(
             root,
             &kept.paths.directory.absolute_path,
@@ -318,44 +357,99 @@ pub(crate) fn plan_order_merge<F: FileSystem>(
         let (candidate, merged_documents, entries) = merged(&package, orders, filesystem)?;
         let root = package.context.root.absolute_path.clone();
         let kept = resolved(&package, orders)?[0];
-        let located = |path: &Path| located_in_package(&root, path.to_path_buf());
-        let mut operations = Vec::new();
-        if candidate != kept.document {
-            operations.push(PlannedOperation::new(
-                OperationKind::ReplaceOrderRecord,
-                kept.paths.order.clone(),
-            ));
-        }
-        for entry in &entries {
-            let kind = match entry.action {
-                EntryAction::Move => OperationKind::MoveMergedEntry,
-                EntryAction::Discard => OperationKind::DiscardMergedEntry,
-            };
-            let mut operation = PlannedOperation::new(kind, located(&entry.from));
-            operation.directory = entry.directory;
-            operations.push(operation);
-        }
+        // Every merged Order must be removable as `order remove` removes one, or the merge
+        // would leave it active beside the Order that now holds its Items and files.
+        let mut removals = Vec::new();
         for directory in &orders[1..] {
-            operations.push(PlannedOperation::new(
-                OperationKind::MoveOrderDirectory,
-                located(directory),
-            ));
+            removals.push(plan_order_removal(directory, filesystem).result?);
         }
-        operations.push(PlannedOperation::new(
-            OperationKind::RefreshPackageIndex,
+        let mut journal = merge_journal(
+            &root,
+            kept,
+            &orders[1..],
+            &candidate,
+            &entries,
             package.context.index.clone(),
-        ));
+        );
+        // Each merged Order is removed as `order remove` removes it, so its removal's own
+        // operations are the merge's, with one refresh for the whole merge and the
+        // Removed Orders Directory created once.
+        for removal in &removals {
+            journal.listing_after(&removal.journal);
+        }
+        let vendor_of = |document: &OrderDocument| {
+            let id = document.vendor_id.as_ref()?;
+            package
+                .vendors
+                .iter()
+                .find(|vendor| &vendor.vendor_id == id)
+                .cloned()
+        };
+        let vendors = [vendor_of(&kept.document), vendor_of(&candidate)];
         Ok(OrderMergePlan {
             kept: kept.paths.directory.clone(),
             merged: orders[1..].to_vec(),
             prior: kept.document.clone(),
             merged_documents,
+            vendors,
             candidate,
             entries,
-            operations,
+            journal,
             root,
         })
     })
+}
+
+/// The commit filling `kept` with `candidate` and moving into it each entry of a merged
+/// Order it does not hold; an entry it does hold is left for that Order's removal.
+fn merge_journal(
+    root: &Path,
+    kept: &HealthyOrder,
+    merged: &[PathBuf],
+    candidate: &OrderDocument,
+    entries: &[MergeEntry],
+    index: Location,
+) -> Journal {
+    let managed = PlannedAct::Managed;
+    let mut journal = Journal::new(root);
+    if candidate != &kept.document {
+        // The record the merge was planned against is the one it may replace: its meaning
+        // is what is compared, so a record reformatted by hand is still filled.
+        let record = ManagedRecord::order(
+            kept.paths.order.absolute_path.clone(),
+            kept.document.clone(),
+        );
+        journal.replace(
+            record.path().to_path_buf(),
+            candidate
+                .to_json_bytes()
+                .expect("a validated Order serializes deterministically"),
+            record.expectation(),
+            managed(OperationKind::ReplaceOrderRecord),
+            Subject::Order(kept.paths.directory.absolute_path.clone()),
+        );
+    }
+    for entry in entries {
+        match entry.action {
+            EntryAction::Move => journal.move_out(
+                entry.from.clone(),
+                entry.to.clone(),
+                entry.directory,
+                managed(OperationKind::MoveMergedEntry),
+            ),
+            EntryAction::Discard => journal.announce(
+                entry.from.clone(),
+                entry.directory,
+                managed(OperationKind::DiscardMergedEntry),
+            ),
+        }
+    }
+    // Every merged Order loses the entries moved out of it, and the kept Order gains them.
+    journal.touching(
+        std::iter::once(kept.paths.directory.absolute_path.clone()).chain(merged.iter().cloned()),
+    );
+    journal.refreshing(index);
+    journal
 }
 
 pub(crate) fn commit_order_merge<E: Effects>(
@@ -388,131 +482,41 @@ pub(crate) fn commit_order_merge<E: Effects>(
             return Err(changed(&plan.kept.absolute_path));
         }
 
-        let record = kept.paths.order.absolute_path.clone();
-        let candidate = plan
-            .candidate
-            .to_json_bytes()
-            .map_err(|_| Failure::InvalidFacts)?;
-        let prior_bytes = filesystem.read(&record).map_err(|_| changed(&record))?;
-        if plan.candidate != plan.prior {
-            let still_holds_the_prior = |bytes: &[u8]| {
-                OrderDocument::from_json_bytes(bytes)
-                    .ok()
-                    .and_then(|document| document.validate().ok())
-                    .is_some_and(|document| document.order() == &plan.prior)
-            };
-            replace_validated_file_expecting(
-                &record,
-                &candidate,
-                DestinationExpectation::Equivalent(&still_holds_the_prior),
-                filesystem,
-                |_| Ok::<(), Never>(()),
-            )
-            .map_err(|error| Failure::of_replacement(&plan.root, &record, error))?;
+        if plan.candidate.to_json_bytes().is_err() {
+            return Err(Failure::InvalidFacts);
         }
-
-        let mut done: Vec<&MergeEntry> = Vec::new();
-        for entry in plan
-            .entries
-            .iter()
-            .filter(|entry| entry.action == EntryAction::Move)
-        {
-            if let Err(failure) = move_entry(&plan.root, &entry.from, &entry.to, filesystem) {
-                // Everything this merge moved goes back, newest first, and the kept record
-                // returns to what it held; whatever cannot be restored is reported beside
-                // the failure that stopped the merge.
-                let mut left = Vec::new();
-                for moved in done.iter().rev() {
-                    if move_entry(&plan.root, &moved.to, &moved.from, filesystem).is_err() {
-                        left.push(crate::mutation::CleanupFailure::new(located_in_package(
-                            &plan.root,
-                            moved.to.clone(),
-                        )));
-                    }
-                }
-                if plan.candidate != plan.prior
-                    && replace_validated_file_expecting(
-                        &record,
-                        &prior_bytes,
-                        DestinationExpectation::Exactly(&candidate),
-                        filesystem,
-                        |_| Ok::<(), Never>(()),
-                    )
-                    .is_err()
-                {
-                    left.push(crate::mutation::CleanupFailure::new(located_in_package(
-                        &plan.root,
-                        record.clone(),
-                    )));
-                }
-                return Err(if left.is_empty() {
-                    failure
-                } else {
-                    Failure::CommitFailedCleanupIncomplete {
-                        failure: Box::new(crate::mutation::CommitFailure::new(located_in_package(
-                            &plan.root,
-                            entry.from.clone(),
-                        ))),
-                        cleanup_failures: left,
-                    }
-                });
-            }
-            done.push(entry);
-        }
+        // Moving every entry that moves, after filling the kept record: a failure undoes
+        // what the merge did and names what it could not put back.
+        let mut committed = merge_journal(
+            &plan.root,
+            kept,
+            &plan.merged,
+            &plan.candidate,
+            &plan.entries,
+            current.context.index.clone(),
+        )
+        .run(filesystem)?;
 
         // What remains of each merged Order — its record and every discarded entry — is
-        // removed as an Order removal removes one, so it stays recoverable.
-        let mut warnings = Vec::new();
+        // removed as an Order removal removes one, so it stays recoverable. The merge has
+        // committed by now, so a removal that fails is a warning of it.
         for directory in &plan.merged {
             let removal = plan_order_removal(directory, filesystem)
                 .result
-                .and_then(|removal| commit_order_removal(removal, effects).result);
+                .and_then(|removal| removal::confirmed(&removal, filesystem))
+                .and_then(|journal| journal.run(filesystem));
             match removal {
-                Ok(report) => {
-                    if let MutationReport::CommittedWithWarning { warnings: own, .. } = report {
-                        warnings.extend(own);
-                    }
-                }
-                Err(failure) => warnings.push(Warning::OrderNotRemoved(failure)),
+                Ok(removed) => committed.absorb(removed),
+                Err(failure) => committed.warn(Warning::OrderNotRemoved(failure)),
             }
         }
-        let refresh = IndexRefresh::after_commit(
-            &plan.root,
-            &Touched::orders(orders.iter().cloned()),
-            filesystem,
-        );
-        warnings.extend(refresh.warning());
+        // One refresh for the whole merge, reading again every record it changed.
+        let refresh = committed.refresh(&plan.root, filesystem);
         Ok(MutationReport::committed(
             OrderMergeResult {
                 directory: plan.kept.clone(),
             },
-            warnings,
+            committed.warnings(refresh),
         ))
     })
-}
-
-/// Moves one entry to a path where nothing stands, never replacing what appeared there.
-fn move_entry<F: FileSystem>(
-    root: &Path,
-    from: &Path,
-    to: &Path,
-    filesystem: &F,
-) -> Result<(), Failure> {
-    let failed = |path: &Path, error: &F::Error| {
-        Failure::from(FailedOperation::filesystem(
-            FailedPath::inside(root, path.to_path_buf()),
-            error,
-            filesystem,
-        ))
-    };
-    let occupied = || Failure::PreconditionsChanged {
-        location: located_in_package(root, to.to_path_buf()),
-    };
-    match filesystem
-        .rename_new(from, to)
-        .map_err(|error| failed(from, &error))?
-    {
-        RenameOutcome::Renamed => Ok(()),
-        RenameOutcome::DestinationExists => Err(occupied()),
-    }
 }

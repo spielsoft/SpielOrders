@@ -59,7 +59,8 @@ pub const SPIELORDERS_FAMILY_PROVIDER_STATE: SpielordersConstant = SpielordersCo
 /// What a fallible call returns.
 /// `ok`. The call did what it was asked.
 pub const SPIELORDERS_RESULT_OK: SpielordersResult = SpielordersResult(0);
-/// `refused`. The request was refused and nothing was written; the outcome says why.
+/// `refused`. The request was refused; the outcome says why. Nothing was written, except
+/// what a commit that failed partway could not remove, which its outcome names.
 pub const SPIELORDERS_RESULT_REFUSED: SpielordersResult = SpielordersResult(1);
 /// `cancelled`. The caller cancelled the call and nothing was written.
 pub const SPIELORDERS_RESULT_CANCELLED: SpielordersResult = SpielordersResult(2);
@@ -84,7 +85,7 @@ pub const SPIELORDERS_FAILURE_PACKAGE_ACCESS_DENIED: SpielordersConstant =
 /// `package_operation_failed`. A filesystem operation failed for any other reason.
 pub const SPIELORDERS_FAILURE_PACKAGE_OPERATION_FAILED: SpielordersConstant =
     SpielordersConstant(1005);
-/// `filesystem_unsupported`. The filesystem holding the Package cannot perform an operation a change needs, such as moving an entry without replacing one that may appear at its destination.
+/// `filesystem_unsupported`. The filesystem holding the Package cannot perform an operation a change needs, such as moving an entry without replacing one that may appear at its destination. Where a commit had already begun, each entry it could not prove its own to undo follows as a `left behind` entry.
 pub const SPIELORDERS_FAILURE_FILESYSTEM_UNSUPPORTED: SpielordersConstant =
     SpielordersConstant(1085);
 /// `package_invalid`.
@@ -98,7 +99,7 @@ pub const SPIELORDERS_FAILURE_NOT_AN_ORDER_DIRECTORY: SpielordersConstant =
     SpielordersConstant(1009);
 /// `order_not_found`. The directory is not one of its Package's Orders. `root` is the Root it was looked for in, where one resolved.
 pub const SPIELORDERS_FAILURE_ORDER_NOT_FOUND: SpielordersConstant = SpielordersConstant(1010);
-/// `damaged_record`. The Order record could not be read as one. `field` names the first field at fault where the record was still JSON to inspect.
+/// `damaged_record`. The Order record could not be read as one. `field` names the first field at fault where the record was still JSON to inspect, and `row` the Item it belongs to.
 pub const SPIELORDERS_FAILURE_DAMAGED_RECORD: SpielordersConstant = SpielordersConstant(1011);
 /// `locator_unusable`. The record's own technical locator is missing or malformed.
 pub const SPIELORDERS_FAILURE_LOCATOR_UNUSABLE: SpielordersConstant = SpielordersConstant(1012);
@@ -215,19 +216,6 @@ pub const SPIELORDERS_FAILURE_COMMIT_FAILED: SpielordersConstant = SpielordersCo
 /// `commit_failed_cleanup_incomplete`. A commit stopped partway and could not remove what is named.
 pub const SPIELORDERS_FAILURE_COMMIT_FAILED_CLEANUP_INCOMPLETE: SpielordersConstant =
     SpielordersConstant(1056);
-/// `candidate_changed`. The candidate a stage holds changed before it was promoted.
-pub const SPIELORDERS_FAILURE_CANDIDATE_CHANGED: SpielordersConstant = SpielordersConstant(1057);
-/// `destination_changed`. The destination changed between being read and being replaced.
-pub const SPIELORDERS_FAILURE_DESTINATION_CHANGED: SpielordersConstant = SpielordersConstant(1058);
-/// `candidate_invalid`. The record a commit assembled is not a valid record of its kind.
-pub const SPIELORDERS_FAILURE_CANDIDATE_INVALID: SpielordersConstant = SpielordersConstant(1059);
-/// `invalid_destination`. The destination names no file a stage can be written beside, or one another write in the same commit already names.
-pub const SPIELORDERS_FAILURE_INVALID_DESTINATION: SpielordersConstant = SpielordersConstant(1060);
-/// `ownership_uncertain`. What stands there is no longer provably what the commit created, so it is left.
-pub const SPIELORDERS_FAILURE_OWNERSHIP_UNCERTAIN: SpielordersConstant = SpielordersConstant(1061);
-/// `prior_content_invalid`. What the destination held before does not validate, so it was not written back.
-pub const SPIELORDERS_FAILURE_PRIOR_CONTENT_INVALID: SpielordersConstant =
-    SpielordersConstant(1062);
 /// `index_replacement_failed`. The rebuilt Package Index could not be written; the detail is the failed commit.
 pub const SPIELORDERS_FAILURE_INDEX_REPLACEMENT_FAILED: SpielordersConstant =
     SpielordersConstant(1063);
@@ -277,6 +265,8 @@ pub const SPIELORDERS_FAILURE_UNKNOWN_VALUE: SpielordersConstant = SpielordersCo
 pub const SPIELORDERS_FAILURE_VALUE_IN_USE: SpielordersConstant = SpielordersConstant(1082);
 /// `blank_value`. A value is required and blank.
 pub const SPIELORDERS_FAILURE_BLANK_VALUE: SpielordersConstant = SpielordersConstant(1083);
+/// `currency_differs`. A merged Order would add Items priced in a currency other than the kept Order's; located at that Order, field currency.
+pub const SPIELORDERS_FAILURE_CURRENCY_DIFFERS: SpielordersConstant = SpielordersConstant(1086);
 /// `not_batchable`. A batch holds edits to existing Orders and Vendors and new Vendors, and this change is none of those.
 pub const SPIELORDERS_FAILURE_NOT_BATCHABLE: SpielordersConstant = SpielordersConstant(1084);
 
@@ -463,7 +453,7 @@ pub const SPIELORDERS_ORDER_FIELD_ORDER_GROUP: SpielordersConstant = Spielorders
 pub const SPIELORDERS_ORDER_FIELD_ORDER_ID: SpielordersConstant = SpielordersConstant(9009);
 /// `directory_name`. Read-only: the Order Directory's name.
 pub const SPIELORDERS_ORDER_FIELD_DIRECTORY_NAME: SpielordersConstant = SpielordersConstant(9010);
-/// `total`. Read-only: the Order Total, unrounded.
+/// `total`. Read-only: the Order Total, as computed in floating point and not rounded.
 pub const SPIELORDERS_ORDER_FIELD_TOTAL: SpielordersConstant = SpielordersConstant(9011);
 /// `damage`. Read-only, on a damaged list entry: the name of its finding code.
 pub const SPIELORDERS_ORDER_FIELD_DAMAGE: SpielordersConstant = SpielordersConstant(9012);
@@ -479,7 +469,7 @@ pub const SPIELORDERS_ITEM_FIELD_QUANTITY: SpielordersConstant = SpielordersCons
 pub const SPIELORDERS_ITEM_FIELD_UNIT_PRICE: SpielordersConstant = SpielordersConstant(10002);
 /// `catalog_number`.
 pub const SPIELORDERS_ITEM_FIELD_CATALOG_NUMBER: SpielordersConstant = SpielordersConstant(10003);
-/// `total`. Read-only: the row total, unrounded.
+/// `total`. Read-only: the row total, as computed in floating point and not rounded.
 pub const SPIELORDERS_ITEM_FIELD_TOTAL: SpielordersConstant = SpielordersConstant(10004);
 /// `notes`. Multiline remarks tied to this Item alone.
 pub const SPIELORDERS_ITEM_FIELD_NOTES: SpielordersConstant = SpielordersConstant(10005);
@@ -915,24 +905,6 @@ pub(crate) const NAMES: &[(SpielordersConstant, &CStr)] = &[
         SPIELORDERS_FAILURE_COMMIT_FAILED_CLEANUP_INCOMPLETE,
         c"commit_failed_cleanup_incomplete",
     ),
-    (SPIELORDERS_FAILURE_CANDIDATE_CHANGED, c"candidate_changed"),
-    (
-        SPIELORDERS_FAILURE_DESTINATION_CHANGED,
-        c"destination_changed",
-    ),
-    (SPIELORDERS_FAILURE_CANDIDATE_INVALID, c"candidate_invalid"),
-    (
-        SPIELORDERS_FAILURE_INVALID_DESTINATION,
-        c"invalid_destination",
-    ),
-    (
-        SPIELORDERS_FAILURE_OWNERSHIP_UNCERTAIN,
-        c"ownership_uncertain",
-    ),
-    (
-        SPIELORDERS_FAILURE_PRIOR_CONTENT_INVALID,
-        c"prior_content_invalid",
-    ),
     (
         SPIELORDERS_FAILURE_INDEX_REPLACEMENT_FAILED,
         c"index_replacement_failed",
@@ -981,6 +953,7 @@ pub(crate) const NAMES: &[(SpielordersConstant, &CStr)] = &[
     (SPIELORDERS_FAILURE_UNKNOWN_VALUE, c"unknown_value"),
     (SPIELORDERS_FAILURE_VALUE_IN_USE, c"value_in_use"),
     (SPIELORDERS_FAILURE_BLANK_VALUE, c"blank_value"),
+    (SPIELORDERS_FAILURE_CURRENCY_DIFFERS, c"currency_differs"),
     (SPIELORDERS_FAILURE_NOT_BATCHABLE, c"not_batchable"),
     (
         SPIELORDERS_WARNING_INDEX_REFRESH_FAILED,

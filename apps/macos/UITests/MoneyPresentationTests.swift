@@ -11,7 +11,7 @@ import XCTest
         try await super.tearDown()
     }
 
-    func testStagedPricesKeepTheirPrecisionAndCurrency() throws {
+    func testPricesShowTwoDecimalsAndEditAsTyped() throws {
         let root = try makePackage()
         defer { try? FileManager.default.removeItem(at: root) }
         let app = XCUIApplication()
@@ -21,64 +21,25 @@ import XCTest
         newOrder(in: app)
         let currency = element("order.editor.currency", in: app)
         XCTAssertTrue(currency.waitForExistence(timeout: 10))
-        replace(currency, with: "USD", in: app)
+        currency.click()
+        app.typeKey("a", modifierFlags: .command)
+        currency.typeText("USD")
         element("order.editor.items.add", in: app).click()
-        let precise = "1.23456789012345678901234567890123456789123456789"
-        app.typeText("CAT-1\tPrecision sample\t1\t" + precise + "\t")
+        app.typeText("CAT-1\tPrecision sample\t1\t1.23456\t")
         currency.click()
+
+        // An ISO currency shows the amount rounded to two decimals in the system's currency style.
         let price = element("order.editor.items.row.0.unit_price", in: app)
-        expect(price, displays: literal(precise))
+        let rounded = Decimal(string: "1.23")!.formatted(.currency(code: "USD").precision(.fractionLength(2)))
+        let displayed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", rounded), object: price)
+        XCTAssertEqual(XCTWaiter.wait(for: [displayed], timeout: 10), .completed)
+
+        // Editing the cell shows the amount exactly as typed.
         price.doubleClick()
-        XCTAssertEqual(price.value as? String, precise)
-
-        app.typeKey("a", modifierFlags: .command)
-        app.typeText("1e-7\t")
-        currency.click()
-        let style = currencyStyle()
-        style.minimumFractionDigits = 2
-        style.maximumFractionDigits = 7
-        expect(price, displays: try XCTUnwrap(style.string(from: NSDecimalNumber(string: "0.0000001"))))
-        price.doubleClick()
-        XCTAssertEqual(price.value as? String, "1e-7")
-
-        app.typeKey("a", modifierFlags: .command)
-        app.typeText("-1e-200\t")
-        currency.click()
-        expect(price, displays: literal("-1e-200"))
-        price.doubleClick()
-        XCTAssertEqual(price.value as? String, "-1e-200")
-        // This remains an uncreated draft; display does not write a rounded replacement.
-        XCTAssertTrue(element("editor.create", in: app).exists)
-    }
-
-    private func currencyStyle() -> NumberFormatter {
-        let style = NumberFormatter()
-        style.locale = .current
-        style.numberStyle = .currency
-        style.currencyCode = "USD"
-        return style
-    }
-
-    private func literal(_ amount: String) -> String {
-        let style = currencyStyle()
-        if amount.hasPrefix("-") {
-            return style.negativePrefix + amount.dropFirst() + style.negativeSuffix
-        }
-        return style.positivePrefix + amount + style.positiveSuffix
+        XCTAssertEqual(price.value as? String, "1.23456")
     }
 
     private func element(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any).matching(identifier: identifier).firstMatch
-    }
-
-    private func replace(_ field: XCUIElement, with text: String, in app: XCUIApplication) {
-        field.click()
-        app.typeKey("a", modifierFlags: .command)
-        field.typeText(text)
-    }
-
-    private func expect(_ field: XCUIElement, displays value: String) {
-        let displayed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", value), object: field)
-        XCTAssertEqual(XCTWaiter.wait(for: [displayed], timeout: 10), .completed)
     }
 }

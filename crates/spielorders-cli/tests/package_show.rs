@@ -11,11 +11,11 @@
 //! evolution.
 
 use crate::support::{
-    Invocation, change_order_record, damage_index, directory_that_is_not_a_root, hidden_vendor_id,
-    managed_snapshot, modification_time, newest_order_id, offered_vendor_id,
+    Invocation, change_order_record, damage_index, directory_that_is_not_a_root, future_index,
+    hidden_vendor_id, managed_snapshot, modification_time, newest_order_id, offered_vendor_id,
     package_at_an_uninterpretable_version, package_root_that_cannot_be_read,
     package_with_a_damaged_order, package_with_duplicate_vendor_names,
-    package_with_unreadable_readme, populated_package, remove_index, response, reversion_index,
+    package_with_unreadable_readme, populated_package, remove_index, response,
 };
 use std::path::Path;
 
@@ -46,7 +46,7 @@ const INDEX_STATES: [IndexState; 5] = [
     },
     IndexState {
         label: "wrong-version",
-        prepare: Some(reversion_index),
+        prepare: Some(future_index),
     },
 ];
 
@@ -88,75 +88,41 @@ fn the_bootstrap_read_writes_nothing_in_any_index_state() {
     }
 }
 
-/// The complete read carries every Vendor with its visibility, the human output offers
-/// Hidden Vendors only under `--all`, and an Order referencing a Hidden Vendor resolves
-/// that Vendor's facts either way.
+/// The complete read carries every Vendor with its visibility, and an Order referencing a
+/// Hidden Vendor resolves that Vendor's facts.
 ///
-/// The defect this catches is the one the visibility default is most likely to cause:
-/// resolving an Order's Vendor against the *presented* list, so the second Order's
-/// Vendor vanishes whenever `--all` is omitted. Hiding governs what is offered for new
-/// use and never what is resolved.
+/// Hiding governs what is offered for new use and never what is resolved. That `--all`
+/// leaves the machine response unchanged, and that the human Vendor list offers the Hidden
+/// Vendor only under it, is `the_visibility_flag_changes_only_the_vendor_list`.
 #[test]
-fn hidden_vendors_are_omitted_by_default_and_still_resolve_for_the_orders_that_name_them() {
+fn hidden_vendors_still_resolve_for_the_orders_that_name_them() {
     let (_tree, root) = populated_package("show-hidden-vendors");
 
-    // The machine response carries every Vendor with its visibility, so an Order naming
-    // a Hidden Vendor resolves against it whatever the flag says.
-    for arguments in [
-        vec!["package", "show", "--json"],
-        vec!["package", "show", "--json", "--all"],
-    ] {
-        let document = response(&Invocation::new(&arguments).rooted_at(&root).run());
-        let package = &document["data"];
-        let vendors = package["vendors"].as_array().expect("vendors is a list");
-        let resolved = |vendor_id: &serde_json::Value| {
-            vendors
-                .iter()
-                .find(|vendor| &vendor["vendor_id"] == vendor_id)
-                .unwrap_or_else(|| panic!("{arguments:?}: {vendor_id} resolves"))
-        };
+    let document = response(
+        &Invocation::new(&["package", "show", "--json"])
+            .rooted_at(&root)
+            .run(),
+    );
+    let package = &document["data"];
+    let vendors = package["vendors"].as_array().expect("vendors is a list");
+    let resolved = |vendor_id: &serde_json::Value| {
+        vendors
+            .iter()
+            .find(|vendor| &vendor["vendor_id"] == vendor_id)
+            .unwrap_or_else(|| panic!("{vendor_id} resolves"))
+    };
 
-        let orders = package["orders"].as_array().expect("orders is a list");
-        assert_eq!(
-            orders[1]["vendor_id"],
-            &*hidden_vendor_id(&root),
-            "{arguments:?}: the Order still names the Hidden Vendor"
-        );
-        let hidden = resolved(&orders[1]["vendor_id"]);
-        assert_eq!(hidden["name"], "Nethermoor", "{arguments:?}");
-        assert_eq!(hidden["hidden"], "true", "{arguments:?}");
-        assert_eq!(
-            orders[0]["vendor_id"],
-            &*offered_vendor_id(&root),
-            "{arguments:?}"
-        );
-        assert_ne!(
-            resolved(&orders[0]["vendor_id"])["hidden"],
-            "true",
-            "{arguments:?}"
-        );
-    }
-
-    // The Vendor list a reader is offered omits the Hidden Vendor unless asked for all.
-    let offered = Invocation::new(&["package", "show"]).rooted_at(&root).run();
-    assert!(
-        offered.stdout_text().contains("name: Tarnwick"),
-        "{}",
-        offered.stdout_text()
+    let orders = package["orders"].as_array().expect("orders is a list");
+    assert_eq!(
+        orders[1]["vendor_id"],
+        &*hidden_vendor_id(&root),
+        "the Order still names the Hidden Vendor"
     );
-    assert!(
-        !offered.stdout_text().contains("name: Nethermoor"),
-        "the Hidden Vendor is omitted by default:\n{}",
-        offered.stdout_text()
-    );
-    let all = Invocation::new(&["package", "show", "--all"])
-        .rooted_at(&root)
-        .run();
-    assert!(
-        all.stdout_text().contains("name: Nethermoor"),
-        "`--all` lists the Hidden Vendor:\n{}",
-        all.stdout_text()
-    );
+    let hidden = resolved(&orders[1]["vendor_id"]);
+    assert_eq!(hidden["name"], "Nethermoor");
+    assert_eq!(hidden["hidden"], "true");
+    assert_eq!(orders[0]["vendor_id"], &*offered_vendor_id(&root));
+    assert_ne!(resolved(&orders[0]["vendor_id"])["hidden"], "true");
 }
 
 /// Every load state a Package can be in produces its own typed answer.

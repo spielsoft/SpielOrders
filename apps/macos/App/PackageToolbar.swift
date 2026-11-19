@@ -69,10 +69,11 @@ import Observation
     }
 
     /// A selection keeps its detail in place while it is read, search shows progress beside its
-    /// field, and opening shows it in the window, so none of them shows progress here.
+    /// field, opening shows it in the window, and a record's save is silent while its form stays
+    /// live, so none of them shows progress here.
     private var working: Bool {
         model.busy && model.selectionRead == nil && !model.refreshingLookup && !model.starting
-            && model.root != nil
+            && !model.committing && model.root != nil
     }
 
     @objc private func toggleSidebar() {

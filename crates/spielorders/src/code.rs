@@ -8,7 +8,7 @@ use serde::{
 };
 use std::fmt::{self, Display};
 
-/// A unit enum, such as an operation kind or a diagnostic code, whose code is the name its
+/// A unit enum, such as an Order status or a diagnostic code, whose code is the name its
 /// variant serializes with.
 pub trait Coded: Serialize {
     fn code(&self) -> &'static str {

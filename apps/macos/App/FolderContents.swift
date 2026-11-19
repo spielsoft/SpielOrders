@@ -131,13 +131,13 @@ import SpielOrdersKit
     private static func shortfall(_ state: Int32) -> String? {
         switch state {
         case SPIELORDERS_PROVIDER_STATE_COMPLETE: nil
-        case SPIELORDERS_PROVIDER_STATE_TIMED_OUT: "Spotlight did not finish; some matching files may be missing."
+        case SPIELORDERS_PROVIDER_STATE_TIMED_OUT: "Spotlight didn’t finish; some matching files may be missing."
         case SPIELORDERS_PROVIDER_STATE_CANCELLED: "Spotlight stopped early; some matching files may be missing."
         case SPIELORDERS_PROVIDER_STATE_INDEXING_DISABLED: "Spotlight indexing is off for this volume, so no files were searched."
-        case SPIELORDERS_PROVIDER_STATE_VOLUME_NOT_INDEXED: "Spotlight has not indexed this volume, so no files were searched."
-        case SPIELORDERS_PROVIDER_STATE_ACCESS_DENIED: "Spotlight could not read the Orders folder."
+        case SPIELORDERS_PROVIDER_STATE_VOLUME_NOT_INDEXED: "Spotlight hasn’t indexed this volume, so no files were searched."
+        case SPIELORDERS_PROVIDER_STATE_ACCESS_DENIED: "Spotlight couldn’t read the Orders folder."
         case SPIELORDERS_PROVIDER_STATE_QUERY_REFUSED: "Spotlight refused the search."
-        default: "Spotlight did not search every file."
+        default: "Spotlight didn’t search every file."
         }
     }
 }

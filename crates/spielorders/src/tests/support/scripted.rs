@@ -445,13 +445,13 @@ impl ScriptedFileSystem {
         self.calls.borrow().clone()
     }
 
-    /// The paths `operation` was called with, in order.
-    pub fn paths(&self, operation: Operation) -> Vec<PathBuf> {
+    /// Every call that named a path `named` holds for, whatever the call did.
+    pub fn naming(&self, named: impl Fn(&Path) -> bool) -> Vec<Call> {
         self.calls
             .borrow()
             .iter()
-            .filter(|call| call.operation == operation)
-            .map(|call| call.path.clone())
+            .filter(|call| call.paths().into_iter().any(&named))
+            .cloned()
             .collect()
     }
 

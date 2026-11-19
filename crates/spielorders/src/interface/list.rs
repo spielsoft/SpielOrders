@@ -11,8 +11,9 @@ use crate::interface::{
     SpielordersEntries, SpielordersPackage, SpielordersResult, Text,
     call::{Session, deliver, fallible, quietly, settle},
     entries::{EMPTY, Subject},
+    fields,
     library::is_member,
-    package::query,
+    package::text_or_empty,
     records::{Facts, directory_name, order_facts, path_text, vendor_facts},
 };
 use crate::interface::{
@@ -31,8 +32,7 @@ use crate::interface::{
 use crate::{
     Coded,
     model::{
-        CaseSensitivity, OrderFact, OrderListEntry, ReusableValueKind, SearchQuery, VendorFact,
-        VendorVisibility,
+        CaseSensitivity, OrderFact, OrderListEntry, SearchQuery, VendorFact, VendorVisibility,
     },
 };
 use std::{cmp::Ordering, ffi::CString, path::PathBuf};
@@ -70,7 +70,7 @@ impl SpielordersList {
     }
 }
 
-fn case(flags: u32) -> CaseSensitivity {
+fn sensitivity(flags: u32) -> CaseSensitivity {
     if flags & SPIELORDERS_LIST_CASE_SENSITIVE == 0 {
         CaseSensitivity::Insensitive
     } else {
@@ -147,11 +147,12 @@ pub extern "C" fn spielorders_package_orders(
     list: &mut Option<Box<SpielordersList>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(list, None);
     order_list(
         package,
         query_text,
         flags,
-        Scope::All,
+        SearchScope::All,
         sort,
         descending,
         token,
@@ -193,13 +194,14 @@ pub extern "C" fn spielorders_package_search_orders(
     list: &mut Option<Box<SpielordersList>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(list, None);
     let scope = if field == SpielordersConstant::NONE {
-        Some(Scope::All)
+        Some(SearchScope::All)
     } else {
         ORDER_SEARCH_FIELDS
             .iter()
             .find(|(constant, _)| *constant == field)
-            .map(|(_, fact)| Scope::Fact(*fact))
+            .map(|(_, fact)| SearchScope::Fact(*fact))
     };
     match scope {
         Some(scope) => order_list(
@@ -227,11 +229,12 @@ pub extern "C" fn spielorders_package_search_contents(
     list: &mut Option<Box<SpielordersList>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(list, None);
     order_list(
         package,
         query_text,
         flags,
-        Scope::Contents(material.map(SpielordersSearch::orders).unwrap_or_default()),
+        SearchScope::Contents(material.map(SpielordersSearch::orders).unwrap_or_default()),
         sort,
         descending,
         token,
@@ -241,7 +244,7 @@ pub extern "C" fn spielorders_package_search_contents(
 }
 
 /// What an Order search reaches.
-enum Scope<'a> {
+enum SearchScope<'a> {
     All,
     Fact(OrderFact),
     Contents(&'a [PathBuf]),
@@ -304,7 +307,7 @@ fn order_list(
     package: &SpielordersPackage,
     query_text: OptionalText<'_>,
     flags: u32,
-    scope: Scope<'_>,
+    scope: SearchScope<'_>,
     sort: SpielordersConstant,
     descending: i32,
     token: u64,
@@ -314,16 +317,18 @@ fn order_list(
     fallible(outcome, |entries| {
         let session = Session::new(token);
         let result = (|| {
-            let text = query(query_text)?;
+            let text = text_or_empty(query_text)?;
             let sort = sort_field(SPIELORDERS_FAMILY_ORDER_FIELD, sort)?;
             let opened = package.healthy(entries)?;
             let contents = &opened.contents;
-            let searched = SearchQuery::new(&text, case(flags));
+            let searched = SearchQuery::new(&text, sensitivity(flags));
             let found = settle(
                 match scope {
-                    Scope::All => opened.orders_matching(&searched),
-                    Scope::Fact(fact) => opened.orders_matching(&searched.in_order_fact(fact)),
-                    Scope::Contents(holding) => {
+                    SearchScope::All => opened.orders_matching(&searched),
+                    SearchScope::Fact(fact) => {
+                        opened.orders_matching(&searched.in_order_fact(fact))
+                    }
+                    SearchScope::Contents(holding) => {
                         opened.orders_matching_or_holding(&searched, holding)
                     }
                 },
@@ -394,6 +399,7 @@ pub extern "C" fn spielorders_package_vendors(
     list: &mut Option<Box<SpielordersList>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(list, None);
     vendor_list(
         package, query_text, None, flags, sort, descending, token, list, outcome,
     )
@@ -431,6 +437,7 @@ pub extern "C" fn spielorders_package_search_vendors(
     list: &mut Option<Box<SpielordersList>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(list, None);
     if field == SpielordersConstant::NONE {
         return vendor_list(
             package, query_text, None, flags, sort, descending, token, list, outcome,
@@ -470,7 +477,7 @@ fn vendor_list(
     fallible(outcome, |entries| {
         let session = Session::new(token);
         let result = (|| {
-            let text = query(query_text)?;
+            let text = text_or_empty(query_text)?;
             let sort = sort_field(SPIELORDERS_FAMILY_VENDOR_FIELD, sort)?;
             let visibility = if flags & SPIELORDERS_LIST_INCLUDE_HIDDEN == 0 {
                 VendorVisibility::Offered
@@ -480,8 +487,10 @@ fn vendor_list(
             let found = settle(
                 package.healthy(entries)?.vendors_matching(
                     &match fact {
-                        Some(fact) => SearchQuery::new(&text, case(flags)).in_vendor_fact(fact),
-                        None => SearchQuery::new(&text, case(flags)),
+                        Some(fact) => {
+                            SearchQuery::new(&text, sensitivity(flags)).in_vendor_fact(fact)
+                        }
+                        None => SearchQuery::new(&text, sensitivity(flags)),
                     },
                     visibility,
                 ),
@@ -515,6 +524,7 @@ pub extern "C" fn spielorders_package_orders_of_vendor(
     list: &mut Option<Box<SpielordersList>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(list, None);
     fallible(outcome, |entries| {
         let session = Session::new(token);
         let result = (|| {
@@ -543,6 +553,50 @@ pub extern "C" fn spielorders_package_orders_of_vendor(
     })
 }
 
+/// The healthy Orders that use `value` of one reusable-value field
+/// (SPIELORDERS_ORDER_FIELD_ORDERER, _ORDERING_INSTITUTION, _PROJECT, or _ORDER_GROUP), in
+/// the Package's own order, each row read as spielorders_package_orders_of_vendor's are.
+/// `value` matches as reuse does. An Order Group is one Project's: `project` names it, or
+/// NULL or "" the Orders with no Project, and is ignored for any other field. The rows are
+/// the Orders that spielorders_package_values, or spielorders_package_project_groups for
+/// a group, counts for that value.
+#[unsafe(no_mangle)]
+pub extern "C" fn spielorders_package_orders_with_value(
+    package: &SpielordersPackage,
+    field: SpielordersConstant,
+    value: Text<'_>,
+    project: OptionalText<'_>,
+    token: u64,
+    list: &mut Option<Box<SpielordersList>>,
+    outcome: Option<&mut Option<Box<SpielordersEntries>>>,
+) -> SpielordersResult {
+    crate::interface::call::put(list, None);
+    fallible(outcome, |entries| {
+        let session = Session::new(token);
+        let result = (|| {
+            let kind = fields::reusable(field).ok_or(SPIELORDERS_RESULT_BAD_ARGUMENT)?;
+            let value = value.to_str().ok_or(SPIELORDERS_RESULT_BAD_ARGUMENT)?;
+            let project = text_or_empty(project)?;
+            let contents = &package.healthy(entries)?.contents;
+            let rows = contents
+                .healthy_orders
+                .iter()
+                .enumerate()
+                .filter(|(_, order)| {
+                    crate::values::uses(&order.document, kind, Some(project.as_str()), value)
+                })
+                .map(|(position, order)| Row {
+                    damaged: false,
+                    path: path_text(&order.paths.directory.absolute_path),
+                    facts: Facts::of(order_facts(order, contents.vendor_for_order(position))),
+                })
+                .collect();
+            unless_cancelled(&session, SpielordersList::of(rows))
+        })();
+        deliver(result, list)
+    })
+}
+
 /// The Order Groups of `project`, or of the Orders with no Project for NULL or "", each
 /// row read with `SPIELORDERS_VALUE_FIELD_*`. A group belongs to the Project of the Orders
 /// that use it, so these are the suggestions for an Order in that Project, and the same
@@ -555,9 +609,10 @@ pub extern "C" fn spielorders_package_project_groups(
     list: &mut Option<Box<SpielordersList>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(list, None);
     fallible(outcome, |entries| {
         let result = (|| {
-            let project = query(project)?;
+            let project = text_or_empty(project)?;
             let groups = package
                 .healthy(entries)?
                 .contents
@@ -580,18 +635,11 @@ pub extern "C" fn spielorders_package_values(
     list: &mut Option<Box<SpielordersList>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(list, None);
     fallible(outcome, |entries| {
         let session = Session::uncancellable();
         let result = (|| {
-            let kind = match field {
-                SPIELORDERS_ORDER_FIELD_ORDERER => ReusableValueKind::Orderer,
-                SPIELORDERS_ORDER_FIELD_ORDERING_INSTITUTION => {
-                    ReusableValueKind::OrderingInstitution
-                }
-                SPIELORDERS_ORDER_FIELD_PROJECT => ReusableValueKind::Project,
-                SPIELORDERS_ORDER_FIELD_ORDER_GROUP => ReusableValueKind::OrderGroup,
-                _ => return Err(SPIELORDERS_RESULT_BAD_ARGUMENT),
-            };
+            let kind = fields::reusable(field).ok_or(SPIELORDERS_RESULT_BAD_ARGUMENT)?;
             let values = settle(
                 package.healthy(entries)?.values(kind),
                 &session,

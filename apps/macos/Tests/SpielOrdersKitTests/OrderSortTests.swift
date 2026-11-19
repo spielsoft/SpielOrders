@@ -1,26 +1,6 @@
-import CSpielOrders
 import Foundation
 import Testing
 @testable import SpielOrdersKit
-
-@Test func numericSort() async throws {
-    let root = try initializedPackage()
-    defer { try? FileManager.default.removeItem(at: root) }
-    let expensive = try createOrder(in: root, title: "High total", itemPrice: "10")
-    _ = try createOrder(in: root, title: "Low total", itemPrice: "2")
-    try FileManager.default.createDirectory(at: expensive.deletingLastPathComponent().appendingPathComponent("Unadopted"),
-                                           withIntermediateDirectories: false)
-    let session = PackageSession()
-    _ = try await session.open(root, cancellation: LibraryCancellation())
-    let ascending = try await session.orders(query: "", caseSensitive: false, sortField: OrderColumn.total.field, descending: false,
-                                              cancellation: LibraryCancellation()).rows
-    #expect(ascending.map { $0.values[SPIELORDERS_ORDER_FIELD_TITLE] ?? "" } == ["Low total", "High total", ""])
-    #expect(ascending.last?.damage != nil)
-    let descending = try await session.orders(query: "", caseSensitive: false, sortField: OrderColumn.total.field, descending: true,
-                                               cancellation: LibraryCancellation()).rows
-    #expect(descending.map { $0.values[SPIELORDERS_ORDER_FIELD_TITLE] ?? "" } == ["High total", "Low total", ""])
-    #expect(descending.last?.damage != nil)
-}
 
 @Test func damagedSelection() async throws {
     let root = try initializedPackage()

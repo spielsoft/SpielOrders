@@ -18,6 +18,10 @@
         "path": "<PACKAGE_ROOT>/Orders/2030_02_30_Example_Cable/.spielorders/.order.json.spielorders-stage"
       },
       {
+        "kind": "replace_vendor_record",
+        "path": "<PACKAGE_ROOT>/.spielorders/vendors.json"
+      },
+      {
         "kind": "commit_order_record",
         "path": "<PACKAGE_ROOT>/Orders/2030_02_30_Example_Cable/.spielorders/order.json"
       },
@@ -94,6 +98,14 @@
         "before": null,
         "after": "Telescope",
         "reuse": "reused"
+      },
+      {
+        "kind": "fact",
+        "field": "order_group",
+        "position": null,
+        "before": null,
+        "after": "Legacy cabling",
+        "reuse": "new"
       }
     ],
     "order": {
@@ -105,7 +117,7 @@
       "ordering_institution": "Example Institute",
       "currency": null,
       "project": "Telescope",
-      "order_group": null,
+      "order_group": "Legacy cabling",
       "order_id": "<ID-1>",
       "directory_name": "2030_02_30_Example_Cable",
       "total": "0",

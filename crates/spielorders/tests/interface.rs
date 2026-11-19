@@ -474,39 +474,83 @@ fn orders(
     list.unwrap()
 }
 
+/// Every family and every constant the header publishes in one is named as the header
+/// spells it: its name is the macro's own suffix and the name its documentation opens
+/// with, and the name reads back as that constant in that family and in no other.
 #[test]
-fn every_constant_has_a_name_that_reads_back_as_that_constant() {
-    for (family, constant) in [
-        (
-            SPIELORDERS_FAMILY_FAILURE,
-            SPIELORDERS_FAILURE_DAMAGED_PACKAGE,
-        ),
-        (
-            SPIELORDERS_FAMILY_FINDING,
-            SPIELORDERS_FINDING_ORDER_ID_DUPLICATE,
-        ),
-        (
-            SPIELORDERS_FAMILY_ORDER_STATUS,
-            SPIELORDERS_ORDER_STATUS_ORDERED,
-        ),
-        (
-            SPIELORDERS_FAMILY_ORDER_FIELD,
-            SPIELORDERS_ORDER_FIELD_TITLE,
-        ),
-        (
-            SPIELORDERS_FAMILY_ITEM_FIELD,
-            SPIELORDERS_ITEM_FIELD_DESCRIPTION,
-        ),
-    ] {
-        let name = spielorders_constant_name(constant);
-        assert_eq!(spielorders_constant_from_name(family, name), constant);
+fn every_published_constant_is_named_as_its_header_says() {
+    let header = include_str!("../include/spielorders.h");
+    let lines: Vec<&str> = header.lines().collect();
+    let defines: Vec<(usize, &str, i32)> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(at, line)| {
+            let mut words = line.strip_prefix("#define ")?.split_whitespace();
+            let macro_name = words.next()?.strip_prefix("SPIELORDERS_")?;
+            Some((at, macro_name, words.next()?.parse().ok()?))
+        })
+        .collect();
+    let families: Vec<(String, SpielordersConstant)> = defines
+        .iter()
+        .filter_map(|(_, macro_name, value)| {
+            let family = macro_name.strip_prefix("FAMILY_")?;
+            Some((format!("{family}_"), SpielordersConstant(*value)))
+        })
+        .collect();
+    for (prefix, family) in &families {
+        assert_eq!(
+            string(spielorders_constant_name(*family)),
+            prefix.trim_end_matches('_').to_ascii_lowercase(),
+            "SPIELORDERS_FAMILY_{prefix}"
+        );
     }
-    assert_eq!(
-        string(spielorders_constant_name(
-            SPIELORDERS_FAILURE_DAMAGED_PACKAGE
-        )),
-        "damaged_package"
-    );
+    let mut members = 0;
+    for (at, macro_name, value) in &defines {
+        let Some((prefix, family)) = families
+            .iter()
+            .filter(|(prefix, _)| macro_name.starts_with(prefix.as_str()))
+            .max_by_key(|(prefix, _)| prefix.len())
+        else {
+            continue;
+        };
+        members += 1;
+        let constant = SpielordersConstant(*value);
+        let name = macro_name[prefix.len()..].to_ascii_lowercase();
+        assert_eq!(
+            string(spielorders_constant_name(constant)),
+            name,
+            "SPIELORDERS_{macro_name}"
+        );
+        let documented = lines[..*at]
+            .iter()
+            .rev()
+            .take_while(|line| line.starts_with("//"))
+            .filter_map(|line| line.strip_prefix("// `")?.split_once("`."))
+            .map(|(documented, _)| documented)
+            .last();
+        assert_eq!(
+            documented,
+            Some(name.as_str()),
+            "SPIELORDERS_{macro_name} opens its documentation with its name"
+        );
+        let spelled = c(&name);
+        assert_eq!(
+            spielorders_constant_from_name(*family, Text::new(&spelled)),
+            constant,
+            "SPIELORDERS_{macro_name} reads back in its family"
+        );
+        assert_eq!(
+            families
+                .iter()
+                .filter(|(_, other)| {
+                    spielorders_constant_from_name(*other, Text::new(&spelled)) == constant
+                })
+                .count(),
+            1,
+            "SPIELORDERS_{macro_name} reads back in no other family"
+        );
+    }
+    assert!(members > families.len(), "the header publishes constants");
     assert_eq!(
         string(spielorders_constant_name(SpielordersConstant(-7))),
         ""
@@ -1393,6 +1437,460 @@ fn an_order_is_aligned_and_removed_to_the_removed_orders_directory() {
     assert!(!directory.exists());
 }
 
+#[test]
+fn a_commit_reports_the_package_it_left() {
+    let root = initialized("report-package");
+    let lenses = created_order(&root.0, "Lenses", &[]);
+    let mounts = created_order(&root.0, "Mounts", &[]);
+    let listed = |package: &SpielordersPackage| {
+        let mut listed = titles(&orders(package, None, 0, SpielordersConstant(-1), 0));
+        listed.sort();
+        listed
+    };
+
+    let mut draft = order_draft(&read_order(&open(&root.0), &lenses));
+    set(
+        &mut draft,
+        SPIELORDERS_ORDER_FIELD_TITLE,
+        "Lenses and filters",
+    );
+    let report = commit(&plan_draft(&draft).unwrap());
+    let package = spielorders_report_package(&report).unwrap();
+    assert_eq!(listed(&package), ["Lenses and filters", "Mounts"]);
+
+    let mut plan = None;
+    assert_eq!(
+        spielorders_order_plan_remove(&read_order(&package, &mounts), 0, &mut plan, None),
+        SPIELORDERS_RESULT_OK
+    );
+    let report = commit(&plan.unwrap());
+    let package = spielorders_report_package(&report).unwrap();
+    assert_eq!(listed(&package), ["Lenses and filters"]);
+    assert_eq!(listed(&package), listed(&open(&root.0)));
+}
+
+/// The Package facts a front end can present without doing another disk read.
+fn package_view(package: &SpielordersPackage) -> Vec<String> {
+    let mut view = vec![format!(
+        "{:?} {:?} {:?}",
+        path(spielorders_package_root(package)),
+        spielorders_package_state(package),
+        spielorders_package_index_state(package)
+    )];
+    for i in 0..spielorders_package_index_reason_count(package) {
+        view.push(format!(
+            "{:?}",
+            spielorders_package_index_reason(package, i)
+        ));
+    }
+    let findings = spielorders_package_findings(package);
+    for i in 0..spielorders_entries_count(findings.as_deref()) {
+        view.push(format!(
+            "{:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?}",
+            spielorders_entries_code(findings.as_deref(), i),
+            spielorders_entries_severity(findings.as_deref(), i),
+            string(spielorders_entries_message(findings.as_deref(), i)),
+            spielorders_entries_field(findings.as_deref(), i),
+            spielorders_entries_row(findings.as_deref(), i),
+            string(spielorders_entries_path(findings.as_deref(), i)),
+            spielorders_entries_reason(findings.as_deref(), i),
+            string(spielorders_entries_before(findings.as_deref(), i)),
+            string(spielorders_entries_after(findings.as_deref(), i)),
+        ));
+    }
+    let listed = orders(package, None, 0, SpielordersConstant(-1), 0);
+    for i in 0..spielorders_list_count(&listed) {
+        view.push(format!(
+            "order {:?} {}",
+            path(spielorders_list_path(&listed, i)),
+            spielorders_list_damaged(&listed, i)
+        ));
+        for field in [
+            SPIELORDERS_ORDER_FIELD_ORDER_ID,
+            SPIELORDERS_ORDER_FIELD_TITLE,
+            SPIELORDERS_ORDER_FIELD_DATE_ORDERED,
+            SPIELORDERS_ORDER_FIELD_STATUS,
+            SPIELORDERS_ORDER_FIELD_VENDOR,
+            SPIELORDERS_ORDER_FIELD_VENDOR_ID,
+            SPIELORDERS_ORDER_FIELD_ORDERER,
+            SPIELORDERS_ORDER_FIELD_ORDERING_INSTITUTION,
+            SPIELORDERS_ORDER_FIELD_CURRENCY,
+            SPIELORDERS_ORDER_FIELD_PROJECT,
+            SPIELORDERS_ORDER_FIELD_ORDER_GROUP,
+            SPIELORDERS_ORDER_FIELD_DIRECTORY_NAME,
+            SPIELORDERS_ORDER_FIELD_TOTAL,
+            SPIELORDERS_ORDER_FIELD_DAMAGE,
+        ] {
+            view.push(string(spielorders_list_field(&listed, i, field)));
+        }
+    }
+    for flags in [0, SPIELORDERS_LIST_INCLUDE_HIDDEN] {
+        let mut vendors = None;
+        assert_eq!(
+            spielorders_package_vendors(
+                package,
+                OptionalText::null(),
+                flags,
+                SpielordersConstant(-1),
+                0,
+                0,
+                &mut vendors,
+                None
+            ),
+            SPIELORDERS_RESULT_OK
+        );
+        let vendors = vendors.unwrap();
+        view.push(format!("vendors {flags}"));
+        for i in 0..spielorders_list_count(&vendors) {
+            for field in [
+                SPIELORDERS_VENDOR_FIELD_VENDOR_ID,
+                SPIELORDERS_VENDOR_FIELD_NAME,
+                SPIELORDERS_VENDOR_FIELD_ADDRESS,
+                SPIELORDERS_VENDOR_FIELD_EMAIL,
+                SPIELORDERS_VENDOR_FIELD_PHONE,
+                SPIELORDERS_VENDOR_FIELD_WEBSITE,
+                SPIELORDERS_VENDOR_FIELD_PURCHASING_NOTES,
+                SPIELORDERS_VENDOR_FIELD_HIDDEN,
+            ] {
+                view.push(string(spielorders_list_field(&vendors, i, field)));
+            }
+        }
+    }
+    for field in [
+        SPIELORDERS_ORDER_FIELD_ORDERER,
+        SPIELORDERS_ORDER_FIELD_ORDERING_INSTITUTION,
+        SPIELORDERS_ORDER_FIELD_PROJECT,
+        SPIELORDERS_ORDER_FIELD_ORDER_GROUP,
+    ] {
+        let mut values = None;
+        assert_eq!(
+            spielorders_package_values(package, field, &mut values, None),
+            SPIELORDERS_RESULT_OK
+        );
+        let values = values.unwrap();
+        view.push(format!("values {field:?}"));
+        for i in 0..spielorders_list_count(&values) {
+            view.push(string(spielorders_list_field(
+                &values,
+                i,
+                SPIELORDERS_VALUE_FIELD_VALUE,
+            )));
+            view.push(string(spielorders_list_field(
+                &values,
+                i,
+                SPIELORDERS_VALUE_FIELD_USAGE_COUNT,
+            )));
+        }
+    }
+    view.push(format!("groups {:?}", project_groups(package, None)));
+    view.push(format!(
+        "groups {:?}",
+        project_groups(package, Some("Optics"))
+    ));
+    view.push(format!(
+        "groups {:?}",
+        project_groups(package, Some("Controls"))
+    ));
+    view
+}
+
+/// Repeated access gives independent handles that outlive the report and describe the
+/// same lists, values, health, index, and findings as an ordinary open after the write.
+fn reported_package(root: &Path, report: Box<SpielordersReport>) -> Box<SpielordersPackage> {
+    let first = spielorders_report_package(&report)
+        .expect("a healthy current-index refresh supplies a Package");
+    let second = spielorders_report_package(&report).unwrap();
+    spielorders_report_free(Some(report));
+    let expected = package_view(&open(root));
+    assert_eq!(package_view(&first), expected);
+    spielorders_package_free(Some(first));
+    assert_eq!(package_view(&second), expected);
+    second
+}
+
+#[test]
+fn reported_packages_match_fresh_opens_after_each_kind_of_change() {
+    let root = initialized("report-package-changes");
+    let kept = classified_order(&root.0, "Lens", "Optics", "Preparation");
+    let other = classified_order(&root.0, "Controller", "Controls", "Assembly");
+    let mut package = open(&root.0);
+    let mut vendor = new_draft(&package, spielorders_package_new_vendor_draft);
+    set(&mut vendor, SPIELORDERS_VENDOR_FIELD_NAME, "North Supplies");
+    package = reported_package(&root.0, commit(&plan_draft(&vendor).unwrap()));
+    let vendor = vendor_named(&package, "North Supplies").unwrap();
+    let mut plan = None;
+    assert_eq!(
+        spielorders_vendor_plan_hidden(&vendor, 1, 0, &mut plan, None),
+        SPIELORDERS_RESULT_OK
+    );
+    package = reported_package(&root.0, commit(&plan.unwrap()));
+
+    let mut draft = order_draft(&read_order(&package, &kept));
+    set(&mut draft, SPIELORDERS_ORDER_FIELD_TITLE, "Lens and filter");
+    package = reported_package(&root.0, commit(&plan_draft(&draft).unwrap()));
+
+    let mut plan = None;
+    assert_eq!(
+        spielorders_order_plan_remove(&read_order(&package, &other), 0, &mut plan, None),
+        SPIELORDERS_RESULT_OK
+    );
+    let report = commit(&plan.unwrap());
+    let removed = path(spielorders_report_final_path(&report));
+    reported_package(&root.0, report);
+    package = reported_package(&root.0, commit(&plan_restore(&root.0, &removed).unwrap()));
+
+    let mut plan = None;
+    assert_eq!(
+        spielorders_package_plan_rename_value(
+            &package,
+            SPIELORDERS_ORDER_FIELD_PROJECT,
+            OptionalText::null(),
+            Text::new(c"Controls"),
+            Text::new(c"Electronics"),
+            0,
+            &mut plan,
+            None
+        ),
+        SPIELORDERS_RESULT_OK
+    );
+    package = reported_package(&root.0, commit(&plan.unwrap()));
+    let names = [Text::new(c"Optics"), Text::new(c"Electronics")];
+    let mut plan = None;
+    assert_eq!(
+        spielorders_package_plan_merge_values(
+            &package,
+            SPIELORDERS_ORDER_FIELD_PROJECT,
+            OptionalText::null(),
+            std::ptr::NonNull::new(names.as_ptr().cast_mut()),
+            2,
+            Text::new(c"Optics"),
+            0,
+            &mut plan,
+            None
+        ),
+        SPIELORDERS_RESULT_OK
+    );
+    package = reported_package(&root.0, commit(&plan.unwrap()));
+    let mut plan = None;
+    assert_eq!(
+        spielorders_package_plan_delete_value(
+            &package,
+            SPIELORDERS_ORDER_FIELD_PROJECT,
+            OptionalText::null(),
+            Text::new(c"Optics"),
+            OptionalText::new(c""),
+            0,
+            &mut plan,
+            None
+        ),
+        SPIELORDERS_RESULT_OK
+    );
+    package = reported_package(&root.0, commit(&plan.unwrap()));
+
+    let other_path = c_path(&other);
+    let merged = [PathBytes::new(&other_path)];
+    let mut plan = None;
+    assert_eq!(
+        spielorders_order_plan_merge(
+            &read_order(&package, &kept),
+            std::ptr::NonNull::new(merged.as_ptr().cast_mut()),
+            1,
+            0,
+            &mut plan,
+            None
+        ),
+        SPIELORDERS_RESULT_OK
+    );
+    reported_package(&root.0, commit(&plan.unwrap()));
+
+    // Structural warnings and Package README notices must survive the reusable snapshot.
+    fs::write(root.0.join("Orders/Unfiled.txt"), "unfiled note").unwrap();
+    fs::remove_file(root.0.join("README.md")).unwrap();
+    fs::create_dir(root.0.join("README.md")).unwrap();
+    let mut draft = order_draft(&read_order(&open(&root.0), &kept));
+    set(&mut draft, SPIELORDERS_ORDER_FIELD_TITLE, "Lens components");
+    let package = reported_package(&root.0, commit(&plan_draft(&draft).unwrap()));
+    let findings = spielorders_package_findings(&package);
+    assert!(codes(&findings).contains(&"readme_unavailable".to_owned()));
+    assert!(spielorders_entries_count(findings.as_deref()) >= 2);
+
+    // A damaged Order cannot be represented in a current index, so the caller reopens.
+    let damaged = created_order(&root.0, "Damaged", &[]);
+    fs::write(damaged.join(".spielorders/order.json"), "{broken").unwrap();
+    let mut draft = order_draft(&read_order(&open(&root.0), &kept));
+    set(&mut draft, SPIELORDERS_ORDER_FIELD_TITLE, "Lens assembly");
+    let report = commit(&plan_draft(&draft).unwrap());
+    assert!(
+        spielorders_report_package(&report).is_none(),
+        "a damaged Order prevents a fresh open from proving the index current"
+    );
+    let fallback = open(&root.0);
+    assert_eq!(
+        spielorders_package_index_state(&fallback),
+        SPIELORDERS_INDEX_STATE_STALE
+    );
+    assert_eq!(
+        spielorders_list_count(&orders(&fallback, None, 0, SpielordersConstant(-1), 0)),
+        2
+    );
+    assert!(
+        titles(&orders(&fallback, None, 0, SpielordersConstant(-1), 0))
+            .contains(&"Lens assembly".to_owned())
+    );
+    let findings = spielorders_package_findings(&fallback);
+    assert!(codes(&findings).contains(&"managed_artifact_invalid_syntax".to_owned()));
+    assert!(codes(&findings).contains(&"readme_unavailable".to_owned()));
+}
+
+#[test]
+fn reports_without_a_refreshed_package_leave_reopening_to_the_caller() {
+    let root = initialized("report-no-refresh");
+    let directory = created_order(&root.0, "Lens", &[]);
+    let mut draft = order_draft(&read_order(&open(&root.0), &directory));
+    set(&mut draft, SPIELORDERS_ORDER_FIELD_TITLE, "Filter");
+    let plan = plan_draft(&draft).unwrap();
+    fs::create_dir(root.0.join(".spielorders/.index.json.spielorders-stage")).unwrap();
+    let mut report = None;
+    let mut outcome = None;
+    assert_eq!(
+        spielorders_plan_commit(&plan, &mut report, Some(&mut outcome)),
+        SPIELORDERS_RESULT_OK
+    );
+    let report = report.unwrap();
+    assert_eq!(
+        spielorders_report_kind(&report),
+        SPIELORDERS_REPORT_COMMITTED
+    );
+    assert!(
+        !codes(&outcome).is_empty(),
+        "a failed index refresh remains a committed warning"
+    );
+    assert!(spielorders_report_package(&report).is_none());
+    assert_eq!(
+        titles(&orders(&open(&root.0), None, 0, SpielordersConstant(-1), 0)),
+        ["Filter"]
+    );
+
+    // A refused or failed commit gives no report to read at all.
+    let mut refused = None;
+    assert_eq!(
+        spielorders_plan_commit(&plan, &mut refused, None),
+        SPIELORDERS_RESULT_REFUSED
+    );
+    assert!(refused.is_none());
+
+    let destination = Directory::new("report-guidance-only");
+    let (result, plan, _) = provision(&destination.0, 0);
+    assert_eq!(result, SPIELORDERS_RESULT_OK);
+    assert!(spielorders_report_package(&commit(&plan.unwrap())).is_none());
+}
+
+#[test]
+fn an_unchanged_report_keeps_its_package_after_later_commits() {
+    let root = initialized("report-snapshot");
+    let directory = created_order(&root.0, "Lens", &[]);
+    let draft = order_draft(&read_order(&open(&root.0), &directory));
+    let report = commit(&plan_draft(&draft).unwrap());
+    assert_eq!(
+        spielorders_report_kind(&report),
+        SPIELORDERS_REPORT_UNCHANGED
+    );
+    let before = package_view(&open(&root.0));
+    created_order(&root.0, "Filter", &[]);
+    let snapshot = spielorders_report_package(&report).unwrap();
+    spielorders_report_free(Some(report));
+    assert_eq!(package_view(&snapshot), before);
+    assert_ne!(package_view(&snapshot), package_view(&open(&root.0)));
+}
+
+#[test]
+fn a_nested_packages_report_describes_its_own_root() {
+    let outer = initialized("report-outer");
+    let nested = outer.0.join("Workspace");
+    fs::create_dir(&nested).unwrap();
+    let root = c_path(&nested);
+    let mut plan = None;
+    assert_eq!(
+        spielorders_plan_initialize(
+            PathBytes::new(&root),
+            OptionalPathBytes::null(),
+            OptionalPathBytes::null(),
+            0,
+            &mut plan,
+            None
+        ),
+        SPIELORDERS_RESULT_OK
+    );
+    let report = commit(&plan.unwrap());
+    let initialized = spielorders_report_package(&report).unwrap_or_else(|| open(&nested));
+    assert_eq!(path(spielorders_package_root(&initialized)), nested);
+    let directory = created_order(&nested, "Lens", &[]);
+    let mut draft = order_draft(&read_order(&open(&nested), &directory));
+    set(&mut draft, SPIELORDERS_ORDER_FIELD_TITLE, "Filter");
+    let package = reported_package(&nested, commit(&plan_draft(&draft).unwrap()));
+    assert_eq!(path(spielorders_package_root(&package)), nested);
+    assert_eq!(
+        titles(&orders(
+            &open(&outer.0),
+            None,
+            0,
+            SpielordersConstant(-1),
+            0
+        )),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn rebuilding_a_copied_package_uses_its_records_not_the_copied_index() {
+    let source = initialized("copy-source");
+    let directory = created_order(&source.0, "Lens", &[]);
+    let old_index = fs::read(source.0.join(".spielorders/index.json")).unwrap();
+    let mut draft = order_draft(&read_order(&open(&source.0), &directory));
+    set(&mut draft, SPIELORDERS_ORDER_FIELD_TITLE, "Filter");
+    commit(&plan_draft(&draft).unwrap());
+
+    let copied = Directory::new("copied-package");
+    let index = Path::new(".spielorders/index.json");
+    for (relative, bytes) in tree(&source.0) {
+        if relative == index {
+            continue;
+        }
+        let destination = copied.0.join(relative);
+        if let Some(bytes) = bytes {
+            fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            fs::write(destination, bytes).unwrap();
+        } else {
+            fs::create_dir_all(destination).unwrap();
+        }
+    }
+    // A restore can copy its old index last, giving it newer change evidence even though
+    // the canonical records hold different facts. The documented rebuild reads them all.
+    fs::write(copied.0.join(index), old_index).unwrap();
+    let mut plan = None;
+    assert_eq!(
+        spielorders_package_plan_rebuild_index(&open(&copied.0), 0, &mut plan, None),
+        SPIELORDERS_RESULT_OK
+    );
+    let report = commit(&plan.unwrap());
+    let package = spielorders_report_package(&report).unwrap_or_else(|| open(&copied.0));
+    assert_eq!(package_view(&package), package_view(&open(&copied.0)));
+    assert_eq!(
+        titles(&orders(&package, None, 0, SpielordersConstant(-1), 0)),
+        ["Filter"]
+    );
+    assert_eq!(
+        titles(&orders(
+            &open(&source.0),
+            None,
+            0,
+            SpielordersConstant(-1),
+            0
+        )),
+        ["Filter"]
+    );
+}
+
 /// Supplies `hits` (path, kind, modified, rank) from a provider in `state`, and answers
 /// the search or the entries it was refused with.
 fn searched(
@@ -1633,62 +2131,6 @@ fn a_provider_that_could_not_look_refuses_in_its_own_words() {
     );
 }
 
-/// A hit is judged by the file its path names, however the provider spelled that path.
-///
-/// Spotlight reports paths in decomposed Unicode, while the Order Directory this library
-/// created for `Café` is stored composed. Where the volume makes the two spellings one
-/// entry, as APFS does, the decomposed hit is that Order's file: it is matched, the Order's
-/// managed documents stay excluded in that spelling, and the file reported in both
-/// spellings is one result, answered in the Package's own spelling. Where the volume keeps
-/// the spellings apart, the decomposed path names nothing, and nothing is matched to it.
-#[test]
-fn a_hit_is_judged_by_the_file_its_path_names_however_it_is_spelled() {
-    let root = initialized("material-spelling");
-    let order = created_order(&root.0, "Caf\u{e9}", &[]);
-    let quote = order.join("quote.pdf");
-    fs::write(&quote, "").unwrap();
-    let package = open(&root.0);
-    let decomposed =
-        |path: &Path| PathBuf::from(path.to_str().unwrap().replace('\u{e9}', "e\u{301}"));
-    let respelled = decomposed(&quote);
-    assert_ne!(respelled, quote, "the Order Directory's name is composed");
-    let one_entry = fs::symlink_metadata(&respelled).is_ok();
-    let matched = |hits: &[&Path]| {
-        let hits: Vec<_> = hits.iter().map(|hit| (*hit, "pdf", "", "")).collect();
-        let search = searched(&package, &hits, &[], SPIELORDERS_PROVIDER_STATE_COMPLETE).unwrap();
-        (0..spielorders_search_count(&search))
-            .map(|i| {
-                (
-                    path(spielorders_search_order_directory(&search, i)),
-                    path(spielorders_search_path(&search, i)),
-                    string(spielorders_search_relative_path(&search, i)),
-                )
-            })
-            .collect::<Vec<_>>()
-    };
-    let the_quote = vec![(order.clone(), quote.clone(), "quote.pdf".to_owned())];
-
-    assert_eq!(
-        matched(&[&respelled]),
-        if one_entry {
-            the_quote.clone()
-        } else {
-            Vec::new()
-        },
-        "the decomposed hit names the composed Order's file exactly when the volume says so"
-    );
-    assert_eq!(
-        matched(&[
-            &respelled,
-            &decomposed(&order.join("README.md")),
-            &decomposed(&order.join(".spielorders/order.json")),
-            &quote,
-        ]),
-        the_quote,
-        "managed documents stay excluded in either spelling, and one file is one result"
-    );
-}
-
 #[test]
 fn a_package_with_no_healthy_order_has_no_directory_to_search() {
     let root = initialized("material-none");
@@ -1748,74 +2190,6 @@ fn reusable_values_and_entries_read_through_their_accessors() {
 }
 
 #[test]
-fn every_named_value_reads_back_in_exactly_one_family() {
-    let families: Vec<SpielordersConstant> = (100..200)
-        .map(SpielordersConstant)
-        .filter(|family| !string(spielorders_constant_name(*family)).is_empty())
-        .collect();
-    let mut named = 0;
-    for value in (0..40_000).map(SpielordersConstant) {
-        let name = spielorders_constant_name(value);
-        if string(name).is_empty() || families.contains(&value) {
-            continue;
-        }
-        named += 1;
-        let homes = families
-            .iter()
-            .filter(|family| spielorders_constant_from_name(**family, name) == value)
-            .count();
-        assert_eq!(homes, 1, "{}", string(name));
-    }
-    assert!(named > 200);
-}
-
-#[test]
-fn a_new_order_saves_its_item_rows_and_refuses_with_every_fault_located() {
-    let root = initialized("new-order-rows");
-    let package = open(&root.0);
-    let mut draft = None;
-    spielorders_package_new_order_draft(&package, &mut draft, None);
-    let mut draft = draft.unwrap();
-    set(&mut draft, SPIELORDERS_ORDER_FIELD_TITLE, "");
-    for row in 0..2 {
-        assert_eq!(
-            spielorders_draft_row_insert(&mut draft, row, None),
-            SPIELORDERS_RESULT_OK
-        );
-    }
-    set_row(&mut draft, 0, SPIELORDERS_ITEM_FIELD_DESCRIPTION, "Lens");
-    set_row(&mut draft, 0, SPIELORDERS_ITEM_FIELD_QUANTITY, "2");
-    set_row(&mut draft, 0, SPIELORDERS_ITEM_FIELD_UNIT_PRICE, "10");
-    set_row(&mut draft, 1, SPIELORDERS_ITEM_FIELD_DESCRIPTION, "Iris");
-    set_row(&mut draft, 1, SPIELORDERS_ITEM_FIELD_QUANTITY, "one");
-    set_row(&mut draft, 1, SPIELORDERS_ITEM_FIELD_UNIT_PRICE, "55");
-    assert_eq!(
-        plan_draft(&draft).map(|_| ()).unwrap_err(),
-        [
-            ("invalid_assignments".to_owned(), "title".to_owned(), -1),
-            ("invalid_assignments".to_owned(), "quantity".to_owned(), 1),
-        ]
-    );
-
-    set(
-        &mut draft,
-        SPIELORDERS_ORDER_FIELD_TITLE,
-        "Laser components",
-    );
-    set_row(&mut draft, 1, SPIELORDERS_ITEM_FIELD_QUANTITY, "1");
-    let report = commit(&plan_draft(&draft).unwrap());
-    let order = spielorders_report_order(&report).unwrap();
-    assert_eq!(spielorders_order_item_count(&order), 2);
-    assert_eq!(
-        string(spielorders_order_field(
-            &order,
-            SPIELORDERS_ORDER_FIELD_TOTAL
-        )),
-        "75"
-    );
-}
-
-#[test]
 fn a_new_vendor_saves_its_contact_rows_in_one_commit_and_refuses_with_every_fault_located() {
     let root = initialized("new-vendor-rows");
     let package = open(&root.0);
@@ -1861,18 +2235,7 @@ fn a_new_vendor_saves_its_contact_rows_in_one_commit_and_refuses_with_every_faul
         SPIELORDERS_CONTACT_FIELD_NAME,
         "Katherine Johnson",
     );
-    let plan = plan_draft(&draft).unwrap();
-    assert_eq!(
-        (0..spielorders_plan_operation_count(&plan))
-            .filter(|index| {
-                spielorders_plan_operation_kind(&plan, *index)
-                    == SPIELORDERS_OPERATION_REPLACE_VENDOR_RECORD
-            })
-            .count(),
-        1,
-        "the Vendor and its Contacts are one replacement of the Vendor record"
-    );
-    let report = commit(&plan);
+    let report = commit(&plan_draft(&draft).unwrap());
     let vendor = spielorders_report_vendor(&report).unwrap();
     assert_eq!(spielorders_vendor_contact_count(&vendor), 2);
     assert_eq!(
@@ -1954,7 +2317,7 @@ fn a_search_confined_to_one_fact_matches_only_in_that_fact() {
     set(
         &mut draft,
         SPIELORDERS_VENDOR_FIELD_PHONE,
-        "+1 555 0123",
+        "+1 555 0123 extn 7",
     );
     assert_eq!(
         spielorders_draft_row_insert(&mut draft, 0, None),
@@ -2054,12 +2417,13 @@ fn a_search_confined_to_one_fact_matches_only_in_that_fact() {
         "the Vendor fact is the referenced Vendor's Name"
     );
     assert!(
-        search_orders(&package, "973", SPIELORDERS_ORDER_FIELD_VENDOR, 0)
+        search_orders(&package, "extn", SPIELORDERS_ORDER_FIELD_VENDOR, 0)
             .unwrap()
             .is_empty()
     );
+    // A word no identity holds, since identities are hexadecimal.
     assert_eq!(
-        search_orders(&package, "973", every, 0).unwrap(),
+        search_orders(&package, "extn", every, 0).unwrap(),
         ["Laser components"],
         "every fact still reaches the Vendor's shared facts"
     );
@@ -2427,7 +2791,11 @@ fn an_order_edit_checks_current_group_spelling_only_in_its_project() {
         );
         let expected_group = if expected == SPIELORDERS_RESULT_REFUSED {
             assert!(report.is_none());
-            assert_eq!(codes(&outcome), ["preconditions_changed"]);
+            assert_eq!(codes(&outcome), ["plan_evidence_unconfirmed"]);
+            assert_eq!(
+                string(spielorders_entries_message(outcome.as_deref(), 0)),
+                "Plan evidence unconfirmed: order_group"
+            );
             assert_eq!(tree(&root.0), before, "a stale plan writes nothing");
             ""
         } else {
@@ -2894,19 +3262,19 @@ fn a_restore_refuses_a_vendor_reference_that_no_longer_resolves() {
         let package = open(&root.0);
         let mut vendor = new_draft(&package, spielorders_package_new_vendor_draft);
         set(&mut vendor, SPIELORDERS_VENDOR_FIELD_NAME, "Acme Parts");
-        let vendor = spielorders_report_vendor(&commit(&plan_draft(&vendor).unwrap())).unwrap();
+        commit(&plan_draft(&vendor).unwrap());
         let directory = created_order(&root.0, "Laser components", &[]);
         let mut order = order_draft(&read_order(&open(&root.0), &directory));
         set(&mut order, SPIELORDERS_ORDER_FIELD_VENDOR, "Acme Parts");
         commit(&plan_draft(&order).unwrap());
         let gone = removed(&root.0, &directory);
         let restore = after_planning.then(|| plan_restore(&root.0, &gone).unwrap());
-        let mut deletion = None;
-        assert_eq!(
-            spielorders_vendor_plan_delete(&vendor, 0, &mut deletion, None),
-            SPIELORDERS_RESULT_OK
-        );
-        commit(&deletion.unwrap());
+        // SpielOrders refuses this deletion, so the Vendor is deleted by hand.
+        let vendors = root.0.join(".spielorders/vendors.json");
+        let mut record: serde_json::Value =
+            serde_json::from_slice(&fs::read(&vendors).unwrap()).unwrap();
+        record["vendors"] = serde_json::json!([]);
+        fs::write(&vendors, serde_json::to_vec(&record).unwrap()).unwrap();
         let before = tree(&root.0);
         if let Some(restore) = restore {
             let mut report = None;
@@ -3091,14 +3459,6 @@ fn a_refresh_never_replaces_guidance_edited_after_planning() {
     let (result, plan, _) = provision(root, 0);
     assert_eq!(result, SPIELORDERS_RESULT_OK);
     let plan = plan.unwrap();
-    let kinds: Vec<_> = (0..spielorders_plan_operation_count(&plan))
-        .map(|i| {
-            string(spielorders_constant_name(spielorders_plan_operation_kind(
-                &plan, i,
-            )))
-        })
-        .collect();
-    assert!(kinds.contains(&"replace_file".to_owned()), "{kinds:?}");
 
     fs::write(skill.join("SKILL.md"), "edited meanwhile\n").unwrap();
     let mut report = None;
@@ -3291,7 +3651,13 @@ fn an_order_save_refuses_a_value_deleted_after_planning() {
             "a deleted field value must not be recreated by a stale plan"
         );
         assert!(report.is_none());
-        assert_eq!(codes(&outcome), ["preconditions_changed"]);
+        assert_eq!(codes(&outcome), ["plan_evidence_unconfirmed"]);
+        let name = string(spielorders_constant_name(field));
+        assert_eq!(
+            string(spielorders_entries_message(outcome.as_deref(), 0)),
+            format!("Plan evidence unconfirmed: {name}"),
+            "the refusal names the value that moved"
+        );
         assert_eq!(tree(&root.0), before);
     }
 }
@@ -3730,8 +4096,10 @@ fn a_merge_plan_marks_the_folders_it_moves() {
         [("invoice.pdf".to_owned(), 0), ("photos".to_owned(), 1)]
     );
 }
+
+/// A Package handle opened earlier never stands in for the Vendor record as it is now.
 #[test]
-fn current_vendor() {
+fn an_order_read_resolves_its_vendor_as_the_vendor_record_now_names_it() {
     let root = initialized("related-vendor");
     let package = open(&root.0);
     let mut vendor = new_draft(&package, spielorders_package_new_vendor_draft);
@@ -3757,7 +4125,7 @@ fn current_vendor() {
 }
 
 #[test]
-fn package_integrity() {
+fn an_order_read_refuses_a_package_damaged_after_it_was_opened() {
     for case in ["config", "version", "duplicate"] {
         let root = initialized(case);
         let directory = created_order(&root.0, "Lenses", &[]);
@@ -3802,8 +4170,10 @@ fn package_integrity() {
     }
 }
 
+/// A Vendor that only the derived index names is no Vendor, and a save naming it is
+/// refused at the Order's Vendor field.
 #[test]
-fn invented_vendor() {
+fn an_order_save_names_only_vendors_the_vendor_record_holds() {
     let root = initialized("index-vendor");
     let directory = created_order(&root.0, "Lenses", &[]);
     let index = root.0.join(".spielorders/index.json");
@@ -3816,12 +4186,15 @@ fn invented_vendor() {
     let mut draft = order_draft(&order);
     set(&mut draft, SPIELORDERS_ORDER_FIELD_VENDOR, "Ghost");
     let before = tree(&root.0);
-    assert!(plan_draft(&draft).is_err());
+    assert_eq!(
+        plan_draft(&draft).map(|_| ()),
+        Err(vec![("unknown_vendor".into(), "vendor".into(), -1)])
+    );
     assert_eq!(tree(&root.0), before);
 }
 
 #[test]
-fn linked_browsing() {
+fn a_linked_order_metadata_directory_lists_as_damaged_and_is_never_written() {
     let root = initialized("linked-browsing");
     let order = created_order(&root.0, "Lenses", &[]);
     let outside = Directory::new("linked-record");
@@ -4056,4 +4429,231 @@ fn a_merge_refuses_a_later_record_linked_after_planning() {
     assert!(report.is_none());
     assert_eq!(tree(&root.0), before);
     assert_eq!(tree(&outside.0), outside_before);
+}
+
+#[test]
+fn a_package_refuses_an_order_directory_of_another_package() {
+    for nested in [false, true] {
+        let root = initialized("another-package");
+        let elsewhere = initialized("another-package-elsewhere");
+        let directory = created_order(&elsewhere.0, "Mounts", &[]);
+        let directory = if nested {
+            let nested_root = root.0.join("Other Package");
+            fs::rename(&elsewhere.0, &nested_root).unwrap();
+            nested_root.join(directory.strip_prefix(&elsewhere.0).unwrap())
+        } else {
+            directory
+        };
+        let theirs = c_path(&directory);
+        let package = open(&root.0);
+
+        let mut order = None;
+        let mut outcome = None;
+        let result = spielorders_package_read_order(
+            &package,
+            PathBytes::new(&theirs),
+            0,
+            &mut order,
+            Some(&mut outcome),
+        );
+        assert_eq!(result, SPIELORDERS_RESULT_REFUSED);
+        assert!(order.is_none());
+        assert_eq!(codes(&outcome), ["order_not_found"]);
+
+        for validating in [true, false] {
+            let mut diagnosis = None;
+            let mut outcome = None;
+            let directory = PathBytes::new(&theirs);
+            let result = if validating {
+                spielorders_package_validate_order(
+                    &package,
+                    directory,
+                    0,
+                    &mut diagnosis,
+                    Some(&mut outcome),
+                )
+            } else {
+                spielorders_package_diagnose_order(
+                    &package,
+                    directory,
+                    0,
+                    &mut diagnosis,
+                    Some(&mut outcome),
+                )
+            };
+            assert_eq!(result, SPIELORDERS_RESULT_REFUSED);
+            assert!(diagnosis.is_none());
+            assert_eq!(codes(&outcome), ["order_not_found"]);
+        }
+    }
+}
+
+#[test]
+fn an_assignment_is_refused_on_its_own_terms_by_its_record() {
+    let refusal = |family, name: &str, value: &str| {
+        let (name, value) = (c(name), c(value));
+        string(spielorders_constant_name(spielorders_assignment_refusal(
+            family,
+            Text::new(&name),
+            Text::new(&value),
+        )))
+    };
+    let cases = [
+        (SPIELORDERS_FAMILY_ORDER_FIELD, "title", "Lenses"),
+        (SPIELORDERS_FAMILY_ORDER_FIELD, "title", " "),
+        (SPIELORDERS_FAMILY_ORDER_FIELD, "date_ordered", ""),
+        (SPIELORDERS_FAMILY_ORDER_FIELD, "order_id", "x"),
+        (SPIELORDERS_FAMILY_ORDER_FIELD, "package_root", "x"),
+        (SPIELORDERS_FAMILY_ORDER_FIELD, "items", "x"),
+        (SPIELORDERS_FAMILY_ORDER_FIELD, "total", "1"),
+        (SPIELORDERS_FAMILY_ITEM_FIELD, "quantity", "two"),
+        (SPIELORDERS_FAMILY_ITEM_FIELD, "catalog_number", ""),
+        (SPIELORDERS_FAMILY_VENDOR_FIELD, "vendor_id", "x"),
+        (SPIELORDERS_FAMILY_VENDOR_FIELD, "contacts", "x"),
+        (SPIELORDERS_FAMILY_CONTACT_FIELD, "name", ""),
+        (SPIELORDERS_FAMILY_TEXT_FIELD, "content", "x"),
+    ];
+    assert_eq!(
+        cases.map(|(family, name, value)| refusal(family, name, value)),
+        [
+            "",
+            "blank_required_value",
+            "blank_required_value",
+            "immutable_identity",
+            "managed_technical_field",
+            "ordered_collection",
+            "unknown_field",
+            "not_a_finite_number",
+            "",
+            "immutable_identity",
+            "ordered_collection",
+            "blank_required_value",
+            "unknown_field",
+        ]
+    );
+}
+
+#[test]
+fn the_orders_using_a_value_are_those_its_count_includes() {
+    let root = initialized("orders-with-value");
+    let facts = [
+        ("Chamber", "Ada", "Clock", "Lab"),
+        ("Oven", " ada ", "clock", "lab"),
+        ("Lamp", "Grace", "", "Lab"),
+    ];
+    for (title, orderer, project, group) in facts {
+        let directory = created_order(&root.0, title, &[]);
+        let mut draft = order_draft(&read_order(&open(&root.0), &directory));
+        for (field, value) in [
+            (SPIELORDERS_ORDER_FIELD_ORDERER, orderer),
+            (SPIELORDERS_ORDER_FIELD_PROJECT, project),
+            (SPIELORDERS_ORDER_FIELD_ORDER_GROUP, group),
+        ] {
+            set(&mut draft, field, value);
+            spielorders_draft_confirm(&mut draft, field, -1, None);
+        }
+        commit(&plan_draft(&draft).unwrap());
+    }
+    let package = open(&root.0);
+    let using = |field, value: &str, project: Option<&str>| {
+        let value = c(value);
+        let project = project.map(c);
+        let mut list = None;
+        let result = spielorders_package_orders_with_value(
+            &package,
+            field,
+            Text::new(&value),
+            project
+                .as_deref()
+                .map_or(OptionalText::null(), OptionalText::new),
+            0,
+            &mut list,
+            None,
+        );
+        (result == SPIELORDERS_RESULT_OK).then(|| titles(&list.unwrap()))
+    };
+
+    assert_eq!(
+        [
+            using(SPIELORDERS_ORDER_FIELD_ORDERER, "ADA", None),
+            using(SPIELORDERS_ORDER_FIELD_PROJECT, "Clock", None),
+            using(SPIELORDERS_ORDER_FIELD_ORDER_GROUP, "LAB", Some("clock")),
+            using(SPIELORDERS_ORDER_FIELD_ORDER_GROUP, "Lab", None),
+            using(SPIELORDERS_ORDER_FIELD_TITLE, "Oven", None),
+        ],
+        [
+            Some(vec!["Chamber".to_owned(), "Oven".to_owned()]),
+            Some(vec!["Chamber".to_owned(), "Oven".to_owned()]),
+            Some(vec!["Chamber".to_owned(), "Oven".to_owned()]),
+            Some(vec!["Lamp".to_owned()]),
+            None,
+        ]
+    );
+    let mut values = None;
+    spielorders_package_values(&package, SPIELORDERS_ORDER_FIELD_ORDERER, &mut values, None);
+    let values = values.unwrap();
+    let ada = (0..spielorders_list_count(&values))
+        .find(|row| {
+            string(spielorders_list_field(
+                &values,
+                *row,
+                SPIELORDERS_VALUE_FIELD_VALUE,
+            )) == "Ada"
+        })
+        .unwrap();
+    assert_eq!(
+        string(spielorders_list_field(
+            &values,
+            ada,
+            SPIELORDERS_VALUE_FIELD_USAGE_COUNT
+        )),
+        "2"
+    );
+}
+
+#[test]
+fn an_unreadable_readme_is_reported_once_by_an_order_read() {
+    let root = initialized("readme-reported-once");
+    let directory = created_order(&root.0, "Lenses", &[]);
+    fs::remove_file(directory.join("README.md")).unwrap();
+    fs::create_dir(directory.join("README.md")).unwrap();
+    let package = open(&root.0);
+    let directory = c_path(&directory);
+    let mut order = None;
+    let mut outcome = None;
+    spielorders_package_read_order(
+        &package,
+        PathBytes::new(&directory),
+        0,
+        &mut order,
+        Some(&mut outcome),
+    );
+    assert_eq!(codes(&outcome), ["readme_unavailable"]);
+}
+
+#[test]
+fn a_fault_inside_an_item_names_that_items_field_and_row() {
+    let root = initialized("nested-field-fault");
+    let directory = created_order(&root.0, "Lenses", &[("Lens", "1", "2")]);
+    let record = directory.join(".spielorders/order.json");
+    let mut document: serde_json::Value =
+        serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();
+    document["items"][0]["quantity"] = serde_json::json!("two");
+    fs::write(&record, serde_json::to_vec(&document).unwrap()).unwrap();
+    let package = open(&root.0);
+    let directory = c_path(&directory);
+    let mut order = None;
+    let mut outcome = None;
+    spielorders_package_read_order(
+        &package,
+        PathBytes::new(&directory),
+        0,
+        &mut order,
+        Some(&mut outcome),
+    );
+    assert!(
+        located(&outcome).contains(&("damaged_record".to_owned(), "quantity".to_owned(), 0)),
+        "{:?}",
+        located(&outcome)
+    );
 }

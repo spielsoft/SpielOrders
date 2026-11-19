@@ -6,8 +6,10 @@ Decision sources: [Define the Rust CLI capability contract](../../issues/wayfind
 
 The [library](../../crates/spielorders/src/lib.rs) exposes only its C interface. It owns
 Package reads, mutation planning, validation, identity, normalization, calculations,
-search processing, diagnostics, and recovery. It answers every monetary value unrounded;
-each front end chooses the precision it displays.
+search processing, diagnostics, and recovery. It computes with standard integers and
+binary floating point, never exact-decimal or arbitrary-precision types, and answers every
+monetary value as computed, not rounded; each front end rounds it to the precision it
+displays.
 [Integration ownership](#integration-ownership) governs coordination with Rust work.
 
 The library performs its own Package filesystem effects inside the authorized folder.

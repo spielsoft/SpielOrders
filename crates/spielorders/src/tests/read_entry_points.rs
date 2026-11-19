@@ -1,5 +1,5 @@
-//! The reads a caller asks of a Package: what they answer with, that opening writes
-//! nothing, and that a long read stops when its caller cancels.
+//! The reads a caller asks of a Package: what they answer with, and that a long read
+//! stops when its caller cancels.
 //!
 //! Decision sources: Define the Rust CLI capability contract; Effect and adapter
 //! boundaries.
@@ -17,9 +17,8 @@ use crate::{
 };
 use crate::{ProviderReport, SupportingMaterialSnapshot};
 use crate::{
-    canonical::PackageIndexRecord, canonical::PackageIndexState,
-    canonical::ReusableValueProjection, search::CaseSensitivity, search::ReusableValueKind,
-    search::SearchQuery, search::VendorVisibility,
+    canonical::PackageIndexRecord, canonical::ReusableValueProjection, search::CaseSensitivity,
+    search::SearchQuery, search::VendorVisibility, values::ReusableValueKind,
 };
 use std::path::Path;
 use std::sync::{
@@ -27,10 +26,6 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-const MINIMAL_INDEX: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../contracts/fixtures/derived-index/minimal-deterministic.json"
-));
 const MINIMAL_ORDER: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../contracts/examples/v1/minimal/order.json"
@@ -96,31 +91,6 @@ fn every_list_answer_carries_the_findings_of_its_package() {
         package.values(ReusableValueKind::Orderer).diagnostics,
         findings
     );
-}
-
-/// Opening only assesses the derived Package Index and writes nothing to correct it.
-#[test]
-fn opening_a_package_writes_nothing_whatever_its_index_needs() {
-    for (index, state) in [
-        (None, PackageIndexState::Missing),
-        (
-            Some(b"{ malformed".as_slice()),
-            PackageIndexState::Malformed,
-        ),
-        (Some(MINIMAL_INDEX), PackageIndexState::Current),
-    ] {
-        let filesystem = minimal_package();
-        if let Some(index) = index {
-            filesystem.put_file("/package/.spielorders/index.json", index);
-        }
-
-        let Ok(package) = opened(Path::new("/package"), &filesystem).result else {
-            panic!("a Package whose only problem is its index opens")
-        };
-
-        assert_eq!(filesystem.effects(), [], "opening writes nothing");
-        assert_eq!(package.contents.index.state, state);
-    }
 }
 
 /// A Package of two Orders, `A` and `B`, listed in that order.

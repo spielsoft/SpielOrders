@@ -4,11 +4,9 @@
 
 use crate::{
     Answer, Failure,
-    creation_batch::{
-        CreationBatch, CreationPrecondition, commit_creation, create_directory, create_file,
-        planned_location, preserve_directory, preserve_file, replace_file,
-    },
+    change::PlannedAct,
     filesystem::staging_path,
+    journal::{CreationAct, Expect, Journal, Subject, planned_location},
     mutation::MutationReport,
     operations::{FailedOperation, FailedPath},
     ports::{FileSystem, FileSystemEntryKind},
@@ -47,9 +45,9 @@ const DIRECTORIES: [&str; 4] = [
     ".agents/skills/spielorders/references",
 ];
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AgentSetupPlan {
-    pub(crate) batch: CreationBatch,
+    pub(crate) journal: Journal,
 }
 
 /// The caller has already refused a linked `selected` root.
@@ -77,14 +75,18 @@ pub(crate) fn plan_agent_setup<F: FileSystem>(selected: &Path, fs: &F) -> Answer
             location: planned_location(&root, path),
             found,
         };
-        let mut operations = Vec::new();
+        let act = PlannedAct::Creation;
+        let mut journal = Journal::new(&root);
+        journal.require(root.clone(), Some(FileSystemEntryKind::Directory));
         for relative in DIRECTORIES {
             let path = root.join(relative);
             match observe(&path)? {
-                None => operations.push(create_directory(&root, path)),
-                Some(FileSystemEntryKind::Directory) => {
-                    operations.push(preserve_directory(&root, path))
-                }
+                None => journal.create_directory(path, act(CreationAct::CreateDirectory)),
+                Some(FileSystemEntryKind::Directory) => journal.preserve(
+                    path,
+                    FileSystemEntryKind::Directory,
+                    act(CreationAct::PreserveDirectory),
+                ),
                 found => return Err(collision(path, found)),
             }
         }
@@ -96,29 +98,31 @@ pub(crate) fn plan_agent_setup<F: FileSystem>(selected: &Path, fs: &F) -> Answer
                     if let Some(found) = observe(&stage)? {
                         return Err(collision(stage, Some(found)));
                     }
-                    operations.push(create_file(&root, path, bytes.to_vec()));
+                    journal.create_file(path, bytes.to_vec(), act(CreationAct::CreateFile));
                 }
                 Some(FileSystemEntryKind::File) => {
                     let current = fs.read(&path).map_err(|error| failed(&path, &error))?;
-                    operations.push(if current == *bytes {
-                        preserve_file(&root, path)
+                    if current == *bytes {
+                        journal.preserve(
+                            path,
+                            FileSystemEntryKind::File,
+                            act(CreationAct::PreserveFile),
+                        );
                     } else {
-                        replace_file(&root, path, current, bytes.to_vec())
-                    });
+                        journal.replace(
+                            path,
+                            bytes.to_vec(),
+                            Expect::Bytes(current),
+                            act(CreationAct::ReplaceFile),
+                            Subject::Other,
+                        );
+                    }
                 }
                 found => return Err(collision(path, found)),
             }
         }
-        Ok(AgentSetupPlan {
-            batch: CreationBatch {
-                preconditions: vec![CreationPrecondition {
-                    path: root.clone(),
-                    expected: Some(FileSystemEntryKind::Directory),
-                }],
-                root,
-                operations,
-            },
-        })
+        journal.require_planned();
+        Ok(AgentSetupPlan { journal })
     })
 }
 
@@ -126,5 +130,5 @@ pub(crate) fn commit_agent_setup<F: FileSystem>(
     plan: AgentSetupPlan,
     fs: &F,
 ) -> Answer<MutationReport<()>> {
-    commit_creation(plan.batch, fs, |_, _| None)
+    Answer::of(|| Ok(plan.journal.run(fs)?.report(())))
 }

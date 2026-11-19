@@ -29,7 +29,7 @@ use std::{
 /// executable: long enough for an ordinary index, short enough not to hold a terminal.
 const PROVIDER_BOUND: Duration = Duration::from_secs(10);
 
-type Read = Result<Value, Answer>;
+type Data = Result<Value, Answer>;
 
 /// Runs the command `family` names and answers with what it will show.
 pub(crate) fn run(family: &Family) -> Shown<'_> {
@@ -71,7 +71,7 @@ pub(crate) fn run(family: &Family) -> Shown<'_> {
                     .map(|assignment| c_text(assignment.value.as_str()))
             };
             let (orders, removed) = (assigned(cli::ORDERS_PATH), assigned(cli::REMOVED_PATH));
-            fn optional(path: &Option<CString>) -> OptionalPathBytes<'_> {
+            fn optional_path(path: &Option<CString>) -> OptionalPathBytes<'_> {
                 path.as_deref()
                     .map_or(OptionalPathBytes::null(), OptionalPathBytes::new)
             }
@@ -80,8 +80,8 @@ pub(crate) fn run(family: &Family) -> Shown<'_> {
                 let plan = calls.get(|plan, outcome| {
                     spielorders_plan_initialize(
                         PathBytes::new(&root),
-                        optional(&orders),
-                        optional(&removed),
+                        optional_path(&orders),
+                        optional_path(&removed),
                         0,
                         plan,
                         outcome,
@@ -103,7 +103,7 @@ pub(crate) fn run(family: &Family) -> Shown<'_> {
                 let mut draft = calls.get(|draft, outcome| {
                     spielorders_package_new_vendor_draft(&package, draft, outcome)
                 })?;
-                without_default(&mut draft, SPIELORDERS_VENDOR_FIELD_NAME);
+                cleared(&mut draft, SPIELORDERS_VENDOR_FIELD_NAME);
                 save(
                     calls,
                     draft,
@@ -127,7 +127,7 @@ pub(crate) fn run(family: &Family) -> Shown<'_> {
                 let mut draft = calls.get(|draft, outcome| {
                     spielorders_package_new_order_draft(&package, draft, outcome)
                 })?;
-                without_default(&mut draft, SPIELORDERS_ORDER_FIELD_TITLE);
+                cleared(&mut draft, SPIELORDERS_ORDER_FIELD_TITLE);
                 save_adding(
                     calls,
                     draft,
@@ -191,7 +191,12 @@ pub(crate) fn run(family: &Family) -> Shown<'_> {
                 let diagnosis = calls.get(|diagnosis, outcome| {
                     spielorders_package_validate(&package, 0, diagnosis, outcome)
                 })?;
-                verdict(calls, &diagnosis, SPIELORDERS_FAILURE_PACKAGE_INVALID)
+                verdict(
+                    calls,
+                    &diagnosis,
+                    &target.root,
+                    SPIELORDERS_FAILURE_PACKAGE_INVALID,
+                )
             }),
             Human::Verdict("valid"),
         ),
@@ -211,9 +216,16 @@ pub(crate) fn run(family: &Family) -> Shown<'_> {
                     })
                 };
                 let diagnosis = diagnose(calls)?;
-                repair(calls, &diagnosis, assignments, execution, diagnose)
+                repair(
+                    calls,
+                    &diagnosis,
+                    &target.root,
+                    assignments,
+                    execution,
+                    diagnose,
+                )
             }),
-            Human::Repair("spielorders repair"),
+            Human::Repair,
         ),
         Family::Index { command } => match command {
             IndexCommand::Status { target, .. } => (
@@ -272,18 +284,33 @@ pub(crate) fn run(family: &Family) -> Shown<'_> {
                 let package = open(calls, &target.root)?;
                 let mut batch = calls
                     .get(|batch, outcome| spielorders_package_batch(&package, batch, outcome))?;
+                // The file line each addition to the batch came from.
+                let mut additions = Vec::new();
                 for (index, line) in text.lines().enumerate() {
                     let line = line.trim();
                     if line.is_empty() || line.starts_with('#') {
                         continue;
                     }
-                    apply_line(calls, &mut batch, line)
-                        .map_err(|refused| at_line(refused, index + 1, line))?;
+                    let before = spielorders_batch_count(&batch);
+                    add_line(calls, &mut batch, line)
+                        .map_err(|refused| refused_at(refused, index + 1, line))?;
+                    for _ in before..spielorders_batch_count(&batch) {
+                        additions.push(index + 1);
+                    }
                 }
                 let plan =
                     calls.get(|plan, outcome| spielorders_batch_plan(&batch, 0, plan, outcome))?;
-                let mut data = counted(calls, &plan, execution)?;
+                let mut data = mutate_counted(calls, &plan, execution)?;
                 data["applied"] = Value::from(spielorders_batch_count(&batch));
+                let changes = data.get_mut("changes").and_then(Value::as_array_mut);
+                for (index, change) in changes.into_iter().flatten().enumerate() {
+                    let index = i64::try_from(index).unwrap_or(-1);
+                    let addition = spielorders_plan_change_addition(&plan, index);
+                    let line = usize::try_from(addition)
+                        .ok()
+                        .and_then(|addition| additions.get(addition));
+                    change["line"] = line.map_or(Value::Null, |line| Value::from(*line));
+                }
                 Ok(data)
             });
             (Contract::Apply, &target.root, answer, Human::Whole)
@@ -301,12 +328,12 @@ pub(crate) fn run(family: &Family) -> Shown<'_> {
     }
 }
 
-type Command<'a> = (Contract, &'a PathBuf, Answer, Human);
+type Reply<'a> = (Contract, &'a PathBuf, Answer, Human);
 
 /// What one Item or Contact command does to the draft of the record that holds its rows.
 type RowEdit<'a> = Box<dyn Fn(&mut Calls, &mut SpielordersDraft) -> Result<(), Answer> + 'a>;
 
-fn package(command: &PackageCommand) -> Command<'_> {
+fn package(command: &PackageCommand) -> Reply<'_> {
     match command {
         PackageCommand::Readme { target, .. } => (
             Contract::PackageReadme,
@@ -339,7 +366,7 @@ fn package(command: &PackageCommand) -> Command<'_> {
         } => (
             Contract::PackageListVendors,
             &target.root,
-            answered(|calls| vendors(calls, &target.root, "", hidden(*all))),
+            answered(|calls| vendors(calls, &target.root, "", hidden_flags(*all))),
             Human::Whole,
         ),
         PackageCommand::Values { kind, target, .. } => {
@@ -374,7 +401,7 @@ fn package(command: &PackageCommand) -> Command<'_> {
     }
 }
 
-fn order(command: &OrderCommand) -> Command<'_> {
+fn order(command: &OrderCommand) -> Reply<'_> {
     match command {
         OrderCommand::Show { target, .. } => (
             Contract::OrderShow,
@@ -396,7 +423,7 @@ fn order(command: &OrderCommand) -> Command<'_> {
             Contract::OrderValidate,
             &target.root,
             answered(|calls| {
-                let (package, directory) = order_directory(calls, target)?;
+                let (package, directory) = locate_order(calls, target)?;
                 let diagnosis = calls.get(|diagnosis, outcome| {
                     spielorders_package_validate_order(
                         &package,
@@ -406,7 +433,12 @@ fn order(command: &OrderCommand) -> Command<'_> {
                         outcome,
                     )
                 })?;
-                verdict(calls, &diagnosis, SPIELORDERS_FAILURE_ORDER_INVALID)
+                verdict(
+                    calls,
+                    &diagnosis,
+                    &target.root,
+                    SPIELORDERS_FAILURE_ORDER_INVALID,
+                )
             }),
             Human::Verdict("valid"),
         ),
@@ -420,7 +452,7 @@ fn order(command: &OrderCommand) -> Command<'_> {
             &target.root,
             answered(|calls| {
                 let diagnose = |calls: &mut Calls| {
-                    let (package, directory) = order_directory(calls, target)?;
+                    let (package, directory) = locate_order(calls, target)?;
                     calls.get(|diagnosis, outcome| {
                         spielorders_package_diagnose_order(
                             &package,
@@ -432,9 +464,16 @@ fn order(command: &OrderCommand) -> Command<'_> {
                     })
                 };
                 let diagnosis = diagnose(calls)?;
-                repair(calls, &diagnosis, assignments, execution, diagnose)
+                repair(
+                    calls,
+                    &diagnosis,
+                    &target.root,
+                    assignments,
+                    execution,
+                    diagnose,
+                )
             }),
-            Human::Repair("spielorders order repair"),
+            Human::Repair,
         ),
         OrderCommand::Edit {
             assignments,
@@ -496,7 +535,7 @@ fn order(command: &OrderCommand) -> Command<'_> {
             yes,
             target,
             execution,
-            ..
+            output,
         } => (
             Contract::OrderMerge,
             &target.root,
@@ -516,7 +555,9 @@ fn order(command: &OrderCommand) -> Command<'_> {
                     )
                 })?;
                 if !execution.dry_run && !yes {
-                    confirm_discards(calls, &plan)?;
+                    // Only a person reading human output is there to answer.
+                    let asks = output.mode() == crate::output::Mode::Human;
+                    confirm_discards(calls, &plan, asks)?;
                 }
                 mutate(calls, &plan, execution)
             }),
@@ -527,7 +568,7 @@ fn order(command: &OrderCommand) -> Command<'_> {
 }
 
 /// Adds the one command line `line`, a JSON array of strings, to `batch`.
-fn apply_line(calls: &mut Calls, batch: &mut SpielordersBatch, line: &str) -> Result<(), Answer> {
+fn add_line(calls: &mut Calls, batch: &mut SpielordersBatch, line: &str) -> Result<(), Answer> {
     let arguments: Vec<String> = serde_json::from_str(line).map_err(|error| {
         calls.refuse_own("operation_invalid", json!({ "reason": error.to_string() }))
     })?;
@@ -575,7 +616,7 @@ fn apply_line(calls: &mut Calls, batch: &mut SpielordersBatch, line: &str) -> Re
         Family::AddVendor { subject, .. } => {
             let mut draft =
                 calls.get(|draft, _| spielorders_batch_new_vendor_draft(batch, draft))?;
-            without_default(&mut draft, SPIELORDERS_VENDOR_FIELD_NAME);
+            cleared(&mut draft, SPIELORDERS_VENDOR_FIELD_NAME);
             let assignments = cli::subject_assignments(subject, cli::VENDOR_NAME_FIELD);
             assign(
                 calls,
@@ -649,7 +690,7 @@ fn batch_vendor_draft(
 }
 
 /// A refusal of the batch line `number`, `line`, carrying the line it refused.
-fn at_line(refused: Answer, number: usize, line: &str) -> Answer {
+fn refused_at(refused: Answer, number: usize, line: &str) -> Answer {
     match refused {
         Answer::Failed {
             mut error,
@@ -665,7 +706,7 @@ fn at_line(refused: Answer, number: usize, line: &str) -> Answer {
 
 /// Asks before each entry a merge `plan` discards, refusing the merge at the first entry
 /// declined, or before any where there is no one to ask.
-fn confirm_discards(calls: &mut Calls, plan: &SpielordersPlan) -> Result<(), Answer> {
+fn confirm_discards(calls: &mut Calls, plan: &SpielordersPlan, asks: bool) -> Result<(), Answer> {
     let discarded: Vec<String> = (0..spielorders_plan_operation_count(plan))
         .filter(|index| {
             spielorders_plan_operation_kind(plan, *index)
@@ -679,9 +720,12 @@ fn confirm_discards(calls: &mut Calls, plan: &SpielordersPlan) -> Result<(), Ans
         })
         .collect();
     for path in &discarded {
-        match crate::effects::confirm(&format!(
-            "Discard {path}? The kept Order already holds this entry."
-        )) {
+        let answer = asks.then(|| {
+            crate::effects::confirm(&format!(
+                "Discard {path}? The kept Order already holds this entry."
+            ))
+        });
+        match answer.flatten() {
             Some(true) => {}
             Some(false) => {
                 return Err(calls.refuse_own("discard_declined", json!({ "path": path })));
@@ -735,7 +779,7 @@ fn trash(calls: &mut Calls, data: &mut Value, execution: &Execution) -> Result<(
     }
 }
 
-fn item(command: &ItemCommand) -> Command<'_> {
+fn item(command: &ItemCommand) -> Reply<'_> {
     let (contract, target, execution, edit) = match item_edit(command) {
         Ok(edit) => edit,
         Err(target) => {
@@ -822,7 +866,7 @@ fn item_edit(
     })
 }
 
-fn vendor(command: &VendorCommand) -> Command<'_> {
+fn vendor(command: &VendorCommand) -> Reply<'_> {
     match command {
         VendorCommand::Show { name, target, .. } => (
             Contract::VendorShow,
@@ -905,7 +949,7 @@ fn vendor(command: &VendorCommand) -> Command<'_> {
                         })?
                     }
                 };
-                counted(calls, &plan, execution)
+                mutate_counted(calls, &plan, execution)
             }),
             Human::Whole,
         ),
@@ -936,7 +980,7 @@ fn vendor(command: &VendorCommand) -> Command<'_> {
                         outcome,
                     )
                 })?;
-                counted(calls, &plan, execution)
+                mutate_counted(calls, &plan, execution)
             }),
             Human::Whole,
         ),
@@ -965,7 +1009,7 @@ fn value_field(kind: ValueKind) -> SpielordersConstant {
     }
 }
 
-fn value(command: &ValueCommand) -> Command<'_> {
+fn value(command: &ValueCommand) -> Reply<'_> {
     let (contract, target) = match command {
         ValueCommand::Add { target, .. } => (Contract::ValueAdd, target),
         ValueCommand::Rename { target, .. } => (Contract::ValueRename, target),
@@ -1078,7 +1122,7 @@ fn value(command: &ValueCommand) -> Command<'_> {
                 (plan, execution)
             }
         };
-        counted(calls, &plan, execution)
+        mutate_counted(calls, &plan, execution)
     });
     (contract, &target.root, answer, Human::Whole)
 }
@@ -1089,14 +1133,14 @@ fn optional(text: Option<&std::ffi::CStr>) -> OptionalText<'_> {
 }
 
 /// [`mutate`], reporting how many Orders the change rewrites beside what it did.
-fn counted(calls: &mut Calls, plan: &SpielordersPlan, execution: &Execution) -> Read {
+fn mutate_counted(calls: &mut Calls, plan: &SpielordersPlan, execution: &Execution) -> Data {
     let orders = spielorders_plan_order_count(plan);
     let mut data = mutate(calls, plan, execution)?;
     data["orders"] = Value::from(orders);
     Ok(data)
 }
 
-fn hide(calls: &mut Calls, root: &Path, name: &str, hidden: bool, execution: &Execution) -> Read {
+fn hide(calls: &mut Calls, root: &Path, name: &str, hidden: bool, execution: &Execution) -> Data {
     let vendor = read_vendor(calls, root, name)?;
     let plan = calls.get(|plan, outcome| {
         spielorders_vendor_plan_hidden(&vendor, i32::from(hidden), 0, plan, outcome)
@@ -1104,7 +1148,7 @@ fn hide(calls: &mut Calls, root: &Path, name: &str, hidden: bool, execution: &Ex
     mutate(calls, &plan, execution)
 }
 
-fn contact(command: &ContactCommand) -> Command<'_> {
+fn contact(command: &ContactCommand) -> Reply<'_> {
     let (contract, name, target, execution, edit) = match contact_edit(command) {
         Ok(edit) => edit,
         Err((name, target)) => {
@@ -1207,7 +1251,7 @@ fn contact_edit(
     })
 }
 
-fn search(command: &SearchCommand) -> Command<'_> {
+fn search(command: &SearchCommand) -> Reply<'_> {
     match command {
         SearchCommand::Orders {
             keywords,
@@ -1222,7 +1266,7 @@ fn search(command: &SearchCommand) -> Command<'_> {
                     calls,
                     &target.root,
                     &keywords.keywords.join(" "),
-                    case(matching.case_sensitive),
+                    case_flags(matching.case_sensitive),
                 )
             }),
             Human::Whole,
@@ -1241,7 +1285,7 @@ fn search(command: &SearchCommand) -> Command<'_> {
                     calls,
                     &target.root,
                     &keywords.keywords.join(" "),
-                    case(matching.case_sensitive) | hidden(*all),
+                    case_flags(matching.case_sensitive) | hidden_flags(*all),
                 )
             }),
             Human::Whole,
@@ -1298,7 +1342,7 @@ fn supporting_material(
 // ---------------------------------------------------------------------------
 
 /// The answer `body` reads, with every finding its calls gave beside it.
-fn answered(body: impl FnOnce(&mut Calls) -> Read) -> Answer {
+fn answered(body: impl FnOnce(&mut Calls) -> Data) -> Answer {
     let mut calls = Calls::default();
     match body(&mut calls) {
         Ok(data) => calls.answered(data),
@@ -1320,7 +1364,7 @@ fn open_quietly(root: &Path) -> Result<Box<SpielordersPackage>, Answer> {
 
 /// The Order Directory an `order` command line names, and the Package that holds it:
 /// `--root` itself, or `--uuid` within the current-directory Package.
-fn order_directory(
+fn locate_order(
     calls: &mut Calls,
     target: &OrderTarget,
 ) -> Result<(Box<SpielordersPackage>, CString), Answer> {
@@ -1363,7 +1407,7 @@ fn order_directory(
 }
 
 fn read_order(calls: &mut Calls, target: &OrderTarget) -> Result<Box<SpielordersOrder>, Answer> {
-    let (package, directory) = order_directory(calls, target)?;
+    let (package, directory) = locate_order(calls, target)?;
     calls.get(|order, outcome| {
         spielorders_package_read_order(&package, PathBytes::new(&directory), 0, order, outcome)
     })
@@ -1431,8 +1475,17 @@ fn assign_adding(
         let repeated = assignments[..index]
             .iter()
             .any(|earlier| earlier.field == assignment.field);
+        let name = c_text(assignment.field.as_str());
+        let value = c_text(assignment.value.as_str());
+        let refusal = spielorders_assignment_refusal(family, Text::new(&name), Text::new(&value));
         match constant(family, &assignment.field) {
+            _ if refusal != SpielordersConstant(-1)
+                && refusal != SPIELORDERS_REASON_BLANK_REQUIRED_VALUE =>
+            {
+                rejected.push((assignment, refusal));
+            }
             _ if repeated => rejected.push((assignment, SPIELORDERS_REASON_DUPLICATE)),
+            _ if refusal != SpielordersConstant(-1) => rejected.push((assignment, refusal)),
             Some(field) => fields.push((field, assignment)),
             None => rejected.push((assignment, SPIELORDERS_REASON_UNKNOWN_FIELD)),
         }
@@ -1461,10 +1514,11 @@ fn assign_adding(
     if rejected.is_empty() {
         return Ok(());
     }
+    let position = row.map(|row| row + 1);
     let detail: Vec<Value> = rejected
         .into_iter()
         .map(|(assignment, reason)| {
-            json!({ "field": assignment.field, "value": assignment.value, "reason": library::named(reason) })
+            library::rejected_assignment(&assignment.field, library::named(reason), position)
         })
         .collect();
     Err(calls.refuse(
@@ -1531,22 +1585,22 @@ fn remove_row(
     calls.act(|outcome| spielorders_draft_row_remove(draft, at, outcome))
 }
 
-/// Saves `draft` with `assignments` set on its own facts: the one mutation shape a
-/// record edit takes.
 /// Clears the name a new draft starts with: on the command line, the Order Title and the
 /// Vendor Name are the user's to give.
-fn without_default(draft: &mut SpielordersDraft, field: SpielordersConstant) {
+fn cleared(draft: &mut SpielordersDraft, field: SpielordersConstant) {
     let blank = c_text("");
     let _ = spielorders_draft_set(draft, field, Text::new(&blank), None);
 }
 
+/// Saves `draft` with `assignments` set on its own facts: the one mutation shape a
+/// record edit takes.
 fn save(
     calls: &mut Calls,
     draft: Box<SpielordersDraft>,
     family: SpielordersConstant,
     assignments: &[FieldAssignment],
     execution: &Execution,
-) -> Read {
+) -> Data {
     save_adding(calls, draft, family, assignments, execution, false)
 }
 
@@ -1558,21 +1612,22 @@ fn save_adding(
     assignments: &[FieldAssignment],
     execution: &Execution,
     add_values: bool,
-) -> Read {
+) -> Data {
     assign_adding(calls, &mut draft, family, None, assignments, add_values)?;
     let plan = calls.get(|plan, outcome| spielorders_draft_plan(&draft, 0, plan, outcome))?;
     mutate(calls, &plan, execution)
 }
 
 /// What `plan` did once committed, or will do under `--dry-run`.
-fn mutate(calls: &mut Calls, plan: &SpielordersPlan, execution: &Execution) -> Read {
+fn mutate(calls: &mut Calls, plan: &SpielordersPlan, execution: &Execution) -> Data {
     let planned = library::plan(plan);
     if execution.dry_run {
         return Ok(Value::Object(library::planned(planned)));
     }
-    let before = calls.warned();
+    // Only a warning the commit itself reports makes it committed with a warning.
+    let before = calls.warnings();
     let report = calls.get(|report, outcome| spielorders_plan_commit(plan, report, outcome))?;
-    let warned = !before && calls.warned();
+    let warned = calls.warnings() > before;
     Ok(Value::Object(library::report(&report, planned, warned)))
 }
 
@@ -1580,9 +1635,10 @@ fn mutate(calls: &mut Calls, plan: &SpielordersPlan, execution: &Execution) -> R
 fn verdict(
     calls: &mut Calls,
     diagnosis: &SpielordersDiagnosis,
+    root: &Path,
     invalid: SpielordersConstant,
-) -> Read {
-    let judged = library::diagnosis(diagnosis);
+) -> Data {
+    let judged = library::diagnosis(diagnosis, root);
     if judged["valid"] == true {
         Ok(judged)
     } else {
@@ -1595,17 +1651,18 @@ fn verdict(
 fn repair(
     calls: &mut Calls,
     diagnosis: &SpielordersDiagnosis,
+    root: &Path,
     assignments: &[FieldAssignment],
     execution: &Execution,
     diagnose: impl FnOnce(&mut Calls) -> Result<Box<SpielordersDiagnosis>, Answer>,
-) -> Read {
+) -> Data {
     let RepairRequest::Apply {
         case: handle,
         action: wanted,
         resolutions,
     } = cli::repair_request(assignments)
     else {
-        return Ok(library::diagnosis(diagnosis));
+        return Ok(library::diagnosis(diagnosis, root));
     };
     let Some(case) = (0..spielorders_diagnosis_case_count(diagnosis))
         .find(|case| library::case_handle(diagnosis, *case) == handle)
@@ -1673,7 +1730,7 @@ fn repair(
     })?;
     let mut data = mutate(calls, &plan, execution)?;
     if !execution.dry_run {
-        data["remaining"] = library::diagnosis(&*diagnose(calls)?);
+        data["remaining"] = library::diagnosis(&*diagnose(calls)?, root);
     }
     Ok(data)
 }
@@ -1689,7 +1746,7 @@ fn index(package: &SpielordersPackage) -> Value {
 }
 
 /// Everything a front end needs to open a Package, in one answer.
-fn show(calls: &mut Calls, root: &Path) -> Read {
+fn show(calls: &mut Calls, root: &Path) -> Data {
     let package = open(calls, root)?;
     let orders = list_orders(calls, &package, "", 0)?;
     let vendors = list_vendors(calls, &package, "", SPIELORDERS_LIST_INCLUDE_HIDDEN)?;
@@ -1715,12 +1772,12 @@ fn show(calls: &mut Calls, root: &Path) -> Read {
     }))
 }
 
-fn orders(calls: &mut Calls, root: &Path, query: &str, flags: u32) -> Read {
+fn orders(calls: &mut Calls, root: &Path, query: &str, flags: u32) -> Data {
     let package = open(calls, root)?;
     list_orders(calls, &package, query, flags)
 }
 
-fn list_orders(calls: &mut Calls, package: &SpielordersPackage, query: &str, flags: u32) -> Read {
+fn list_orders(calls: &mut Calls, package: &SpielordersPackage, query: &str, flags: u32) -> Data {
     let query = c_text(query);
     let list = calls.get(|list, outcome| {
         spielorders_package_orders(
@@ -1737,12 +1794,12 @@ fn list_orders(calls: &mut Calls, package: &SpielordersPackage, query: &str, fla
     Ok(library::rows(&list, SPIELORDERS_ORDER_FIELD_TITLE))
 }
 
-fn vendors(calls: &mut Calls, root: &Path, query: &str, flags: u32) -> Read {
+fn vendors(calls: &mut Calls, root: &Path, query: &str, flags: u32) -> Data {
     let package = open(calls, root)?;
     list_vendors(calls, &package, query, flags)
 }
 
-fn list_vendors(calls: &mut Calls, package: &SpielordersPackage, query: &str, flags: u32) -> Read {
+fn list_vendors(calls: &mut Calls, package: &SpielordersPackage, query: &str, flags: u32) -> Data {
     let query = c_text(query);
     let list = calls.get(|list, outcome| {
         spielorders_package_vendors(
@@ -1759,13 +1816,13 @@ fn list_vendors(calls: &mut Calls, package: &SpielordersPackage, query: &str, fl
     Ok(library::rows(&list, SPIELORDERS_VENDOR_FIELD_NAME))
 }
 
-fn values(calls: &mut Calls, package: &SpielordersPackage, field: SpielordersConstant) -> Read {
+fn values(calls: &mut Calls, package: &SpielordersPackage, field: SpielordersConstant) -> Data {
     let list =
         calls.get(|list, outcome| spielorders_package_values(package, field, list, outcome))?;
     Ok(library::rows(&list, SPIELORDERS_VALUE_FIELD_VALUE))
 }
 
-fn case(sensitive: bool) -> u32 {
+fn case_flags(sensitive: bool) -> u32 {
     if sensitive {
         SPIELORDERS_LIST_CASE_SENSITIVE
     } else {
@@ -1773,7 +1830,7 @@ fn case(sensitive: bool) -> u32 {
     }
 }
 
-fn hidden(all: bool) -> u32 {
+fn hidden_flags(all: bool) -> u32 {
     if all {
         SPIELORDERS_LIST_INCLUDE_HIDDEN
     } else {
@@ -1788,12 +1845,12 @@ fn hidden(all: bool) -> u32 {
 /// provider's facts go in through the library's interface as the Spotlight query hands
 /// them over, and the document comes out of the same answer and envelope a run writes.
 /// Fixture Packages are built by this executable's own commands.
-#[cfg(test)]
+#[cfg(all(test, target_vendor = "apple"))]
 mod tests {
     use super::*;
     use crate::{
         cli,
-        platform::{Found, Hit, hits},
+        platform::{Found, Hit, library_hits},
         response::document,
     };
     use std::ffi::OsString;
@@ -1841,7 +1898,8 @@ mod tests {
         /// replaces it.
         fn answered(&self, found: Option<&Found>) -> String {
             let package = open_quietly(&self.root).unwrap_or_else(|_| panic!("the Package opens"));
-            let gathered = found.map(|found| (hits("spotlight", found).unwrap(), found.state));
+            let gathered =
+                found.map(|found| (library_hits("spotlight", found).unwrap(), found.state));
             let answer = supporting_material(
                 &package,
                 gathered.as_ref().map(|(hits, state)| (&**hits, *state)),
@@ -1869,7 +1927,7 @@ mod tests {
         Found {
             state: SPIELORDERS_PROVIDER_STATE_COMPLETE,
             hits,
-            said: Vec::new(),
+            diagnostics: Vec::new(),
         }
     }
 

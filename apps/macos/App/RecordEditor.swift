@@ -14,7 +14,7 @@ import SpielOrdersKit
     /// Changes when row structure changes; adopting a saved read keeps the active cell.
     private(set) var rowsRevision = 0
     private(set) var problems: [DraftProblem] = []
-    /// Why the last save wrote nothing, with the library's result; nil once nothing is refused.
+    /// Why the last save was refused, with the library's result; nil once nothing is refused.
     private(set) var failure: Notice?
     /// The warnings of the saves since the owner last started one.
     private(set) var warnings: [Notice] = []
@@ -24,6 +24,8 @@ import SpielOrdersKit
     var onFinish: (() -> Void)?
     /// Records a change to an existing record in the window's Undo history.
     var onChange: ((RecordChange) -> Void)?
+    /// Input changed the draft: a new edit, which ends what Redo could repeat.
+    var onInput: (() -> Void)?
     /// The history's change that the next committed save completes.
     private var change: RecordChange?
     private var saving = false
@@ -75,10 +77,12 @@ import SpielOrdersKit
     }
 
     func set(_ field: Int32, _ text: String) {
+        let changed = !self.field(field).utf8.elementsEqual(text.utf8)
+        if changed { onInput?() }
         if submitted != nil { buffer(Input(field: field, row: nil, text: text)); return }
         // Naming the same value still carries intent to the library, for example keeping
         // an Order Group while changing Project. It need not redraw unchanged text.
-        guard !self.field(field).utf8.elementsEqual(text.utf8) else {
+        guard changed else {
             do { try draft.set(field, to: text) } catch { NSSound.beep() }
             return
         }
@@ -89,6 +93,7 @@ import SpielOrdersKit
     /// Sets `field` to `text` and asks that saving add it to the Package's values, so the
     /// record and the new value are written together.
     func add(_ field: Int32, _ text: String) {
+        onInput?()
         if submitted != nil {
             buffer(Input(field: field, row: nil, text: text, adds: true))
             return
@@ -121,6 +126,7 @@ import SpielOrdersKit
 
     func setRow(_ row: Int, _ field: Int32, _ text: String) {
         guard !rowField(row, field).utf8.elementsEqual(text.utf8) else { return }
+        onInput?()
         if submitted != nil { buffer(Input(field: field, row: row, text: text)); return }
         apply { try draft.setRow(row, field, to: text) }
         if saving { inputChanged = true }
@@ -138,7 +144,7 @@ import SpielOrdersKit
     private func buffer(_ value: Input) {
         // Preserve setter order: even repeated Status setters can affect another field.
         input.append(value)
-        consequences = [:]
+        forgetConsequences()
         revision &+= 1
     }
 
@@ -230,7 +236,7 @@ import SpielOrdersKit
         // The library refuses only text that cannot cross the interface; the field keeps
         // the draft's own text.
         do { try change() } catch { NSSound.beep() }
-        consequences = [:]
+        forgetConsequences()
         revision &+= 1
         if rows { rowsRevision &+= 1 }
     }
@@ -276,12 +282,27 @@ import SpielOrdersKit
     }
 
     func clearWarnings() {
-        warnings = []
+        if !warnings.isEmpty { warnings = [] }
     }
 
     /// Marks `field` with what a save did to it, until the next edit.
     func note(_ consequence: String, at field: Int32) {
         consequences[field] = consequence
+    }
+
+    /// Ends what saves did to fields, at the next edit. This and `unmark` write only when
+    /// something is marked, since any write draws the form beside every field again.
+    private func forgetConsequences() {
+        if !consequences.isEmpty { consequences = [:] }
+    }
+
+    /// Forgets what a refused save marked; returns whether anything was marked.
+    private func unmark() -> Bool {
+        guard !problems.isEmpty || failure != nil || needsReopen else { return false }
+        problems = []
+        failure = nil
+        needsReopen = false
+        return true
     }
 
     func finishField() {
@@ -325,9 +346,7 @@ import SpielOrdersKit
 
     private func replace(with values: RecordValues) {
         apply(rows: true) { try values.apply(to: draft) }
-        problems = []
-        failure = nil
-        needsReopen = false
+        _ = unmark()
         finishField()
     }
 
@@ -339,18 +358,13 @@ import SpielOrdersKit
         if !written { undoManager?.removeAllActions(withTarget: self) }
         written = true
         complete()
-        problems = []
-        failure = nil
-        needsReopen = false
+        _ = unmark()
         acceptInput()
         revision &+= 1
     }
 
     func clearProblems() {
-        problems = []
-        failure = nil
-        needsReopen = false
-        revision &+= 1
+        if unmark() { revision &+= 1 }
     }
 
     func close() {

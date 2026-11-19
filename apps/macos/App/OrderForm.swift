@@ -56,6 +56,13 @@ struct OrderFolder: View {
                     .controlSize(.small)
                     .disabled(!model.canChangeDirectory)
                     .accessibilityIdentifier("\(prefix).align")
+            } else {
+                // The row keeps the button's height, so a save that makes the name differ
+                // moves nothing beneath it.
+                Button("Align Directory Name…") {}
+                    .controlSize(.small)
+                    .hidden()
+                    .frame(width: 0)
             }
         }
         .font(.callout)
@@ -67,23 +74,42 @@ struct OrderFolder: View {
     }
 }
 
-/// Where each Order fact sits, each labeled and shown in the control the editor supplies.
+/// The narrowest the Order facts take two columns.
+private let pairedFactsWidth: CGFloat = 640
+
+/// Where each Order fact sits, each labeled and shown in the control the editor supplies. The
+/// facts pair up in two columns, and stack in one where the detail is too narrow for two.
 struct OrderFacts<Control: View>: View {
     @ViewBuilder let control: (Int32) -> Control
+    @State private var stacked = false
 
     var body: some View {
         Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 8) {
-            GridRow {
-                label(SPIELORDERS_ORDER_FIELD_TITLE)
-                control(SPIELORDERS_ORDER_FIELD_TITLE)
-                    .gridCellColumns(3)
+            if stacked {
+                ForEach([SPIELORDERS_ORDER_FIELD_TITLE, SPIELORDERS_ORDER_FIELD_DATE_ORDERED, SPIELORDERS_ORDER_FIELD_STATUS,
+                         SPIELORDERS_ORDER_FIELD_VENDOR, SPIELORDERS_ORDER_FIELD_CURRENCY, SPIELORDERS_ORDER_FIELD_ORDERER,
+                         SPIELORDERS_ORDER_FIELD_ORDERING_INSTITUTION, SPIELORDERS_ORDER_FIELD_PROJECT,
+                         SPIELORDERS_ORDER_FIELD_ORDER_GROUP], id: \.self) { field in
+                    GridRow {
+                        label(field)
+                        control(field)
+                    }
+                }
+            } else {
+                GridRow {
+                    label(SPIELORDERS_ORDER_FIELD_TITLE)
+                    control(SPIELORDERS_ORDER_FIELD_TITLE)
+                        .gridCellColumns(3)
+                }
+                row(SPIELORDERS_ORDER_FIELD_DATE_ORDERED, SPIELORDERS_ORDER_FIELD_STATUS)
+                row(SPIELORDERS_ORDER_FIELD_VENDOR, SPIELORDERS_ORDER_FIELD_CURRENCY)
+                row(SPIELORDERS_ORDER_FIELD_ORDERER, SPIELORDERS_ORDER_FIELD_ORDERING_INSTITUTION)
+                row(SPIELORDERS_ORDER_FIELD_PROJECT, SPIELORDERS_ORDER_FIELD_ORDER_GROUP)
             }
-            row(SPIELORDERS_ORDER_FIELD_DATE_ORDERED, SPIELORDERS_ORDER_FIELD_STATUS)
-            row(SPIELORDERS_ORDER_FIELD_VENDOR, SPIELORDERS_ORDER_FIELD_CURRENCY)
-            row(SPIELORDERS_ORDER_FIELD_ORDERER, SPIELORDERS_ORDER_FIELD_ORDERING_INSTITUTION)
-            row(SPIELORDERS_ORDER_FIELD_PROJECT, SPIELORDERS_ORDER_FIELD_ORDER_GROUP)
         }
-        .frame(maxWidth: 900, alignment: .leading)
+        // The frame takes the width offered, not the grid's, so the grid can stack within it.
+        .frame(minWidth: 0, maxWidth: 900, alignment: .leading)
+        .onGeometryChange(for: Bool.self) { $0.size.width < pairedFactsWidth } action: { stacked = $0 }
     }
 
     private func row(_ leading: Int32, _ trailing: Int32) -> some View {
@@ -110,18 +136,17 @@ struct OrderItems<Rows: View, Actions: View>: View {
     @ViewBuilder let actions: Actions
 
     var body: some View {
-        Text("Items")
-            .font(.headline)
-            .accessibilityAddTraits(.isHeader)
-        rows
-        HStack {
-            actions
-            Spacer()
-            Text("Total")
-                .font(.headline)
-            Text(total)
-                .monospacedDigit()
-                .accessibleValue("Total", value: total, identifier: "\(prefix).total")
+        DetailSection("Items") {
+            rows
+            HStack {
+                actions
+                Spacer()
+                Text("Total")
+                    .font(.headline)
+                Text(total)
+                    .monospacedDigit()
+                    .accessibleValue("Total", value: total, identifier: "\(prefix).total")
+            }
         }
     }
 }
@@ -134,15 +159,13 @@ struct StatusPicker: View {
     var body: some View {
         Picker("Status", selection: $selection) {
             ForEach(OrderStatus.all, id: \.name) { status in
-                // Its own color keeps the choice legible while the picker is disabled.
-                Text(status.label)
-                    .foregroundStyle(.primary)
-                    .tag(status.name)
+                Text(status.label).tag(status.name)
             }
         }
         .labelsHidden()
         .pickerStyle(.menu)
-        .fixedSize()
+        .buttonSizing(.flexible)
+        .frame(maxWidth: .infinity)
         .accessibilityLabel("Status")
         .accessibilityIdentifier(identifier)
     }
@@ -151,11 +174,11 @@ struct StatusPicker: View {
 extension RowColumn {
     static var orderItems: [RowColumn] {
         [
-            RowColumn(field: SPIELORDERS_ITEM_FIELD_CATALOG_NUMBER, width: 120),
+            RowColumn(field: SPIELORDERS_ITEM_FIELD_CATALOG_NUMBER, width: 160),
             RowColumn(field: SPIELORDERS_ITEM_FIELD_DESCRIPTION, width: 420, flexible: true),
-            RowColumn(field: SPIELORDERS_ITEM_FIELD_QUANTITY, width: 64, numeric: true),
-            RowColumn(field: SPIELORDERS_ITEM_FIELD_UNIT_PRICE, width: 90, numeric: true, money: true),
-            RowColumn(field: SPIELORDERS_ITEM_FIELD_TOTAL, width: 96, editable: false, numeric: true, money: true),
+            RowColumn(field: SPIELORDERS_ITEM_FIELD_QUANTITY, width: 100, numeric: true),
+            RowColumn(field: SPIELORDERS_ITEM_FIELD_UNIT_PRICE, width: 140, numeric: true, money: true),
+            RowColumn(field: SPIELORDERS_ITEM_FIELD_TOTAL, width: 140, editable: false, numeric: true, money: true),
             RowColumn(field: SPIELORDERS_ITEM_FIELD_NOTES, width: 220, flexible: true, multiline: true,
                       optional: true),
         ]

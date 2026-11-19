@@ -28,13 +28,15 @@ public struct VendorRow: Sendable, Identifiable {
 
 public struct VendorListing: Sendable {
     public let rows: [VendorRow]
-    public let notices: [String]
+    public let notices: [Problem]
 }
 
+/// A Vendor's facts and the Orders that use it. A Vendor's read reports every finding of
+/// the Package it loads, none located at the Vendor, so the Package's own findings carry
+/// them and the details do not.
 public struct VendorDetails: Sendable {
     public let values: [Int32: String]
     public let orders: [OrderRow]
-    public let notices: [String]
 }
 
 extension PackageSession {
@@ -55,7 +57,7 @@ extension PackageSession {
             spielorders_package_search_vendors(package.pointer, $0, field ?? -1, flags, sortField, descending ? 1 : 0,
                                                cancellation.token, &list, &outcome)
         }
-        let notices = try checked(result, outcome).map(\.presentation)
+        let notices = problems(try checked(result, outcome), in: package)
         defer { spielorders_list_free(list) }
         guard let list else { throw LibraryFailure(result: SPIELORDERS_RESULT_INTERNAL, entries: []) }
         let rows = (0..<spielorders_list_count(list)).map { index in
@@ -67,10 +69,9 @@ extension PackageSession {
 
     public func inspectVendor(_ row: VendorRow, cancellation: LibraryCancellation) throws -> VendorDetails {
         guard let package else { throw SessionAccessError.reopenRequired }
-        let (owner, entries) = try readVendor(id: row.id, token: cancellation.token)
+        let (owner, _) = try readVendor(id: row.id, token: cancellation.token)
         defer { withExtendedLifetime(owner) {} }
         let vendor = owner.pointer
-        var notices = entries.map(\.presentation)
         var outcome: UnsafeMutablePointer<SpielordersEntries>?
         let values = Dictionary(uniqueKeysWithValues: vendorFields.map { ($0, String(cString: spielorders_vendor_field(vendor, $0))) })
         var associated: UnsafeMutablePointer<SpielordersList>?
@@ -78,8 +79,27 @@ extension PackageSession {
         let related = row.id.withCString {
             spielorders_package_orders_of_vendor(package.pointer, $0, cancellation.token, &associated, &outcome)
         }
-        notices += try checked(related, outcome).map(\.presentation)
+        _ = try checked(related, outcome)
         guard let associated else { throw LibraryFailure(result: SPIELORDERS_RESULT_INTERNAL, entries: []) }
-        return VendorDetails(values: values, orders: orderRows(associated), notices: notices)
+        return VendorDetails(values: values, orders: orderRows(associated))
+    }
+
+    /// The healthy Orders that use `value` of `scope`, in the Package's own order: exactly those
+    /// the value's Orders count includes.
+    public func orders(using value: String, in scope: ValueScope,
+                       cancellation: LibraryCancellation) throws -> [OrderRow] {
+        guard let package else { throw SessionAccessError.reopenRequired }
+        var list: UnsafeMutablePointer<SpielordersList>?
+        var outcome: UnsafeMutablePointer<SpielordersEntries>?
+        defer { spielorders_list_free(list) }
+        let result = try withInterfaceText(value) { value in
+            try withScope(scope) { project in
+                spielorders_package_orders_with_value(package.pointer, scope.field, value, project, cancellation.token,
+                                                      &list, &outcome)
+            }
+        }
+        _ = try checked(result, outcome)
+        guard let list else { throw LibraryFailure(result: SPIELORDERS_RESULT_INTERNAL, entries: []) }
+        return orderRows(list)
     }
 }

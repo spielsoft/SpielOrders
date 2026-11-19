@@ -1,21 +1,20 @@
 //! Validation, diagnosis, and repair: what is wrong with a Package or one Order, the
 //! explicit actions each diagnosed case offers, and the plan of one of them.
 
+use crate::drafting::Origin;
 use crate::interface::{
     PathBytes, SPIELORDERS_DRAFT_KIND_ORDER, SPIELORDERS_DRAFT_KIND_TEXT,
-    SPIELORDERS_DRAFT_KIND_VENDOR, SPIELORDERS_FAMILY_FINDING, SPIELORDERS_FAMILY_REPAIR_ACTION,
-    SPIELORDERS_ORDER_FIELD_VENDOR, SPIELORDERS_RESULT_BAD_ARGUMENT,
+    SPIELORDERS_DRAFT_KIND_VENDOR, SPIELORDERS_ORDER_FIELD_VENDOR, SPIELORDERS_RESULT_BAD_ARGUMENT,
     SPIELORDERS_TEXT_FIELD_CONTENT, SPIELORDERS_VENDOR_FIELD_NAME, SpielordersConstant,
     SpielordersDraft, SpielordersEntries, SpielordersPackage, SpielordersPlan, SpielordersResult,
     Text,
     call::{Session, deliver, fallible, quietly, settle},
-    draft::Origin,
+    codes,
     entries::{EMPTY, Entry, Subject, relative},
-    library::{member, name},
-    plan::planned,
+    plan::plan_change,
 };
 use crate::{
-    Answer, Assignments, Change, Coded, Diagnosis, Failure, OrderRef, Scope,
+    Answer, Assignments, Change, Diagnosis, Failure, OrderRef, Scope,
     model::{RepairAction, Severity},
     ports::FileSystem,
 };
@@ -38,28 +37,28 @@ struct SpielordersDiagnosisData {
 struct Case {
     code: SpielordersConstant,
     path: CString,
+    /// The Order Directory the case's evidence is in, or empty for a Package artifact.
+    order: CString,
     handle: CString,
-    actions: Vec<SpielordersConstant>,
+    actions: Vec<RepairAction>,
 }
 
-/// The value fields one repair action requires, as the fields of the draft that holds
-/// them.
-fn action_fields(action: SpielordersConstant) -> &'static [SpielordersConstant] {
-    match name(action) {
-        Some("replace_managed_record") => &[SPIELORDERS_TEXT_FIELD_CONTENT],
-        Some("assign_existing_vendor") => &[SPIELORDERS_ORDER_FIELD_VENDOR],
-        Some("create_and_assign_vendor") => &[SPIELORDERS_VENDOR_FIELD_NAME],
-        _ => &[],
-    }
-}
+/// Each value a repair action may require, by the name the action reads it under, and
+/// the field of the draft that holds it.
+const REPAIR_VALUES: [(&str, SpielordersConstant); 3] = [
+    ("record", SPIELORDERS_TEXT_FIELD_CONTENT),
+    ("vendor", SPIELORDERS_ORDER_FIELD_VENDOR),
+    ("name", SPIELORDERS_VENDOR_FIELD_NAME),
+];
 
-/// The assignment name a repair action reads each of its fields under.
-fn resolution_name(field: SpielordersConstant) -> &'static str {
-    match field {
-        SPIELORDERS_TEXT_FIELD_CONTENT => "record",
-        SPIELORDERS_ORDER_FIELD_VENDOR => "vendor",
-        _ => "name",
-    }
+/// The values one repair action requires, each by the name the action reads it under and
+/// the field of the draft that holds it.
+fn action_fields(action: RepairAction) -> Vec<(&'static str, SpielordersConstant)> {
+    action
+        .required_values()
+        .iter()
+        .filter_map(|name| REPAIR_VALUES.iter().find(|(each, _)| each == name).copied())
+        .collect()
 }
 
 impl SpielordersDiagnosis {
@@ -74,18 +73,18 @@ impl SpielordersDiagnosis {
             .cases
             .iter()
             .map(|case| Case {
-                code: member(SPIELORDERS_FAMILY_FINDING, case.code.code())
-                    .unwrap_or(SpielordersConstant::NONE),
+                code: codes::finding(case.code),
                 path: relative(&case.location),
-                handle: crate::interface::entries::c_text(case.handle.as_str()),
-                actions: case
-                    .actions
+                order: diagnosis
+                    .examined_orders
                     .iter()
-                    .map(|action| {
-                        member(SPIELORDERS_FAMILY_REPAIR_ACTION, action.code())
-                            .unwrap_or(SpielordersConstant::NONE)
-                    })
-                    .collect(),
+                    .map(|order| &order.directory.absolute_path)
+                    .find(|directory| case.location.absolute_path.starts_with(directory))
+                    .map_or_else(CString::default, |directory| {
+                        crate::interface::records::path_text(directory)
+                    }),
+                handle: crate::interface::entries::c_text(case.handle.as_str()),
+                actions: case.actions.clone(),
             })
             .collect();
         let root = diagnosis.context.root.absolute_path.clone();
@@ -104,7 +103,7 @@ impl SpielordersDiagnosis {
         self.data.cases.get(usize::try_from(case).ok()?)
     }
 
-    fn action(&self, case: i64, action: i64) -> Option<SpielordersConstant> {
+    fn action(&self, case: i64, action: i64) -> Option<RepairAction> {
         self.case(case)?
             .actions
             .get(usize::try_from(action).ok()?)
@@ -114,7 +113,7 @@ impl SpielordersDiagnosis {
 
 /// Diagnoses or validates `scope`. A validation's invalid verdict is its diagnosis, not a
 /// refusal.
-fn diagnosed(
+fn diagnose(
     scope: Scope,
     validate: bool,
     token: u64,
@@ -150,8 +149,9 @@ pub extern "C" fn spielorders_package_validate(
     diagnosis: &mut Option<Box<SpielordersDiagnosis>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(diagnosis, None);
     fallible(outcome, |entries| {
-        diagnosed(
+        diagnose(
             Scope::Package(package.root().to_path_buf()),
             true,
             token,
@@ -162,6 +162,7 @@ pub extern "C" fn spielorders_package_validate(
 }
 
 /// Validates one Order Directory of `package`, damaged or not.
+/// A directory outside `package` refuses SPIELORDERS_FAILURE_ORDER_NOT_FOUND.
 #[unsafe(no_mangle)]
 pub extern "C" fn spielorders_package_validate_order(
     package: &SpielordersPackage,
@@ -170,10 +171,14 @@ pub extern "C" fn spielorders_package_validate_order(
     diagnosis: &mut Option<Box<SpielordersDiagnosis>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
-    let _ = package;
+    crate::interface::call::put(diagnosis, None);
     fallible(outcome, |entries| {
+        if let Err(result) = package.holds(order_directory.as_path(), &Session::new(token), entries)
+        {
+            return result;
+        }
         let scope = Scope::Order(OrderRef::Directory(order_directory.as_path().to_path_buf()));
-        diagnosed(scope, true, token, diagnosis, entries)
+        diagnose(scope, true, token, diagnosis, entries)
     })
 }
 
@@ -185,8 +190,9 @@ pub extern "C" fn spielorders_package_diagnose(
     diagnosis: &mut Option<Box<SpielordersDiagnosis>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(diagnosis, None);
     fallible(outcome, |entries| {
-        diagnosed(
+        diagnose(
             Scope::Package(package.root().to_path_buf()),
             false,
             token,
@@ -197,6 +203,7 @@ pub extern "C" fn spielorders_package_diagnose(
 }
 
 /// Diagnoses the repairs one Order Directory of `package` offers, damaged or not.
+/// A directory outside `package` refuses SPIELORDERS_FAILURE_ORDER_NOT_FOUND.
 #[unsafe(no_mangle)]
 pub extern "C" fn spielorders_package_diagnose_order(
     package: &SpielordersPackage,
@@ -205,10 +212,14 @@ pub extern "C" fn spielorders_package_diagnose_order(
     diagnosis: &mut Option<Box<SpielordersDiagnosis>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
-    let _ = package;
+    crate::interface::call::put(diagnosis, None);
     fallible(outcome, |entries| {
+        if let Err(result) = package.holds(order_directory.as_path(), &Session::new(token), entries)
+        {
+            return result;
+        }
         let scope = Scope::Order(OrderRef::Directory(order_directory.as_path().to_path_buf()));
-        diagnosed(scope, false, token, diagnosis, entries)
+        diagnose(scope, false, token, diagnosis, entries)
     })
 }
 
@@ -273,6 +284,21 @@ pub extern "C" fn spielorders_diagnosis_case_path(
     })
 }
 
+/// The Order Directory case `case` belongs to, which `spielorders_package_diagnose_order`
+/// diagnoses and `spielorders_package_validate_order` validates; "" for a case about the
+/// Package's own artifacts, which `spielorders_package_diagnose` offers, and out of range.
+#[unsafe(no_mangle)]
+pub extern "C" fn spielorders_diagnosis_case_order(
+    diagnosis: &SpielordersDiagnosis,
+    case: i64,
+) -> PathBytes<'_> {
+    quietly(PathBytes::new(EMPTY), || {
+        diagnosis
+            .case(case)
+            .map_or(PathBytes::new(EMPTY), |case| PathBytes::new(&case.order))
+    })
+}
+
 /// The handle that names case `case` to a later repair: its code, its path, and the
 /// digest of the evidence it was diagnosed from, so a handle names nothing once that
 /// evidence changes; "" out of range.
@@ -311,7 +337,7 @@ pub extern "C" fn spielorders_diagnosis_action(
     quietly(SpielordersConstant::NONE, || {
         diagnosis
             .action(case, action)
-            .unwrap_or(SpielordersConstant::NONE)
+            .map_or(SpielordersConstant::NONE, codes::repair_action)
     })
 }
 
@@ -344,7 +370,7 @@ pub extern "C" fn spielorders_diagnosis_action_field(
             .and_then(|action| {
                 action_fields(action)
                     .get(usize::try_from(field).ok()?)
-                    .copied()
+                    .map(|(_, field)| *field)
             })
             .unwrap_or(SpielordersConstant::NONE)
     })
@@ -362,11 +388,12 @@ pub extern "C" fn spielorders_diagnosis_draft(
     draft: &mut Option<Box<SpielordersDraft>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(draft, None);
     fallible(outcome, |_| {
         let Some(chosen) = diagnosis.action(case, action) else {
             return deliver(Err(SPIELORDERS_RESULT_BAD_ARGUMENT), draft);
         };
-        let made = match action_fields(chosen).first().copied() {
+        let made = match action_fields(chosen).first().map(|(_, field)| *field) {
             Some(SPIELORDERS_TEXT_FIELD_CONTENT) => {
                 let location = &diagnosis.data.diagnosis.cases
                     [usize::try_from(case).unwrap_or_default()]
@@ -415,36 +442,34 @@ pub extern "C" fn spielorders_diagnosis_plan_repair(
     plan: &mut Option<Box<SpielordersPlan>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(plan, None);
     fallible(outcome, |entries| {
         let result = (|| {
             let chosen = diagnosis
                 .action(case, action)
                 .ok_or(SPIELORDERS_RESULT_BAD_ARGUMENT)?;
-            let repair = name(chosen)
-                .and_then(RepairAction::parse)
-                .ok_or(SPIELORDERS_RESULT_BAD_ARGUMENT)?;
             let handle = diagnosis.data.diagnosis.cases[usize::try_from(case).unwrap_or_default()]
                 .handle
                 .clone();
             let mut values = Assignments::new();
-            for field in action_fields(chosen) {
+            for (name, field) in action_fields(chosen) {
                 let value = draft
                     .map(|draft| {
                         draft
-                            .guarded(None, None, |data| Some(data.text(*field)))
+                            .guarded(None, None, |data| Some(data.text(field)))
                             .ok_or(SPIELORDERS_RESULT_BAD_ARGUMENT)
                     })
                     .transpose()?
                     .unwrap_or_default();
-                values = values.assign(resolution_name(*field), value);
+                values = values.assign(name, value);
             }
             let change = Change::Repair {
                 scope: diagnosis.data.scope.clone(),
                 case: handle,
-                action: repair,
+                action: chosen,
                 values,
             };
-            planned(
+            plan_change(
                 &change,
                 diagnosis.data.root.clone(),
                 Subject::Other,

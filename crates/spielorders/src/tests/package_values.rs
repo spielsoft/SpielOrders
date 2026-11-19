@@ -375,6 +375,31 @@ fn merging_keeps_the_chosen_spelling_and_counts_the_orders_that_change() {
 }
 
 #[test]
+fn a_merge_keeps_a_value_the_package_has_in_the_first_spelling() {
+    let (_tree, root) = initialized_package("value-merge-keep");
+    let ada = order_with(&root, ORDER_ID, "Cell", &[("orderer", "Ada")]);
+    let grace = order_with(&root, SECOND_ORDER, "Oven", &[("orderer", "Grace")]);
+    let merge = |keep: &str| crate::Change::MergeValues {
+        root: root.clone(),
+        kind: ReusableValueKind::Orderer,
+        project: None,
+        values: vec![keep.into(), "Grace".into()],
+        keep: keep.into(),
+    };
+
+    let before = snapshot(&root);
+    assert!(matches!(
+        crate::plan(&merge("Nobody"), &effects(&PlatformFileSystem)).result,
+        Err(crate::Failure::UnknownValue { .. })
+    ));
+    assert_eq!(snapshot(&root), before);
+
+    change(merge("ADA"));
+    assert_eq!(document(&ada).orderer.as_deref(), Some("ADA"));
+    assert_eq!(document(&grace).orderer.as_deref(), Some("ADA"));
+}
+
+#[test]
 fn a_used_value_is_deleted_only_with_a_replacement_or_cleared() {
     let (_tree, root) = initialized_package("value-delete");
     let first = order_with(
@@ -480,6 +505,43 @@ fn a_project_keeps_its_groups_when_renamed_or_cleared() {
 }
 
 #[test]
+fn merging_projects_keeps_the_kept_projects_group_spelling_on_every_order() {
+    let (_tree, root) = initialized_package("value-project-merge-groups");
+    let alpha = order_with(
+        &root,
+        ORDER_ID,
+        "Chamber",
+        &[("project", "Alpha"), ("order_group", "lab")],
+    );
+    let beta = order_with(
+        &root,
+        SECOND_ORDER,
+        "Oven",
+        &[("project", "Beta"), ("order_group", "Lab")],
+    );
+    change(crate::Change::MergeValues {
+        root: root.clone(),
+        kind: ReusableValueKind::Project,
+        project: None,
+        values: vec!["Beta".into(), "Alpha".into()],
+        keep: "Beta".into(),
+    });
+
+    for directory in [&alpha, &beta] {
+        let order = document(directory);
+        assert_eq!(
+            (order.project.as_deref(), order.order_group.as_deref()),
+            (Some("Beta"), Some("Lab"))
+        );
+    }
+    let package = opened(&root, &PlatformFileSystem).result.unwrap();
+    assert_eq!(
+        listed(&package.contents.order_groups_of(Some("Beta"))),
+        [("Lab", 2)]
+    );
+}
+
+#[test]
 fn an_order_group_change_stays_within_its_project() {
     let (_tree, root) = initialized_package("value-group-scope");
     let clock = order_with(
@@ -579,6 +641,358 @@ fn merging_vendors_repoints_their_orders_and_keeps_their_contacts() {
     };
     assert_eq!(vendor.name.as_str(), "Tarnwick");
     assert_eq!(vendor.contacts[0].name.as_str(), "Grace Hopper");
+}
+
+#[test]
+fn a_removed_order_still_restores_after_its_vendor_is_merged_away() {
+    let (_tree, root) = initialized_package("vendor-merge-removed");
+    let tarnwick = crate::tests::support::created_vendor(&root, "Tarnwick", VENDOR_ID);
+    crate::tests::support::created_vendor(&root, "Nethermoor", NETHERMOOR);
+    let order = order_with(&root, ORDER_ID, "Lenses", &[]);
+    committed(
+        &crate::tests::support::edit_order(
+            order.clone(),
+            Assignments::new().assign("vendor", "Nethermoor"),
+        ),
+        &effects(&PlatformFileSystem),
+    );
+    committed(
+        &crate::Change::RemoveOrder {
+            order: crate::OrderRef::Directory(order.clone()),
+        },
+        &effects(&PlatformFileSystem),
+    );
+    let removed = root.join("Removed").join(order.file_name().unwrap());
+    change(crate::Change::MergeVendors {
+        root: root.clone(),
+        vendors: vec![
+            crate::VendorRef::Name("Tarnwick".into()),
+            crate::VendorRef::Name("Nethermoor".into()),
+        ],
+        keep: crate::VendorRef::Name("Tarnwick".into()),
+    });
+
+    change(crate::Change::RestoreOrder {
+        root: root.clone(),
+        removed,
+    });
+    assert_eq!(
+        document(&order).vendor_id.map(|id| id.to_string()),
+        Some(tarnwick)
+    );
+}
+
+#[test]
+fn a_vendor_a_removed_order_names_is_deleted_only_with_a_replacement_or_cleared() {
+    let (_tree, root) = initialized_package("vendor-delete-removed");
+    crate::tests::support::created_vendor(&root, "Tarnwick", VENDOR_ID);
+    crate::tests::support::created_vendor(&root, "Nethermoor", NETHERMOOR);
+    let lenses = order_with(&root, ORDER_ID, "Lenses", &[]);
+    let mounts = order_with(&root, SECOND_ORDER, "Mounts", &[]);
+    for (order, vendor) in [(&lenses, "Nethermoor"), (&mounts, "Tarnwick")] {
+        committed(
+            &crate::tests::support::edit_order(
+                order.clone(),
+                Assignments::new().assign("vendor", vendor),
+            ),
+            &effects(&PlatformFileSystem),
+        );
+        committed(
+            &crate::Change::RemoveOrder {
+                order: crate::OrderRef::Directory(order.clone()),
+            },
+            &effects(&PlatformFileSystem),
+        );
+    }
+    let removed = |order: &Path| root.join("Removed").join(order.file_name().unwrap());
+    // The removed Mounts record no longer validates, but still names its Vendor.
+    let record = removed(&mounts).join(".spielorders/order.json");
+    let mut damaged: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+    damaged["title"] = serde_json::Value::Null;
+    std::fs::write(&record, serde_json::to_vec(&damaged).unwrap()).unwrap();
+    let named = |failure: crate::Failure| match failure {
+        crate::Failure::VendorReferenced { orders, .. } => orders
+            .iter()
+            .map(|order| order.absolute_path.clone())
+            .collect::<Vec<_>>(),
+        other => panic!("refused as {other:?}"),
+    };
+
+    let refused = [
+        crate::Change::DeleteVendor {
+            root: root.clone(),
+            vendor: crate::VendorRef::Name("Nethermoor".into()),
+            in_use: crate::InUse::Refuse,
+        },
+        crate::Change::DeleteVendor {
+            root: root.clone(),
+            vendor: crate::VendorRef::Name("Tarnwick".into()),
+            in_use: crate::InUse::Clear,
+        },
+        crate::Change::MergeVendors {
+            root: root.clone(),
+            vendors: vec![
+                crate::VendorRef::Name("Nethermoor".into()),
+                crate::VendorRef::Name("Tarnwick".into()),
+            ],
+            keep: crate::VendorRef::Name("Nethermoor".into()),
+        },
+    ]
+    .map(|change| named(refusal(&change)));
+    assert_eq!(
+        refused,
+        [
+            vec![removed(&lenses)],
+            vec![removed(&mounts)],
+            vec![removed(&mounts)],
+        ]
+    );
+}
+
+/// An Order record of a version this build cannot read still names its Vendor as stored,
+/// so no deletion or merge takes that Vendor away from it.
+#[test]
+fn a_vendor_an_unsupported_order_record_names_is_neither_deleted_nor_merged_away() {
+    let (_tree, root) = initialized_package("vendor-delete-unsupported");
+    crate::tests::support::created_vendor(&root, "Tarnwick", VENDOR_ID);
+    crate::tests::support::created_vendor(&root, "Nethermoor", NETHERMOOR);
+    let order = order_with(&root, ORDER_ID, "Lenses", &[]);
+    committed(
+        &crate::tests::support::edit_order(
+            order.clone(),
+            Assignments::new().assign("vendor", "Nethermoor"),
+        ),
+        &effects(&PlatformFileSystem),
+    );
+    let record = order.join(".spielorders/order.json");
+    let mut future: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+    future["schema_version"] = serde_json::json!(2);
+    std::fs::write(&record, serde_json::to_vec(&future).unwrap()).unwrap();
+    let delete = |in_use| crate::Change::DeleteVendor {
+        root: root.clone(),
+        vendor: crate::VendorRef::Name("Nethermoor".into()),
+        in_use,
+    };
+
+    for change in [
+        delete(crate::InUse::Refuse),
+        delete(crate::InUse::Replace(crate::VendorRef::Name(
+            "Tarnwick".into(),
+        ))),
+        delete(crate::InUse::Clear),
+        crate::Change::MergeVendors {
+            root: root.clone(),
+            vendors: vec![
+                crate::VendorRef::Name("Tarnwick".into()),
+                crate::VendorRef::Name("Nethermoor".into()),
+            ],
+            keep: crate::VendorRef::Name("Tarnwick".into()),
+        },
+    ] {
+        match refusal(&change) {
+            crate::Failure::VendorReferenced { orders, .. } => assert_eq!(
+                orders
+                    .iter()
+                    .map(|order| order.absolute_path.clone())
+                    .collect::<Vec<_>>(),
+                vec![order.clone()],
+                "{change:?}"
+            ),
+            other => panic!("{change:?} refused as {other:?}"),
+        }
+    }
+}
+
+/// A Removed Orders Directory that cannot be listed, or a removed Order record that cannot
+/// be read, might name any Vendor, so no deletion or merge proceeds as though it named
+/// none.
+#[test]
+fn an_unreadable_removed_order_refuses_vendor_deletion_and_merge() {
+    use crate::tests::support::{Operation, ScriptedFileSystem, failed_path};
+    let (_tree, root) = initialized_package("vendor-delete-unreadable-removed");
+    crate::tests::support::created_vendor(&root, "Tarnwick", VENDOR_ID);
+    crate::tests::support::created_vendor(&root, "Nethermoor", NETHERMOOR);
+    let order = order_with(&root, ORDER_ID, "Lenses", &[]);
+    committed(
+        &crate::tests::support::edit_order(
+            order.clone(),
+            Assignments::new().assign("vendor", "Nethermoor"),
+        ),
+        &effects(&PlatformFileSystem),
+    );
+    committed(
+        &crate::Change::RemoveOrder {
+            order: crate::OrderRef::Directory(order.clone()),
+        },
+        &effects(&PlatformFileSystem),
+    );
+    let removed = root.join("Removed");
+    let record = removed
+        .join(order.file_name().unwrap())
+        .join(".spielorders/order.json");
+    let delete = |in_use| crate::Change::DeleteVendor {
+        root: root.clone(),
+        vendor: crate::VendorRef::Name("Nethermoor".into()),
+        in_use,
+    };
+
+    for (operation, unreadable, denied) in [
+        (Operation::ReadDirectory, &removed, false),
+        (Operation::Read, &record, false),
+        (Operation::Read, &record, true),
+    ] {
+        let filesystem = if denied {
+            ScriptedFileSystem::new().denying(operation, unreadable)
+        } else {
+            ScriptedFileSystem::new().failing(operation, unreadable)
+        };
+        for change in [
+            delete(crate::InUse::Refuse),
+            delete(crate::InUse::Replace(crate::VendorRef::Name(
+                "Tarnwick".into(),
+            ))),
+            delete(crate::InUse::Clear),
+            crate::Change::MergeVendors {
+                root: root.clone(),
+                vendors: vec![
+                    crate::VendorRef::Name("Tarnwick".into()),
+                    crate::VendorRef::Name("Nethermoor".into()),
+                ],
+                keep: crate::VendorRef::Name("Tarnwick".into()),
+            },
+        ] {
+            let refusal = crate::plan(&change, &effects(&filesystem))
+                .result
+                .expect_err("an unreadable removed Order refuses the change");
+            let crate::Failure::RemovedOrderUnreadable(read) = &refusal else {
+                panic!("{change:?} refuses for the unreadable removed Order: {refusal:?}")
+            };
+            let failure = match read.as_ref() {
+                crate::Failure::PackageAccessDenied(failure) if denied => failure,
+                crate::Failure::PackageOperationFailed(failure) if !denied => failure,
+                other => panic!("{change:?} names the read that failed: {other:?}"),
+            };
+            assert_eq!(
+                failed_path(&failure.path),
+                unreadable.as_path(),
+                "{change:?}"
+            );
+        }
+    }
+    let package = opened(&root, &PlatformFileSystem).result.unwrap();
+    assert_eq!(package.contents.vendors.len(), 2);
+}
+
+#[test]
+fn linked_removed_metadata_refuses_vendor_changes_without_following_or_replacing_it() {
+    use crate::tests::support::{TemporaryTree, failed_path};
+    use std::{fs, os::unix::fs::symlink};
+
+    for linked_part in ["record", "metadata", "directory"] {
+        let (_tree, root) = initialized_package("vendor-linked-removed");
+        crate::tests::support::created_vendor(&root, "North Supplies", VENDOR_ID);
+        crate::tests::support::created_vendor(&root, "South Supplies", NETHERMOOR);
+        let order = order_with(&root, ORDER_ID, "Lenses", &[]);
+        committed(
+            &crate::tests::support::edit_order(
+                order.clone(),
+                Assignments::new().assign("vendor", "South Supplies"),
+            ),
+            &effects(&PlatformFileSystem),
+        );
+        committed(
+            &crate::Change::RemoveOrder {
+                order: crate::OrderRef::Directory(order.clone()),
+            },
+            &effects(&PlatformFileSystem),
+        );
+        let removed = root.join("Removed").join(order.file_name().unwrap());
+        let linked = match linked_part {
+            "record" => removed.join(".spielorders/order.json"),
+            "metadata" => removed.join(".spielorders"),
+            "directory" => removed,
+            _ => unreachable!(),
+        };
+        let outside = TemporaryTree::new("vendor-linked-removed-outside");
+        let target = outside.path().join("metadata");
+        fs::rename(&linked, &target).unwrap();
+        symlink(&target, &linked).unwrap();
+        let before = snapshot(&root);
+        let outside_before = snapshot(outside.path());
+        let delete = |in_use| crate::Change::DeleteVendor {
+            root: root.clone(),
+            vendor: crate::VendorRef::Name("South Supplies".into()),
+            in_use,
+        };
+
+        for change in [
+            delete(crate::InUse::Refuse),
+            delete(crate::InUse::Clear),
+            delete(crate::InUse::Replace(crate::VendorRef::Name(
+                "North Supplies".into(),
+            ))),
+            crate::Change::MergeVendors {
+                root: root.clone(),
+                vendors: vec![
+                    crate::VendorRef::Name("North Supplies".into()),
+                    crate::VendorRef::Name("South Supplies".into()),
+                ],
+                keep: crate::VendorRef::Name("North Supplies".into()),
+            },
+        ] {
+            let failure = refusal(&change);
+            let crate::Failure::RemovedOrderUnreadable(read) = failure else {
+                panic!("linked removed metadata refuses the change: {change:?}: {failure:?}")
+            };
+            let crate::Failure::PackageOperationFailed(failed) = *read else {
+                panic!("the linked metadata is named as unreadable")
+            };
+            assert_eq!(failed_path(&failed.path), linked);
+            assert_eq!(fs::read_link(&linked).unwrap(), target);
+            assert_eq!(snapshot(&root), before);
+            assert_eq!(snapshot(outside.path()), outside_before);
+        }
+    }
+}
+
+#[test]
+fn a_vendor_deletion_refuses_an_order_that_names_it_after_planning() {
+    let (_tree, root) = initialized_package("vendor-delete-late-reference");
+    crate::tests::support::created_vendor(&root, "Nethermoor", NETHERMOOR);
+    let effects = effects(&PlatformFileSystem);
+    let plan = crate::plan(
+        &crate::Change::DeleteVendor {
+            root: root.clone(),
+            vendor: crate::VendorRef::Name("Nethermoor".into()),
+            in_use: crate::InUse::Refuse,
+        },
+        &effects,
+    )
+    .result
+    .expect("an unused Vendor's deletion is planned");
+    // After planning, an Order comes to name the Vendor and is removed.
+    let order = order_with(&root, ORDER_ID, "Lenses", &[]);
+    committed(
+        &crate::tests::support::edit_order(
+            order.clone(),
+            Assignments::new().assign("vendor", "Nethermoor"),
+        ),
+        &effects,
+    );
+    committed(
+        &crate::Change::RemoveOrder {
+            order: crate::OrderRef::Directory(order),
+        },
+        &effects,
+    );
+
+    crate::commit(plan, &effects)
+        .result
+        .expect_err("the removed Order still names the Vendor");
+    let package = opened(&root, &PlatformFileSystem).result.unwrap();
+    assert_eq!(package.contents.vendors.len(), 1);
 }
 
 #[test]

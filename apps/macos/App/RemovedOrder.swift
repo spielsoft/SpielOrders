@@ -36,7 +36,7 @@ extension DesktopModel {
         guard canBrowseRecords else {
             Task {
                 keepRemoved(order, "The Order wasn’t restored",
-                            "Reload the Package, then choose Edit → Undo again.")
+                            "Reload the Package, then try again.")
             }
             return
         }
@@ -69,7 +69,7 @@ extension DesktopModel {
                     addWarnings(restored.notices, to: .orders)
                 }
             } catch {
-                let summary = (error as? RestoreRefusal)?.summary ?? "The Order wasn’t restored."
+                let summary = (error as? RestoreRefusal)?.summary ?? "The Order wasn’t restored"
                 keepRemoved(order, summary, "It stays removed, and Edit → Undo can still restore it.",
                             details: error.localizedDescription)
             }

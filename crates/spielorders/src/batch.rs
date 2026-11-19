@@ -7,12 +7,14 @@
 use crate::{
     Answer, Change, Failure, OrderRef,
     canonical::{CurrentPackageCandidate, Touched, load_package_to_change},
-    filesystem::{FileReplacement, replace_validated_files},
+    change::PlannedAct,
+    integrity::{Aggregate, Records, Substitution},
+    journal::{Expect, Journal, ManagedRecord, Subject},
     metadata::{OrderDocument, VendorId, VendorsDocument, Version1},
-    mutation::{IndexRefresh, MutationReport, OperationKind, PlannedOperation},
+    mutation::{CommitFailure, MutationReport, OperationKind},
     order_edits::edited_order,
-    package::PackageMetadata,
     ports::{FileSystem, FileSystemEntryKind, LocalDate},
+    readme::Location,
     readme::located_in_package,
     vendors::{edited_vendor, vendor_creation_in},
 };
@@ -47,7 +49,8 @@ impl Batch {
     }
 
     /// Plans `change` against the Package as the batch leaves it and, where it is
-    /// accepted, applies it there; a refused change leaves the batch as it was.
+    /// accepted, applies it there, answering that change's own plan; a refused change
+    /// leaves the batch as it was.
     ///
     /// A batch holds edits to existing Orders and Vendors and new Vendors, whose Vendor
     /// IDs `new_uuid` mints now so that later changes can name them. The first change to
@@ -58,9 +61,9 @@ impl Batch {
         today: &dyn Fn() -> LocalDate,
         new_uuid: &dyn Fn() -> String,
         filesystem: &F,
-    ) -> Result<(), Failure> {
+    ) -> Result<crate::Plan, Failure> {
         let package = &self.current;
-        match change {
+        let planned = match change {
             Change::SaveOrder {
                 order: OrderRef::Directory(directory),
                 assignments,
@@ -80,13 +83,14 @@ impl Batch {
                 if unchanged && !holds(&order.paths.directory.absolute_path, original, filesystem) {
                     return Err(changed(package, directory));
                 }
-                let plan = edited_order(package, order, assignments, Some(items), today)
+                let plan = edited_order(package, order, assignments, items, today)
                     .map_err(Failure::InvalidDraft)?;
                 let replacement = order
                     .with_document(&plan.facts.document)
                     .ok_or(Failure::InvalidFacts)?;
                 let values = crate::values::merged(&package.values, plan.additions());
                 self.current.replace_order(position, replacement, values);
+                crate::Plan::of(plan)
             }
             Change::CreateVendor {
                 assignments,
@@ -117,6 +121,7 @@ impl Batch {
                     }
                 }
                 self.current.replace_vendors(vendors);
+                crate::Plan::of(plan)
             }
             Change::SaveVendor {
                 assignments,
@@ -140,11 +145,12 @@ impl Batch {
                     .map_err(Failure::InvalidDraft)?;
                 let vendors = plan.candidate_vendors().to_vec();
                 self.current.replace_vendors(vendors);
+                crate::Plan::of(plan)
             }
             _ => return Err(Failure::NotBatchable),
-        }
+        };
         self.changes += 1;
-        Ok(())
+        Ok(planned)
     }
 }
 
@@ -192,7 +198,8 @@ pub struct BatchPlan {
     candidate: VendorsDocument,
     orders: Vec<Rewrite>,
     changes: usize,
-    pub(crate) operations: Vec<PlannedOperation>,
+    index: Location,
+    pub(crate) journal: Journal,
 }
 
 impl BatchPlan {
@@ -233,50 +240,87 @@ pub(crate) fn plan_batch(batch: &Batch) -> Answer<BatchPlan> {
             values: package.values.clone(),
         };
         let prior = document(initial);
-        let candidate = PackageMetadata::new(
-            &current
-                .healthy_orders
+        let aggregate =
+            Aggregate::judge(&document(current)).map_err(|_| Failure::InvalidAggregate)?;
+        let substitution = Substitution {
+            orders: orders
                 .iter()
-                .map(|order| order.document.clone())
-                .collect::<Vec<_>>(),
-            &document(current),
-        )
-        .validate()
-        .map_err(|_| Failure::InvalidAggregate)?
-        .vendors()
-        .clone();
-        let root = &initial.context.root.absolute_path;
-        let mut operations = orders
-            .iter()
-            .map(|order| {
-                PlannedOperation::new(
-                    OperationKind::ReplaceOrderRecord,
-                    located_in_package(root, order.path.clone()),
-                )
-            })
-            .collect::<Vec<_>>();
-        if candidate != prior {
-            operations.push(PlannedOperation::new(
-                OperationKind::ReplaceVendorRecord,
-                initial.context.vendors.clone(),
-            ));
+                .map(|order| (order.directory.as_path(), &order.candidate))
+                .collect(),
+            vendors: Some(&aggregate),
+        };
+        if Records::of(initial).broken_by(&substitution).is_some() {
+            return Err(Failure::InvalidAggregate);
         }
-        if !operations.is_empty() {
-            operations.push(PlannedOperation::new(
-                OperationKind::RefreshPackageIndex,
-                initial.context.index.clone(),
-            ));
-        }
-        Ok(BatchPlan {
-            root: root.clone(),
+        let candidate = aggregate.into_document();
+        let root = initial.context.root.absolute_path.clone();
+        let mut plan = BatchPlan {
+            journal: Journal::new(&root),
+            root,
             vendors_path: initial.context.vendors.absolute_path.clone(),
             prior,
             candidate,
             orders,
             changes: batch.changes,
-            operations,
-        })
+            index: initial.context.index.clone(),
+        };
+        let records = plan.records();
+        plan.journal = plan.batch_journal(
+            records
+                .into_iter()
+                .map(|(record, candidate, subject)| {
+                    let expect = record.expectation();
+                    (record, candidate, expect, subject)
+                })
+                .collect(),
+        );
+        Ok(plan)
     })
+}
+
+impl BatchPlan {
+    /// Each record the batch rewrites, as planned, with the bytes it becomes. The Vendor
+    /// record comes first: a batch only adds and edits Vendors, so writing their record
+    /// first means an interruption can leave an unused Vendor, never an Order referencing
+    /// one that is not yet written.
+    fn records(&self) -> Vec<(ManagedRecord, Vec<u8>, Subject)> {
+        let vendors = (self.candidate != self.prior).then(|| {
+            (
+                ManagedRecord::vendors(self.vendors_path.clone(), self.prior.clone()),
+                self.candidate.to_json_bytes().unwrap_or_default(),
+                Subject::Vendors,
+            )
+        });
+        vendors
+            .into_iter()
+            .chain(self.orders.iter().map(|order| {
+                (
+                    ManagedRecord::order(order.path.clone(), order.prior.clone()),
+                    order.candidate.to_json_bytes().unwrap_or_default(),
+                    Subject::Order(order.directory.clone()),
+                )
+            }))
+            .collect()
+    }
+
+    /// The commit replacing every record in `records` together, each expected to still hold
+    /// what its expectation names.
+    fn batch_journal(&self, records: Vec<(ManagedRecord, Vec<u8>, Expect, Subject)>) -> Journal {
+        let mut journal = Journal::new(&self.root);
+        if records.is_empty() {
+            return journal;
+        }
+        for (record, candidate, expect, subject) in records {
+            let kind = match subject {
+                Subject::Order(_) => OperationKind::ReplaceOrderRecord,
+                _ => OperationKind::ReplaceVendorRecord,
+            };
+            let path = record.path().to_path_buf();
+            journal.replace(path, candidate, expect, PlannedAct::Managed(kind), subject);
+        }
+        journal.refreshing(self.index.clone());
+        journal
+    }
 }
 
 pub(crate) fn commit_batch<F: FileSystem>(
@@ -288,7 +332,7 @@ pub(crate) fn commit_batch<F: FileSystem>(
             changes: plan.changes,
             orders: plan.orders.len(),
         };
-        if plan.operations.is_empty() {
+        if plan.orders.is_empty() && plan.candidate == plan.prior {
             return Ok(MutationReport::Unchanged { result });
         }
         let changed = |path: &Path| Failure::PreconditionsChanged {
@@ -310,7 +354,6 @@ pub(crate) fn commit_batch<F: FileSystem>(
         if vendors_now != plan.prior {
             return Err(changed(&plan.vendors_path));
         }
-        let mut candidates = Vec::new();
         for order in &plan.orders {
             // A matching file outside active discovery, or reached through a link, is
             // not the Package record this batch was authorized to replace.
@@ -320,64 +363,26 @@ pub(crate) fn commit_batch<F: FileSystem>(
             }) {
                 return Err(changed(&order.path));
             }
-            let observed = filesystem
-                .read(&order.path)
-                .map_err(|_| changed(&order.path))?;
-            let holds_prior = OrderDocument::from_json_bytes(&observed)
-                .ok()
-                .and_then(|document| document.validate().ok())
-                .is_some_and(|document| document.order() == &order.prior);
-            if !holds_prior {
-                return Err(changed(&order.path));
+            // Every candidate is a whole Order record before anything is written.
+            if order.candidate.validate().is_err() {
+                return Err(Failure::commit(
+                    CommitFailure::new(located_in_package(&plan.root, order.path.clone())),
+                    Vec::new(),
+                ));
             }
-            let candidate = order
-                .candidate
-                .to_json_bytes()
-                .map_err(|_| Failure::InvalidFacts)?;
-            candidates.push((order.path.clone(), candidate, observed));
         }
-        if plan.candidate != plan.prior {
-            let observed = filesystem
-                .read(&plan.vendors_path)
-                .map_err(|_| changed(&plan.vendors_path))?;
-            let holds_prior = VendorsDocument::from_json_bytes(&observed)
-                .ok()
-                .and_then(|document| PackageMetadata::new(&[], &document).validate().ok())
-                .is_some_and(|projected| projected.vendors() == &plan.prior);
-            if !holds_prior {
-                return Err(changed(&plan.vendors_path));
-            }
-            let candidate = plan
-                .candidate
-                .to_json_bytes()
-                .map_err(|_| Failure::InvalidAggregate)?;
-            candidates.push((plan.vendors_path.clone(), candidate, observed));
+        // Every record the batch rewrites must still mean what the batch was planned
+        // against; the bytes read here are what each replacement then expects.
+        let mut records = Vec::new();
+        for (record, candidate, subject) in plan.records() {
+            let observed = record.confirm(&plan.root, filesystem)?;
+            records.push((record, candidate, Expect::Bytes(observed), subject));
         }
-        let replacements = candidates
-            .iter()
-            .map(|(path, candidate, observed)| FileReplacement::observed(path, candidate, observed))
-            .collect::<Vec<_>>();
-        let vendors_path = plan.vendors_path.as_path();
-        replace_validated_files(&replacements, filesystem, |destination, candidate| {
-            if destination == vendors_path {
-                Ok(())
-            } else {
-                OrderDocument::from_json_bytes(candidate)
-                    .ok()
-                    .and_then(|document| document.validate().ok())
-                    .map(|_| ())
-                    .ok_or(())
-            }
-        })
-        .map_err(|error| {
-            let destinations = replacements
-                .iter()
-                .map(FileReplacement::destination)
-                .collect::<Vec<_>>();
-            Failure::of_replacements(&plan.root, &destinations, error)
-        })?;
-        let touched = Touched::orders(plan.orders.iter().map(|order| order.directory.clone()))
-            .with_vendors(plan.candidate != plan.prior);
-        Ok(IndexRefresh::after_commit(&plan.root, &touched, filesystem).report(result))
+        let committed = plan.batch_journal(records).run(filesystem)?;
+        let refresh = committed.refresh(&plan.root, filesystem);
+        Ok(MutationReport::committed(
+            result,
+            committed.warnings(refresh),
+        ))
     })
 }

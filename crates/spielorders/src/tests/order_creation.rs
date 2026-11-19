@@ -4,6 +4,7 @@
 //! schemas and version evolution.
 
 use crate::ChangeResult;
+use crate::evidence::FactChange;
 use crate::metadata::OrderStatus;
 use crate::tests::support::committed_order;
 use crate::tests::support::index_is_current;
@@ -11,10 +12,9 @@ use crate::tests::support::{
     Answer, FailedCommit, FixedUuid, Operation, PlatformFileSystem, ScriptedFileSystem,
     create_order, effects, json, opened, operation_kinds, package_tree, reusable,
 };
-use crate::tests::support::{operation_path, planned_order, planned_reuse};
-use crate::{Assignments, Report};
+use crate::tests::support::{operation_path, planned_order, planned_reuse, unconfirmed_facts};
+use crate::{Assignments, Change, Report, answer::DraftFailure};
 use crate::{Failure, Warning};
-use crate::{evidence::EvidenceOutcome, evidence::FactChange};
 use std::fs;
 use std::ops::Deref;
 use std::path::Path;
@@ -424,8 +424,8 @@ fn every_precommit_effect_failure_rejects_and_cleans_the_hidden_aggregate() {
         let report = crate::commit(plan, &effects(&filesystem).minting(&mut uuids)).result;
 
         assert!(
-            report.is_err(),
-            "{boundary:?} must reject before canonical commit"
+            matches!(report, Err(crate::Failure::CommitFailed { .. })),
+            "{boundary:?} must reject before canonical commit, leaving nothing behind: {report:?}"
         );
         assert!(
             plan_staging_entries(root).is_empty(),
@@ -665,6 +665,40 @@ fn incomplete_precommit_cleanup_is_explicit_and_never_exposes_a_canonical_order(
     );
 }
 
+#[test]
+fn a_creation_whose_directory_cannot_be_published_leaves_the_vendor_record_as_it_was() {
+    let tree = package_tree("order-creation-unpublished-values");
+    let root = tree.path();
+    let vendors = root.join(".spielorders/vendors.json");
+    let before = fs::read(&vendors).unwrap();
+    let filesystem = failing_at(CreationBoundary::CommitDirectory);
+    let plan = crate::plan(
+        &create_order(
+            PathBuf::from(root),
+            Assignments::new()
+                .assign("title", "Laser components")
+                .introduce("orderer", "Ada Lovelace"),
+        ),
+        &effects(&filesystem).on(2026, 8, 22),
+    )
+    .result
+    .unwrap();
+    assert!(
+        operation_kinds(&plan).contains(&"replace_vendor_record".to_owned()),
+        "the new Orderer is kept in the Vendor record"
+    );
+    let mut uuids = FixedUuid::new("8b6e3f0a-8ec5-4d47-95e1-412652a56d16");
+
+    let report = crate::commit(plan, &effects(&filesystem).minting(&mut uuids)).result;
+
+    assert!(
+        matches!(report, Err(Failure::CommitFailed { .. })),
+        "{report:?}"
+    );
+    assert_eq!(fs::read(&vendors).unwrap(), before);
+    assert!(plan_staging_entries(root).is_empty());
+}
+
 fn plan_staging_entries(root: &std::path::Path) -> Vec<String> {
     fs::read_dir(root.join("Orders"))
         .unwrap()
@@ -686,24 +720,6 @@ fn write_one_vendor(root: &Path, name: &str) {
         ),
     )
     .expect("the fixture Vendors document is written");
-}
-
-/// The facts a refused commit says no longer stand, as `(name, change)` pairs.
-///
-/// The refusal is only useful if it says *which* fact moved, so every test below
-/// reads the names rather than the rejection's variant alone.
-fn unconfirmed_facts(report: &Result<Report, Failure>) -> Vec<(&str, FactChange)> {
-    let Err(Failure::PlanEvidenceUnconfirmed { outcome }) = report else {
-        panic!("a plan whose evidence moved is refused before any effect: {report:?}");
-    };
-    let EvidenceOutcome::Changed(stale) = outcome else {
-        panic!("the refusal names the evidence that changed: {outcome:?}");
-    };
-    stale
-        .changed
-        .iter()
-        .map(|fact| (fact.name.as_str(), fact.change))
-        .collect()
 }
 
 #[test]
@@ -962,5 +978,149 @@ fn a_vanished_order_and_a_failed_index_replacement_keep_the_assessed_evidence() 
         fs::read(root.join(".spielorders/index.json")).unwrap(),
         prior_index,
         "and the failed replacement left the stored index untouched"
+    );
+}
+
+/// A creation names its unknown Vendor and every value it was not asked to introduce
+/// together, as an edit names them, so one correction settles them all.
+#[test]
+fn a_creation_names_its_unknown_vendor_and_every_unconfirmed_value_together() {
+    let tree = package_tree("order-creation-every-fault");
+    let creation = |assignments: Assignments| {
+        crate::plan(
+            &create_order(PathBuf::from(tree.path()), assignments),
+            &effects(&PlatformFileSystem).on(2026, 8, 22),
+        )
+        .result
+    };
+    let named = Assignments::new()
+        .assign("title", "Laser components")
+        .assign("vendor", "Nonesuch Optics")
+        .assign("orderer", "Ada")
+        .assign("project", "Telescope");
+
+    let Err(Failure::InvalidDraft(faults)) = creation(named.clone()) else {
+        panic!("every fault is refused together");
+    };
+    assert!(
+        matches!(
+            faults.as_slice(),
+            [
+                DraftFailure { row: None, failure: Failure::UnknownVendor { name, .. } },
+                DraftFailure { row: None, failure: Failure::UnconfirmedReusableValue { field: orderer, .. } },
+                DraftFailure { row: None, failure: Failure::UnconfirmedReusableValue { field: project, .. } },
+            ] if name == "Nonesuch Optics" && orderer == "orderer" && project == "project"
+        ),
+        "{faults:#?}"
+    );
+    let draft = Change::CreateOrder {
+        root: tree.path().into(),
+        assignments: named,
+        items: vec![
+            Assignments::new()
+                .assign("description", "Lens")
+                .assign("quantity", "1")
+                .assign("unit_price", "2"),
+        ],
+    };
+    assert!(
+        matches!(
+            crate::plan(&draft, &effects(&PlatformFileSystem)).result,
+            Err(Failure::InvalidDraft(faults)) if faults.len() == 3
+        ),
+        "a draft with Items names them alike"
+    );
+    assert!(
+        matches!(
+            creation(
+                Assignments::new()
+                    .assign("title", "Laser components")
+                    .assign("vendor", "Nonesuch Optics")
+            ),
+            Err(Failure::UnknownVendor { .. })
+        ),
+        "a single fault is refused on its own"
+    );
+}
+
+#[test]
+fn a_creation_on_a_volume_without_exclusive_rename_names_the_volume_and_what_it_left() {
+    let tree = package_tree("order-creation-exfat");
+    let root = tree.path();
+    let filesystem = crate::tests::support::exfat_like();
+    let plan = crate::plan(
+        &create_order(
+            PathBuf::from(root),
+            Assignments::new().assign("title", "Laser components"),
+        ),
+        &effects(&PlatformFileSystem).on(2026, 8, 22),
+    )
+    .result
+    .unwrap();
+    let staging = operation_path(&plan, "create_staging_directory");
+    let mut uuids = FixedUuid::new("8b6e3f0a-8ec5-4d47-95e1-412652a56d16");
+
+    let report = crate::commit(plan, &effects(&filesystem).minting(&mut uuids)).result;
+
+    let Err(failure) = report else {
+        panic!("nothing can be published on this volume")
+    };
+    assert!(
+        matches!(
+            failure,
+            Failure::FilesystemUnsupportedCleanupIncomplete { .. }
+        ),
+        "{failure:?}"
+    );
+    // Nothing proves the staged directory is this commit's own, so it is left and named.
+    assert!(staging.is_dir());
+    let reported = crate::tests::support::reported(&failure);
+    assert!(
+        reported
+            .iter()
+            .all(|(code, _)| *code == crate::SPIELORDERS_FAILURE_FILESYSTEM_UNSUPPORTED),
+        "{reported:?}"
+    );
+    let staged = staging.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(
+        reported.iter().any(|(_, path)| path.ends_with(&staged)),
+        "the staged directory is named: {reported:?}"
+    );
+}
+
+#[test]
+fn a_write_that_fails_partway_names_what_it_may_have_left() {
+    let tree = package_tree("order-creation-partial-write");
+    let root = tree.path();
+    let plan = crate::plan(
+        &create_order(
+            PathBuf::from(root),
+            Assignments::new().assign("title", "Laser components"),
+        ),
+        &effects(&PlatformFileSystem).on(2026, 8, 22),
+    )
+    .result
+    .unwrap();
+    // The write fails after some of its bytes landed, so something stands at the record's
+    // path that nothing proves is this commit's own.
+    let filesystem = ScriptedFileSystem::new();
+    filesystem
+        .on(Operation::WriteNew)
+        .ending_in(ORDER_RECORD)
+        .once()
+        .preceded_by(|outside| outside.write(&outside.call().path, b"{\"schema"))
+        .fails();
+    let mut uuids = FixedUuid::new("8b6e3f0a-8ec5-4d47-95e1-412652a56d16");
+
+    let failure = crate::commit(plan, &effects(&filesystem).minting(&mut uuids))
+        .result
+        .unwrap_err();
+
+    assert!(
+        failure
+            .cleanup_failures()
+            .iter()
+            .any(|left| left.location.absolute_path.ends_with(ORDER_RECORD)),
+        "{failure:?}"
     );
 }

@@ -17,7 +17,8 @@ func initializedPackage() throws -> URL {
     return root
 }
 
-func createOrder(in root: URL, title: String = "Optics", itemPrice: String? = nil, vendor: String? = nil) throws -> URL {
+func createOrder(in root: URL, title: String = "Optics", itemPrice: String? = nil, vendor: String? = nil,
+                 currency: String? = nil) throws -> URL {
     var package: UnsafeMutablePointer<SpielordersPackage>?
     var draft: UnsafeMutablePointer<SpielordersDraft>?
     var plan: UnsafeMutablePointer<SpielordersPlan>?
@@ -35,6 +36,9 @@ func createOrder(in root: URL, title: String = "Optics", itemPrice: String? = ni
     #expect(set == SPIELORDERS_RESULT_OK)
     if let vendor {
         #expect(vendor.withCString { spielorders_draft_set(draft!, SPIELORDERS_ORDER_FIELD_VENDOR, $0, nil) } == SPIELORDERS_RESULT_OK)
+    }
+    if let currency {
+        #expect(currency.withCString { spielorders_draft_set(draft!, SPIELORDERS_ORDER_FIELD_CURRENCY, $0, nil) } == SPIELORDERS_RESULT_OK)
     }
     if let itemPrice {
         #expect(spielorders_draft_row_insert(draft!, 0, nil) == SPIELORDERS_RESULT_OK)

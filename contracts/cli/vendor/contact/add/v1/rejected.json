@@ -9,15 +9,12 @@
   "diagnostics": [],
   "error": {
     "code": "invalid_assignments",
-    "detail": {
-      "severity": "error",
-      "message": "Invalid assignments: blank required value",
-      "field": "name",
-      "reason": "blank_required_value",
-      "position": 4,
-      "path": null,
-      "before": null,
-      "after": null
-    }
+    "detail": [
+      {
+        "field": "name",
+        "reason": "blank_required_value",
+        "position": 4
+      }
+    ]
   }
 }

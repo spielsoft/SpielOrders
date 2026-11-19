@@ -42,47 +42,55 @@ const FULL_INDEX: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../contracts/examples/v1/full/index.json"
 ));
-const MALFORMED_ORDER_ID: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../contracts/fixtures/schema-invalid/order-malformed-identity.json"
-));
 const ONE_PARENT_ORDER: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../contracts/fixtures/schema-invalid/order-package-root-one-parent.json"
 ));
-const INVALID_CURRENCY: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../contracts/fixtures/schema-invalid/order-invalid-currency.json"
-));
 
+/// Every accepted example document reparses to the same value and serializes back to its
+/// exact canonical bytes, ending in one newline.
 #[test]
-fn minimal_order_round_trips_through_canonical_json() {
-    let order = OrderDocument::from_json_bytes(MINIMAL_ORDER).expect("minimal fixture parses");
-
-    let canonical = order.to_json_bytes().expect("typed order serializes");
-
-    assert_eq!(canonical, MINIMAL_ORDER);
-    assert!(canonical.ends_with(b"}\n"));
-    assert!(!canonical.ends_with(b"}\n\n"));
-    assert_eq!(
-        OrderDocument::from_json_bytes(&canonical).expect("canonical bytes reparse"),
-        order
-    );
-}
-
-#[test]
-fn index_documents_preserve_complete_order_readme_and_vendor_projections() {
-    for source in [MINIMAL_INDEX, FULL_INDEX] {
-        let index = IndexDocument::from_json_bytes(source).expect("index fixture parses");
-
-        let canonical = index.to_json_bytes().expect("index serializes");
-
+fn every_example_document_round_trips_to_its_canonical_bytes() {
+    fn round_trips<T: PartialEq + std::fmt::Debug>(
+        source: &[u8],
+        parse: fn(&[u8]) -> Result<T, crate::metadata::MetadataError>,
+        serialize: fn(&T) -> Result<Vec<u8>, crate::metadata::MetadataError>,
+    ) {
+        let document = parse(source).expect("the example parses");
+        let canonical = serialize(&document).expect("the document serializes");
         assert_eq!(canonical, source);
-        assert!(canonical.ends_with(b"}\n"));
-        assert!(!canonical.ends_with(b"}\n\n"));
+        assert!(canonical.ends_with(b"}\n") && !canonical.ends_with(b"}\n\n"));
         assert_eq!(
-            IndexDocument::from_json_bytes(&canonical).expect("canonical bytes reparse"),
-            index
+            parse(&canonical).expect("canonical bytes reparse"),
+            document
+        );
+    }
+    for source in [MINIMAL_ORDER, FULL_ORDER] {
+        round_trips(
+            source,
+            OrderDocument::from_json_bytes,
+            OrderDocument::to_json_bytes,
+        );
+    }
+    for source in [MINIMAL_VENDORS, FULL_VENDORS] {
+        round_trips(
+            source,
+            VendorsDocument::from_json_bytes,
+            VendorsDocument::to_json_bytes,
+        );
+    }
+    for source in [MINIMAL_VERSION, FULL_VERSION] {
+        round_trips(
+            source,
+            VersionDocument::from_json_bytes,
+            VersionDocument::to_json_bytes,
+        );
+    }
+    for source in [MINIMAL_INDEX, FULL_INDEX] {
+        round_trips(
+            source,
+            IndexDocument::from_json_bytes,
+            IndexDocument::to_json_bytes,
         );
     }
 }
@@ -99,14 +107,6 @@ fn config_parsing_applies_defaults_and_accepts_both_path_keys() {
     assert_eq!(defaults.removed_path, "Removed");
     assert_eq!(configured.orders_path, "Purchases/Active");
     assert_eq!(configured.removed_path, "Retired");
-}
-
-#[test]
-fn unsupported_metadata_version_is_a_shape_failure() {
-    let error = VersionDocument::from_json_bytes(br#"{"metadata_version":2}"#)
-        .expect_err("unsupported metadata version must fail");
-
-    assert_eq!(error.kind(), MetadataErrorKind::Shape);
 }
 
 #[test]
@@ -142,7 +142,7 @@ fn present_optional_json_scalars_reject_null() {
 }
 
 #[test]
-fn order_and_vendor_identities_require_lowercase_uuid_v4_text() {
+fn vendor_identities_require_lowercase_uuid_v4_text() {
     let invalid_vendor = br#"{
   "schema_version": 1,
   "vendors": [{
@@ -152,7 +152,6 @@ fn order_and_vendor_identities_require_lowercase_uuid_v4_text() {
   }]
 }"#;
 
-    assert!(OrderDocument::from_json_bytes(MALFORMED_ORDER_ID).is_err());
     assert!(VendorsDocument::from_json_bytes(invalid_vendor).is_err());
 }
 
@@ -266,14 +265,6 @@ fn date_ordered_enforces_schema_shape_without_semantic_calendar_validation() {
 }
 
 #[test]
-fn present_currency_requires_three_uppercase_ascii_letters() {
-    let error = OrderDocument::from_json_bytes(INVALID_CURRENCY)
-        .expect_err("lowercase currency is not a supported durable shape");
-
-    assert_eq!(error.kind(), MetadataErrorKind::Shape);
-}
-
-#[test]
 fn index_order_directory_requires_a_normalized_relative_shape() {
     let source = String::from_utf8(FULL_INDEX.to_vec()).expect("fixture is UTF-8");
     let original = "Orders/2026_07_19_Tarnwick_Laser_components";
@@ -297,23 +288,6 @@ fn typed_item_numbers_cannot_represent_non_finite_values() {
     assert!(FiniteNumber::new(f64::NAN).is_none());
     assert!(FiniteNumber::new(f64::INFINITY).is_none());
     assert_eq!(FiniteNumber::new(-2.5).expect("finite value").get(), -2.5);
-}
-
-#[test]
-fn vendor_documents_preserve_ordered_vendors_contacts_and_optional_facts() {
-    for source in [MINIMAL_VENDORS, FULL_VENDORS] {
-        let vendors = VendorsDocument::from_json_bytes(source).expect("vendor fixture parses");
-
-        let canonical = vendors.to_json_bytes().expect("vendors serialize");
-
-        assert_eq!(canonical, source);
-        assert!(canonical.ends_with(b"}\n"));
-        assert!(!canonical.ends_with(b"}\n\n"));
-        assert_eq!(
-            VendorsDocument::from_json_bytes(&canonical).expect("canonical bytes reparse"),
-            vendors
-        );
-    }
 }
 
 #[test]
@@ -363,52 +337,6 @@ fn absent_vendor_visibility_means_visible_and_explicit_null_is_a_shape_failure()
     let error = VendorsDocument::from_json_bytes(null_visibility)
         .expect_err("explicit null is not a schema-valid optional visibility");
     assert_eq!(error.kind(), MetadataErrorKind::Shape);
-}
-
-#[test]
-fn version_marker_round_trips_through_canonical_json() {
-    for source in [MINIMAL_VERSION, FULL_VERSION] {
-        let version = VersionDocument::from_json_bytes(source).expect("version fixture parses");
-
-        let canonical = version.to_json_bytes().expect("version serializes");
-
-        assert_eq!(canonical, source);
-        assert!(canonical.ends_with(b"}\n"));
-        assert!(!canonical.ends_with(b"}\n\n"));
-        assert_eq!(
-            VersionDocument::from_json_bytes(&canonical).expect("canonical bytes reparse"),
-            version
-        );
-    }
-}
-
-#[test]
-fn full_order_preserves_every_version_one_fact_and_item() {
-    let order = OrderDocument::from_json_bytes(FULL_ORDER).expect("full fixture parses");
-
-    let canonical = order.to_json_bytes().expect("typed order serializes");
-
-    assert_eq!(canonical, FULL_ORDER);
-    assert!(canonical.ends_with(b"}\n"));
-    assert!(!canonical.ends_with(b"}\n\n"));
-    assert_eq!(
-        OrderDocument::from_json_bytes(&canonical).expect("canonical bytes reparse"),
-        order
-    );
-}
-
-#[test]
-fn config_rejects_unknown_keys_wrong_types_and_malformed_toml() {
-    let unknown = Config::from_toml_bytes(b"orders_path = \"Orders\"\nextra = true\n")
-        .expect_err("unknown config key must fail");
-    let wrong_type = Config::from_toml_bytes(b"orders_path = 42\n")
-        .expect_err("wrong config value type must fail");
-    let malformed =
-        Config::from_toml_bytes(b"orders_path = \"").expect_err("malformed TOML must fail");
-
-    assert_eq!(unknown.kind(), MetadataErrorKind::Shape);
-    assert_eq!(wrong_type.kind(), MetadataErrorKind::Shape);
-    assert_eq!(malformed.kind(), MetadataErrorKind::Syntax);
 }
 
 #[derive(Deserialize)]

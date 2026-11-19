@@ -14,7 +14,6 @@ use crate::support::{
     Invocation, managed_snapshot, order_directory, package_with_a_drifted_order, populated_package,
     projected_alignment, response, supporting_material_in,
 };
-use std::path::PathBuf;
 
 /// `--uuid` aligns the Order that identity names.
 ///
@@ -68,7 +67,7 @@ fn deleting_moves_the_intact_removed_directory_to_the_platform_trash() {
 
     let landed = document["data"]["trash_location"]["absolute_path"]
         .as_str()
-        .map(PathBuf::from);
+        .map(std::path::PathBuf::from);
     let arrived = landed.as_ref().map(|path| managed_snapshot(path));
     let cleaned = landed
         .as_ref()

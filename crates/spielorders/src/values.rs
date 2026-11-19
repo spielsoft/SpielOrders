@@ -1,5 +1,7 @@
 //! The values a Package keeps beside its Vendors: Ordering Institutions, Orderers,
-//! Projects, and each Project's Order Groups.
+//! Projects, and each Project's Order Groups — and the one vocabulary every capability
+//! names them in: their four kinds, where each kind lives ([`ValueScope`]), and how a proposed
+//! spelling reuses a kept one or is new ([`ReusableValue`]).
 //!
 //! A Package's values are the ones `vendors.json` keeps and the ones its healthy Orders
 //! use, so a Package whose record keeps none still offers every value its Orders use.
@@ -12,23 +14,335 @@
 use crate::{
     Failure,
     canonical::{CurrentPackageCandidate, ReusableValueProjection},
-    filesystem::{
-        DestinationExpectation, FileReplacement, replace_validated_file_expecting, staging_path,
-    },
+    journal::ManagedRecord,
     metadata::{
         NonBlankString, OrderDocument, StoredProject, StoredValues, VendorsDocument, Version1,
     },
-    mutation::{CleanupFailure, CommitFailure, Never},
     operations::FailedOperation,
-    package::{PackageMetadata, ReusableValue, ReusableValues},
     ports::FileSystem,
-    readme::{Location, located_in_package},
+    readme::located_in_package,
 };
 use std::{cmp::Ordering, collections::BTreeMap, path::PathBuf};
+
+/// One of the four Reusable Free-Entry Value categories.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReusableValueKind {
+    OrderingInstitution,
+    Orderer,
+    Project,
+    OrderGroup,
+}
+
+impl ReusableValueKind {
+    /// Every kind, in the order an Order's facts list them.
+    pub(crate) const ALL: [Self; 4] = [
+        Self::Orderer,
+        Self::OrderingInstitution,
+        Self::Project,
+        Self::OrderGroup,
+    ];
+
+    /// The Order field that holds a value of this kind.
+    pub(crate) fn field(self) -> &'static str {
+        match self {
+            Self::OrderingInstitution => "ordering_institution",
+            Self::Orderer => "orderer",
+            Self::Project => "project",
+            Self::OrderGroup => "order_group",
+        }
+    }
+}
+
+/// How one proposed value is spelled against the values a Package already has.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ReusableValue {
+    Absent,
+    Reused(String),
+    New(String),
+}
+
+impl ReusableValue {
+    /// The spelling this value stores, where it stores one.
+    pub(crate) fn text(&self) -> Option<&str> {
+        match self {
+            Self::Absent => None,
+            Self::Reused(value) | Self::New(value) => Some(value),
+        }
+    }
+}
+
+/// How a mutation spells each of an Order's Reusable Free-Entry Values: reusing an
+/// existing canonical spelling, introducing a new one, or leaving it absent.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReusableValues {
+    pub orderer: ReusableValue,
+    pub ordering_institution: ReusableValue,
+    pub project: ReusableValue,
+    pub order_group: ReusableValue,
+}
+
+impl ReusableValues {
+    /// The value of `kind`.
+    pub(crate) fn of(&self, kind: ReusableValueKind) -> &ReusableValue {
+        match kind {
+            ReusableValueKind::OrderingInstitution => &self.ordering_institution,
+            ReusableValueKind::Orderer => &self.orderer,
+            ReusableValueKind::Project => &self.project,
+            ReusableValueKind::OrderGroup => &self.order_group,
+        }
+    }
+
+    /// Each `proposed` value as `package` spells it, an Order Group among the groups of
+    /// the Project these values name.
+    pub(crate) fn canonical<'a>(
+        package: &CurrentPackageCandidate,
+        proposed: impl Fn(ReusableValueKind) -> Option<&'a str>,
+    ) -> Self {
+        let canonical =
+            |kind, project| ValueScope::new(kind, project).canonical(package, proposed(kind));
+        let project = canonical(ReusableValueKind::Project, None);
+        Self {
+            orderer: canonical(ReusableValueKind::Orderer, None),
+            ordering_institution: canonical(ReusableValueKind::OrderingInstitution, None),
+            order_group: canonical(ReusableValueKind::OrderGroup, project.text()),
+            project,
+        }
+    }
+
+    /// The values `document` holds as `package` spells them.
+    pub(crate) fn of_document(package: &CurrentPackageCandidate, document: &OrderDocument) -> Self {
+        Self::canonical(package, |kind| held(document, kind))
+    }
+
+    /// Every value with its kind, in [`ReusableValueKind::ALL`]'s order.
+    pub(crate) fn each(&self) -> impl Iterator<Item = (ReusableValueKind, &ReusableValue)> {
+        ReusableValueKind::ALL
+            .into_iter()
+            .map(|kind| (kind, self.of(kind)))
+    }
+}
+
+/// `proposed` reusing the first of `existing_values` it matches, new where it matches
+/// none, or absent where it is blank.
+pub fn canonicalize_reusable_value<T: AsRef<str>>(
+    proposed: Option<&str>,
+    existing_values: &[T],
+) -> ReusableValue {
+    let Some(proposed) = proposed.map(str::trim).filter(|value| !value.is_empty()) else {
+        return ReusableValue::Absent;
+    };
+
+    existing_values
+        .iter()
+        .map(AsRef::as_ref)
+        .find(|existing| same_value(proposed, existing))
+        .map(|existing| ReusableValue::Reused(existing.trim().to_owned()))
+        .unwrap_or_else(|| ReusableValue::New(proposed.to_owned()))
+}
+
+/// The value of `kind` `document` holds, whatever its Project.
+pub(crate) fn held(document: &OrderDocument, kind: ReusableValueKind) -> Option<&str> {
+    match kind {
+        ReusableValueKind::OrderingInstitution => document.ordering_institution.as_deref(),
+        ReusableValueKind::Orderer => document.orderer.as_deref(),
+        ReusableValueKind::Project => document.project.as_deref(),
+        ReusableValueKind::OrderGroup => document.order_group.as_deref(),
+    }
+}
 
 /// Whether two spellings are one value: trimmed, and without regard to letter case.
 pub(crate) fn same_value(left: &str, right: &str) -> bool {
     focaccia::unicode_full_case_eq(left.trim(), right.trim())
+}
+
+/// Whether two optional values are one, a blank value being none: so two Orders with no
+/// Project are in the same Project.
+pub(crate) fn same_optional(left: Option<&str>, right: Option<&str>) -> bool {
+    fn present(text: Option<&str>) -> Option<&str> {
+        text.map(str::trim).filter(|text| !text.is_empty())
+    }
+    match (present(left), present(right)) {
+        (None, None) => true,
+        (Some(left), Some(right)) => same_value(left, right),
+        _ => false,
+    }
+}
+
+/// Where one kind of value lives: a list of its own, or the Order Groups of one Project or
+/// of the Orders with no Project.
+#[derive(Clone, Debug)]
+pub(crate) enum ValueScope {
+    OrderingInstitution,
+    Orderer,
+    Project,
+    OrderGroup { project: Option<String> },
+}
+
+impl ValueScope {
+    /// The scope of `kind` in `package`, an Order Group's naming a Project the Package
+    /// has; a blank Project is the Orders with no Project.
+    pub(crate) fn of(
+        kind: ReusableValueKind,
+        project: Option<&str>,
+        package: &CurrentPackageCandidate,
+    ) -> Result<Self, Failure> {
+        Ok(match Self::new(kind, None) {
+            Self::OrderGroup { .. } => Self::OrderGroup {
+                project: match project.map(str::trim).filter(|project| !project.is_empty()) {
+                    None => None,
+                    Some(project) => Some(Self::Project.known(package, project)?),
+                },
+            },
+            scope => scope,
+        })
+    }
+
+    /// The scope of `kind`, an Order Group's being the groups of `project` as given.
+    pub(crate) fn new(kind: ReusableValueKind, project: Option<&str>) -> Self {
+        match kind {
+            ReusableValueKind::OrderingInstitution => Self::OrderingInstitution,
+            ReusableValueKind::Orderer => Self::Orderer,
+            ReusableValueKind::Project => Self::Project,
+            ReusableValueKind::OrderGroup => Self::OrderGroup {
+                project: project
+                    .map(str::trim)
+                    .filter(|project| !project.is_empty())
+                    .map(str::to_owned),
+            },
+        }
+    }
+
+    pub(crate) fn kind(&self) -> ReusableValueKind {
+        match self {
+            Self::OrderingInstitution => ReusableValueKind::OrderingInstitution,
+            Self::Orderer => ReusableValueKind::Orderer,
+            Self::Project => ReusableValueKind::Project,
+            Self::OrderGroup { .. } => ReusableValueKind::OrderGroup,
+        }
+    }
+
+    /// The Order field this scope's values are held in.
+    pub(crate) fn field(&self) -> &'static str {
+        self.kind().field()
+    }
+
+    /// The values `projections` lists in this scope.
+    pub(crate) fn listed<'a>(
+        &self,
+        projections: &'a ValueProjections,
+    ) -> &'a [ReusableValueProjection] {
+        match self {
+            Self::OrderingInstitution => &projections.ordering_institutions,
+            Self::Orderer => &projections.orderers,
+            Self::Project => &projections.projects,
+            Self::OrderGroup { project } => projections.order_groups_of(project.as_deref()),
+        }
+    }
+
+    /// `proposed` as this scope of `package` spells it: reused, new, or absent.
+    pub(crate) fn canonical(
+        &self,
+        package: &CurrentPackageCandidate,
+        proposed: Option<&str>,
+    ) -> ReusableValue {
+        let listed = self
+            .listed(&package.projections)
+            .iter()
+            .map(|listed| listed.value.as_str())
+            .collect::<Vec<_>>();
+        canonicalize_reusable_value(proposed, &listed)
+    }
+
+    /// The Package's spelling of `value` in this scope, where it has one.
+    pub(crate) fn existing(
+        &self,
+        package: &CurrentPackageCandidate,
+        value: &str,
+    ) -> Option<String> {
+        self.listed(&package.projections)
+            .iter()
+            .find(|existing| same_value(&existing.value, value))
+            .map(|existing| existing.value.clone())
+    }
+
+    /// The Package's spelling of `value`, or the refusal naming it as unknown.
+    pub(crate) fn known(
+        &self,
+        package: &CurrentPackageCandidate,
+        value: &str,
+    ) -> Result<String, Failure> {
+        self.existing(package, value)
+            .ok_or_else(|| Failure::UnknownValue {
+                field: self.field().to_owned(),
+                value: value.trim().to_owned(),
+            })
+    }
+
+    /// The text of this scope's value on `order`, where the Order is in this scope.
+    pub(crate) fn value_of<'a>(&self, order: &'a OrderDocument) -> Option<&'a str> {
+        match self {
+            Self::OrderGroup { project } => {
+                same_optional(order.project.as_deref(), project.as_deref())
+                    .then_some(order.order_group.as_deref())
+                    .flatten()
+            }
+            scope => held(order, scope.kind()),
+        }
+    }
+
+    /// Sets this scope's value on `order`.
+    pub(crate) fn set(&self, order: &mut OrderDocument, value: Option<&str>) {
+        let value = value.map(str::to_owned);
+        match self {
+            Self::OrderingInstitution => order.ordering_institution = value,
+            Self::Orderer => order.orderer = value,
+            Self::Project => order.project = value,
+            Self::OrderGroup { .. } => order.order_group = value,
+        }
+    }
+
+    /// The positions of the healthy Orders using one of `values`.
+    pub(crate) fn users(&self, package: &CurrentPackageCandidate, values: &[String]) -> Vec<usize> {
+        package
+            .healthy_orders
+            .iter()
+            .enumerate()
+            .filter(|(_, order)| {
+                self.value_of(&order.document)
+                    .is_some_and(|own| values.iter().any(|value| same_value(own, value)))
+            })
+            .map(|(position, _)| position)
+            .collect()
+    }
+
+    /// Keeps `value` in this scope.
+    pub(crate) fn keep(&self, values: &mut StoredValues, value: &str) {
+        let Some(value) = NonBlankString::trimmed(value) else {
+            return;
+        };
+        match self {
+            Self::OrderingInstitution => values.ordering_institutions.push(value),
+            Self::Orderer => values.orderers.push(value),
+            Self::Project => values.projects.push(StoredProject {
+                name: value,
+                order_groups: Vec::new(),
+            }),
+            Self::OrderGroup { project: None } => values.order_groups.push(value),
+            Self::OrderGroup {
+                project: Some(project),
+            } => match values
+                .projects
+                .iter_mut()
+                .find(|kept| same_value(kept.name.as_str(), project))
+            {
+                Some(kept) => kept.order_groups.push(value),
+                None => values.projects.push(StoredProject {
+                    name: NonBlankString::trimmed(project).expect("a known Project is nonblank"),
+                    order_groups: vec![value],
+                }),
+            },
+        }
+    }
 }
 
 /// Text ordered so that two spellings of one value are equal.
@@ -180,6 +494,26 @@ impl ValueProjections {
     }
 }
 
+/// Whether `order` uses `value` of `kind`, as [`project`] counts it: an Order Group only
+/// within `project`, or among the Orders with no Project where `project` is absent or blank.
+pub(crate) fn uses(
+    order: &OrderDocument,
+    kind: ReusableValueKind,
+    project: Option<&str>,
+    value: &str,
+) -> bool {
+    let key = |text: Option<&str>| text.and_then(ValueKey::of);
+    let matches = |own: Option<&str>| key(own).is_some_and(|own| Some(own) == key(Some(value)));
+    match kind {
+        ReusableValueKind::OrderingInstitution => matches(order.ordering_institution.as_deref()),
+        ReusableValueKind::Orderer => matches(order.orderer.as_deref()),
+        ReusableValueKind::Project => matches(order.project.as_deref()),
+        ReusableValueKind::OrderGroup => {
+            key(order.project.as_deref()) == key(project) && matches(order.order_group.as_deref())
+        }
+    }
+}
+
 /// The values `stored` keeps and `orders` use.
 pub(crate) fn project<'a>(
     stored: &StoredValues,
@@ -297,129 +631,72 @@ pub(crate) fn merged(values: &StoredValues, additions: &StoredValues) -> StoredV
     merged
 }
 
-/// The canonical values replacement that must commit with the Order introducing them.
-pub(crate) struct ValuesWrite {
-    root: PathBuf,
-    path: PathBuf,
-    prior: Vec<u8>,
-    candidate: Vec<u8>,
+/// The replacement of the Vendor record that keeps the values an Order introduces, and
+/// must commit with that Order.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Replacement {
+    pub(crate) path: PathBuf,
+    /// What the record holds now, which the replacement expects to still find.
+    pub(crate) prior: Vec<u8>,
+    pub(crate) candidate: Vec<u8>,
 }
 
-impl ValuesWrite {
-    pub(crate) fn prepare<F: FileSystem>(
-        package: &CurrentPackageCandidate,
-        additions: &StoredValues,
-        filesystem: &F,
-    ) -> Result<Option<Self>, Failure> {
-        if additions.is_empty() {
-            return Ok(None);
+impl Replacement {
+    /// The replacement a plan lists, before a commit reads the record it replaces.
+    pub(crate) fn planned(package: &CurrentPackageCandidate) -> Self {
+        Self {
+            path: package.context.vendors.absolute_path.clone(),
+            prior: Vec::new(),
+            candidate: Vec::new(),
         }
-        let values = merged(&package.values, additions);
-        if values == package.values {
-            return Ok(None);
-        }
-        let root = package.context.root.absolute_path.clone();
-        let path = package.context.vendors.absolute_path.clone();
-        let prior = filesystem.read(&path).map_err(|error| {
-            Failure::from(FailedOperation::inside(
-                &root,
-                path.clone(),
-                &error,
-                filesystem,
-            ))
-        })?;
-        let holds_loaded = VendorsDocument::from_json_bytes(&prior)
-            .ok()
-            .and_then(|document| PackageMetadata::new(&[], &document).validate().ok())
-            .is_some_and(|projected| {
-                projected.vendors().vendors == package.vendors
-                    && projected.vendors().values == package.values
-            });
-        if !holds_loaded {
-            return Err(Failure::PreconditionsChanged {
-                location: located_in_package(&root, path),
-            });
-        }
-        let candidate = VendorsDocument {
-            schema_version: Version1,
-            vendors: package.vendors.clone(),
-            values,
-        }
-        .to_json_bytes()
-        .map_err(|_| Failure::InvalidAggregate)?;
-        Ok(Some(Self {
+    }
+}
+
+/// The Vendor record of `package` keeping `additions` beside the values it keeps, or
+/// `None` where it already keeps them all. Refused where the record no longer holds what
+/// `package` loaded from it.
+pub(crate) fn replacement<F: FileSystem>(
+    package: &CurrentPackageCandidate,
+    additions: &StoredValues,
+    filesystem: &F,
+) -> Result<Option<Replacement>, Failure> {
+    if additions.is_empty() {
+        return Ok(None);
+    }
+    let values = merged(&package.values, additions);
+    if values == package.values {
+        return Ok(None);
+    }
+    let root = &package.context.root.absolute_path;
+    let path = package.context.vendors.absolute_path.clone();
+    let prior = filesystem.read(&path).map_err(|error| {
+        Failure::from(FailedOperation::inside(
             root,
-            path,
-            prior,
-            candidate,
-        }))
-    }
-
-    pub(crate) fn replacement(&self) -> FileReplacement<'_> {
-        FileReplacement::observed(&self.path, &self.candidate, &self.prior)
-    }
-
-    pub(crate) fn path(&self) -> &std::path::Path {
-        &self.path
-    }
-
-    pub(crate) fn write<F: FileSystem>(&self, filesystem: &F) -> Result<(), Failure> {
-        replace_validated_file_expecting(
-            &self.path,
-            &self.candidate,
-            DestinationExpectation::Exactly(&self.prior),
+            path.clone(),
+            &error,
             filesystem,
-            |_| Ok::<(), Never>(()),
-        )
-        .map_err(|error| Failure::of_replacement(&self.root, &self.path, error))
+        ))
+    })?;
+    let loaded = VendorsDocument {
+        schema_version: Version1,
+        vendors: package.vendors.clone(),
+        values: package.values.clone(),
+    };
+    if !ManagedRecord::vendors(path.clone(), loaded).held_by(&prior) {
+        return Err(Failure::PreconditionsChanged {
+            location: located_in_package(root, path),
+        });
     }
-
-    pub(crate) fn rollback<F: FileSystem>(&self, failure: Failure, filesystem: &F) -> Failure {
-        let mut cleanup = Vec::new();
-        if let Err(error) = replace_validated_file_expecting(
-            &self.path,
-            &self.prior,
-            DestinationExpectation::Exactly(&self.candidate),
-            filesystem,
-            |_| Ok::<(), Never>(()),
-        ) {
-            cleanup.push(CleanupFailure::new(located_in_package(
-                &self.root,
-                self.path.clone(),
-            )));
-            if error.cleanup_failure.is_some() {
-                cleanup.push(CleanupFailure::new(located_in_package(
-                    &self.root,
-                    staging_path(&self.path).expect("a managed record has a staging path"),
-                )));
-            }
-        }
-        with_cleanup(
-            failure,
-            cleanup,
-            located_in_package(&self.root, self.path.clone()),
-        )
+    let candidate = VendorsDocument {
+        schema_version: Version1,
+        vendors: package.vendors.clone(),
+        values,
     }
-}
-
-/// Keeps cleanup failures beside the initiating commit failure.
-pub(crate) fn with_cleanup(
-    failure: Failure,
-    mut cleanup: Vec<CleanupFailure>,
-    at: Location,
-) -> Failure {
-    if cleanup.is_empty() {
-        return failure;
-    }
-    match failure {
-        Failure::CommitFailed { failure } => Failure::commit(*failure, cleanup),
-        Failure::CommitFailedCleanupIncomplete {
-            failure,
-            cleanup_failures,
-        } => {
-            cleanup.extend(cleanup_failures);
-            Failure::commit(*failure, cleanup)
-        }
-        _ => Failure::commit(CommitFailure::new(at), cleanup),
-    }
+    .to_json_bytes()
+    .map_err(|_| Failure::InvalidAggregate)?;
+    Ok(Some(Replacement {
+        path,
+        prior,
+        candidate,
+    }))
 }

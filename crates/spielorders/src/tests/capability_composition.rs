@@ -5,15 +5,15 @@
 //! and historical semantics; Define the Rust CLI capability contract; Define
 //! integrity, validation, and repair boundaries.
 
-use crate::tests::support::operation_path;
 use crate::tests::support::{
     EditPoint, FailedCommit, Operation, PlatformFileSystem, QueuedUuids, ScriptedFileSystem,
     TemporaryTree, add_contact, add_item, adoption, align_order, another_writer_replacing,
     committed, create_order, create_vendor, current_readme, diagnosed_order, edit_order, effects,
-    initialized_package, json, opened, order_record, order_scope, package_scope, package_tree_with,
-    rebuild_index, remove_order, repair, set_vendor_hidden, valid, write_readme,
+    initialized_package, opened, order_scope, package_scope, package_tree_with, rebuild_index,
+    record_path, remove_order, repair, set_vendor_hidden, valid, write_readme,
 };
 use crate::tests::support::{Index, index_is_current};
+use crate::tests::support::{assert_reported_beside, operation_path};
 use crate::tests::support::{committed_order, committed_vendor};
 use crate::{Assignments, ChangeResult, Report, VendorRef};
 use crate::{search::CaseSensitivity, search::SearchQuery, search::VendorVisibility};
@@ -205,16 +205,16 @@ fn an_unresolved_vendor_reference_is_diagnosed_and_repairable_beside_another_cas
     let (_tree, root) = initialized_package("m3-unresolved-vendor");
     let first = adopted_order(&root, "2026_08_22_First", FIRST_ID, None);
     let second = adopted_order(&root, "2026_08_22_Second", SECOND_ID, None);
-    let text = fs::read_to_string(order_record(&first)).unwrap().replace(
+    let text = fs::read_to_string(record_path(&first)).unwrap().replace(
         "\"items\": []",
         &format!("\"vendor_id\": \"{ABSENT_VENDOR}\",\n  \"items\": []"),
     );
-    fs::write(order_record(&first), text).unwrap();
+    fs::write(record_path(&first), text).unwrap();
     // A second, independent condition on the same Order: a duplicate Order identity.
-    let text = fs::read_to_string(order_record(&second))
+    let text = fs::read_to_string(record_path(&second))
         .unwrap()
         .replace(SECOND_ID, FIRST_ID);
-    fs::write(order_record(&second), text).unwrap();
+    fs::write(record_path(&second), text).unwrap();
 
     // The reference is unresolved, and diagnosis says so with the same code the
     // Package-wide read model uses.
@@ -274,7 +274,7 @@ fn an_unresolved_vendor_reference_is_diagnosed_and_repairable_beside_another_cas
 
     // Resolving one case leaves the other standing and repairable, so no canonical
     // byte was lost and no state is stranded.
-    let second_before = fs::read(order_record(&second)).unwrap();
+    let second_before = fs::read(record_path(&second)).unwrap();
     let reloaded = diagnosed_order(&first, &PlatformFileSystem)
         .result
         .expect("the Order diagnoses again");
@@ -295,7 +295,7 @@ fn an_unresolved_vendor_reference_is_diagnosed_and_repairable_beside_another_cas
         "and it is itself repairable"
     );
     assert_eq!(
-        fs::read(order_record(&second)).unwrap(),
+        fs::read(record_path(&second)).unwrap(),
         second_before,
         "the other conflict participant is untouched"
     );
@@ -363,52 +363,6 @@ fn every_whole_directory_relocation_carries_supporting_material_untouched() {
         serde_json::from_slice(&fs::read(root.join(".spielorders/index.json")).unwrap())
             .expect("the derived index parses");
     assert!(index.orders.is_empty());
-}
-
-#[test]
-fn a_full_lifecycle_composes_through_public_core_seams_only() {
-    // Adopt, align, diagnose, remove — each capability handing its result to the next
-    // through the public Rust core, with no adapter owning a Package rule.
-    let (_tree, root) = initialized_package("m3-lifecycle");
-    let directory = adopted_order(&root, "Legacy_name", FIRST_ID, None);
-
-    let document =
-        serde_json::from_slice::<OrderDocument>(&fs::read(order_record(&directory)).unwrap())
-            .expect("the adopted record parses");
-    assert_eq!(document.order_id.deref(), FIRST_ID);
-    assert_eq!(json(&document.package_root), "../..");
-
-    let plan = crate::plan(
-        &align_order(directory.clone()),
-        &effects(&PlatformFileSystem),
-    )
-    .result
-    .unwrap();
-    let aligned = operation_path(&plan, "rename_order_directory");
-    assert!(matches!(
-        crate::commit(plan, &effects(&PlatformFileSystem)).result,
-        Ok(Report::Committed { .. })
-    ));
-
-    // The locator still resolves from the new location, which is what keeps the Order
-    // discoverable rather than damaged.
-    let diagnosis = diagnosed_order(&aligned, &PlatformFileSystem)
-        .result
-        .expect("the Order diagnoses");
-    assert!(valid(&diagnosis));
-    assert!(diagnosis.cases.is_empty());
-
-    let plan = crate::plan(
-        &remove_order(aligned.clone()),
-        &effects(&PlatformFileSystem),
-    )
-    .result
-    .unwrap();
-    let Ok(Report::Committed { .. }) = crate::commit(plan, &effects(&PlatformFileSystem)).result
-    else {
-        panic!("the removal commits");
-    };
-    assert!(index_is_current(&root));
 }
 
 #[test]
@@ -764,11 +718,11 @@ fn a_refused_write_leaves_the_package_as_it_was_and_costs_no_other_capability() 
 
     // Changed evidence: someone else's record arrives after the plan was authorized,
     // and their work stands rather than being overwritten by a stale candidate.
-    let theirs = String::from_utf8(fs::read(order_record(&directory)).unwrap())
+    let theirs = String::from_utf8(fs::read(record_path(&directory)).unwrap())
         .unwrap()
         .replace("Laser components", "Someone else's title")
         .into_bytes();
-    assert_ne!(theirs, fs::read(order_record(&directory)).unwrap());
+    assert_ne!(theirs, fs::read(record_path(&directory)).unwrap());
     let plan = crate::plan(
         &edit_order(
             directory.clone(),
@@ -779,7 +733,7 @@ fn a_refused_write_leaves_the_package_as_it_was_and_costs_no_other_capability() 
     .result
     .expect("the Order can be edited");
     let other_writer =
-        another_writer_replacing(&order_record(&directory), &theirs, EditPoint::StagingWrite);
+        another_writer_replacing(&record_path(&directory), &theirs, EditPoint::StagingWrite);
     let report = crate::commit(plan, &effects(&other_writer)).result;
     assert!(other_writer.disturbed(), "the outside write really landed");
     assert!(
@@ -787,7 +741,7 @@ fn a_refused_write_leaves_the_package_as_it_was_and_costs_no_other_capability() 
         "a destination that changed under the plan is refused: {report:?}"
     );
     assert_eq!(
-        fs::read(order_record(&directory)).unwrap(),
+        fs::read(record_path(&directory)).unwrap(),
         theirs,
         "the other writer's record survives"
     );
@@ -1069,13 +1023,13 @@ fn a_derived_index_that_cannot_be_refreshed_never_makes_a_commit_look_retryable(
     // read as a rejection costs a rerun that creates a second Vendor for a reference
     // already resolved. The reference is manufactured by hand because SpielOrders can
     // no longer produce one: a Vendor is hidden, never deleted.
-    let text = fs::read_to_string(order_record(&candidate))
+    let text = fs::read_to_string(record_path(&candidate))
         .unwrap()
         .replace(
             "\"items\": []",
             &format!("\"vendor_id\": \"{ABSENT_VENDOR}\",\n  \"items\": []"),
         );
-    fs::write(order_record(&candidate), text).unwrap();
+    fs::write(record_path(&candidate), text).unwrap();
     let diagnosis = diagnosed_order(&candidate, &PlatformFileSystem)
         .result
         .expect("the Order diagnoses");
@@ -1112,7 +1066,7 @@ fn a_derived_index_that_cannot_be_refreshed_never_makes_a_commit_look_retryable(
     // Both halves of the repair are on disk, so the caller that was told "warning"
     // rather than "rejected" was told the truth about every record it changed.
     let repaired =
-        serde_json::from_slice::<OrderDocument>(&fs::read(order_record(&candidate)).unwrap())
+        serde_json::from_slice::<OrderDocument>(&fs::read(record_path(&candidate)).unwrap())
             .expect("the repaired record parses");
     assert_eq!(
         repaired.vendor_id.as_deref(),
@@ -1219,12 +1173,15 @@ fn a_rollback_that_cannot_finish_leaves_the_order_active_and_still_disposable() 
 
     // Beside, not instead of: the move failed, and the caller separately learns that
     // undoing what the attempt created failed too.
-    let Err(Failure::CommitFailedCleanupIncomplete {
-        cleanup_failures, ..
-    }) = &report
+    let Err(
+        failure @ Failure::CommitFailedCleanupIncomplete {
+            cleanup_failures, ..
+        },
+    ) = &report
     else {
         panic!("both failures are reported: {report:?}");
     };
+    assert_reported_beside(failure);
     assert_eq!(
         cleanup_failures
             .iter()
@@ -1270,9 +1227,9 @@ fn a_record_the_build_cannot_read_is_repaired_over_a_configured_nested_layout() 
     let (_tree, root) = package_with_layout("m3-current-damaged", &(NESTED_ORDERS, RETIRED));
     let healthy = adopted_order_at(&root, NESTED_ORDERS, "2026_08_22_First", FIRST_ID, None);
     let damaged = adopted_order_at(&root, NESTED_ORDERS, "2026_08_22_Second", SECOND_ID, None);
-    let healthy_before = fs::read(order_record(&healthy)).unwrap();
+    let healthy_before = fs::read(record_path(&healthy)).unwrap();
     fs::write(
-        order_record(&damaged),
+        record_path(&damaged),
         br#"{"schema_version": 1, "nope": true}"#,
     )
     .unwrap();
@@ -1316,8 +1273,43 @@ fn a_record_the_build_cannot_read_is_repaired_over_a_configured_nested_layout() 
     assert!(candidate.contents.damaged_orders.is_empty());
     assert_eq!(candidate.contents.index.state, PackageIndexState::Current);
     assert_eq!(
-        fs::read(order_record(&healthy)).unwrap(),
+        fs::read(record_path(&healthy)).unwrap(),
         healthy_before,
         "the Order that was never damaged is untouched"
+    );
+}
+
+/// A commit whose index refresh cannot cache an Order says so: an unreadable README keeps
+/// the stored index as it was, and the edit is committed with a warning.
+#[test]
+fn an_edit_that_leaves_the_index_stale_is_committed_with_a_warning() {
+    let (_tree, root) = initialized_package("refresh-unreadable-readme");
+    let directory = crate::tests::support::created_order(
+        &root,
+        FIRST_ID,
+        Assignments::new().assign("title", "Lenses"),
+    );
+    std::fs::remove_file(directory.join("README.md")).unwrap();
+    std::fs::create_dir(directory.join("README.md")).unwrap();
+    let effects = effects(&PlatformFileSystem);
+    let plan = crate::plan(
+        &crate::tests::support::edit_order(
+            directory,
+            Assignments::new().assign("title", "Mirrors"),
+        ),
+        &effects,
+    )
+    .result
+    .expect("the edit is planned");
+
+    let report = crate::commit(plan, &effects).result;
+    let Ok(Report::CommittedWithWarning { warnings, .. }) = report else {
+        panic!("the edit is committed with a warning: {report:?}");
+    };
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| matches!(warning, Warning::RefreshUnavailable)),
+        "{warnings:?}"
     );
 }

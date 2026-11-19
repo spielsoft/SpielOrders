@@ -42,15 +42,22 @@ deliberately, naming them in precedence order: the first keeps its Vendor ID, Na
 shared facts, each later one fills only the shared facts and Contacts it still lacks
 (Contacts matched by Name, a matched Contact's missing facts filled the same way), every
 Order referencing one of the others references it instead, and the others are deleted. Renaming a Vendor onto another Vendor's Name is offered as that
-merge.
+merge. Orders in the Removed Orders Directory are repointed with the rest, so undoing a
+removal still finds the Order's Vendor.
 
 Deleting a Vendor removes its record and Contacts from `vendors.json` and cannot be
 undone. While Orders reference it, deletion requires a replacement Vendor, which every
-such Order then references, or an explicit choice that they reference none; without
+such Order, removed ones included, then references, or an explicit choice that they
+reference none; without
 either it is refused, naming each such Order. A Vendor still in use that the user no
 longer wants offered for new use is **hidden** instead, which is permitted whether or not
 Orders reference it and is reversible at any time. Merging, replacing, and clearing each
 report how many Orders change, and SpielOrders itself never orphans a Vendor Reference.
+An Order counts wherever its record names the Vendor: active or removed, readable or
+damaged, and whatever its metadata version. Deleting or merging Vendors, and repairing
+`vendors.json`, refuse while a removed Order cannot be read, since it might name any
+Vendor: `package_access_denied` or `package_operation_failed`, naming the entry to fix or
+move out of the Removed Orders Directory.
 Hiding governs what is offered, never what is resolved.
 
 Vendor ID and Vendor Name are the only required Vendor facts. An Order whose Vendor is

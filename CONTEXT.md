@@ -65,7 +65,7 @@ The unrounded floating-point result of multiplying an Order Item's Quantity by i
 _Avoid_: Order Total, Line Total
 
 **Order Total**:
-The unrounded sum of an Order's Item Total Prices. Fees, shipping, taxes, and discounts are represented as ordinary Order Items rather than separate adjustments.
+The unrounded floating-point sum of an Order's Item Total Prices. Fees, shipping, taxes, and discounts are represented as ordinary Order Items rather than separate adjustments.
 _Avoid_: Manually entered total, Item Total Price
 
 **Order README**:
@@ -73,7 +73,7 @@ The conventional, user-authored `README.md` within an Order Directory. SpielOrde
 _Avoid_: Notes, generated summary
 
 **Vendor**:
-The person or organization from which an Order is obtained. A Vendor requires one Vendor Name and may retain general phone, email, website, multiline address, Vendor Contacts, and purchasing notes; it is shared across Orders and has one continuous identity despite changes to its facts. A Vendor is never deleted: taking one out of use is a visibility change that makes it a Hidden Vendor, so its record and Vendor ID survive and every Order referencing it keeps resolving.
+The person or organization from which an Order is obtained. A Vendor requires one Vendor Name and may retain general phone, email, website, multiline address, Vendor Contacts, and purchasing notes; it is shared across Orders and has one continuous identity despite changes to its facts. Taking a Vendor out of use makes it a Hidden Vendor, so its record and Vendor ID survive and every Order referencing it keeps resolving. Deleting a Vendor removes it for good; while any Order, removed ones included, references it, deletion names a replacement Vendor or clears those references, so a Vendor Reference is never orphaned.
 _Avoid_: Supplier record
 
 **Vendor ID**:

@@ -14,12 +14,10 @@ use crate::{
     evidence::{EvidenceFingerprint, location_text},
     readme::{Diagnostic, DiagnosticCode, Location},
 };
-use serde::Serialize;
 
 /// One explicit safe action a diagnosed case authorizes. Each is executed by a
 /// separate capability; diagnosis only states which are available.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum RepairAction {
     /// Accept one user-confirmed complete replacement for parseable metadata.
     ReplaceManagedRecord,
@@ -38,30 +36,6 @@ pub enum RepairAction {
 }
 
 impl RepairAction {
-    /// Every action this vocabulary has, each exactly once.
-    ///
-    /// Listed because an array cannot be derived from an enum, and needed because the
-    /// spelling has to be read as well as written: a command line naming an action is
-    /// resolved through [`Self::parse`], so an adapter never carries a second table of
-    /// these words.
-    pub(crate) const ALL: [Self; 7] = [
-        Self::ReplaceManagedRecord,
-        Self::PromoteStagingCandidate,
-        Self::AssignExistingVendor,
-        Self::CreateAndAssignVendor,
-        Self::ClearVendorReference,
-        Self::AdoptNewOrderIdentity,
-        Self::RepairPackageLocator,
-    ];
-
-    /// The action this text names, or `None` where it names none.
-    ///
-    /// The inverse of this action's code and beside it, so one action is spelled one way in
-    /// a diagnosis, in a response, and on the command line that applies it.
-    pub fn parse(text: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|action| action.code() == text)
-    }
-
     /// The resolution values a caller must supply to apply this action. An action
     /// with none is fully determined by the evidence already diagnosed.
     pub(crate) fn required_values(self) -> &'static [&'static str] {
@@ -76,8 +50,6 @@ impl RepairAction {
         }
     }
 }
-
-impl crate::code::Coded for RepairAction {}
 
 /// One action applied to one diagnosed case, carrying exactly the values that action
 /// takes. The action and what resolves it are one value, so a confirmation of one action
@@ -229,7 +201,7 @@ pub(crate) fn cases_for(diagnostics: &[Diagnostic]) -> Vec<RepairCase> {
         }
         let location = diagnostic.primary_location.clone();
         cases.push(RepairCase {
-            handle: handle_for(diagnostic),
+            handle: handle(diagnostic),
             code: diagnostic.code,
             location,
             actions: actions.to_vec(),
@@ -253,7 +225,7 @@ pub(crate) fn cases_for(diagnostics: &[Diagnostic]) -> Vec<RepairCase> {
 ///
 /// It stays derived, so the same snapshot always yields the same handle and a
 /// corrected condition simply stops appearing.
-fn handle_for(diagnostic: &Diagnostic) -> String {
+fn handle(diagnostic: &Diagnostic) -> String {
     let path = location_text(&diagnostic.primary_location);
     format!(
         "{}:{path}:{}",

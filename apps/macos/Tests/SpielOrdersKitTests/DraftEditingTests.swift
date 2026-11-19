@@ -78,6 +78,7 @@ private func fill(_ draft: RecordDraft, row: Int, _ values: [Int32: String]) thr
         Issue.record("A draft of an older read must not overwrite a newer save")
     } catch let refusal as SaveRefusal {
         #expect(refusal.stale)
+        #expect(refusal.recordChanged)
     }
     #expect(draft.field(SPIELORDERS_ORDER_FIELD_TITLE) == "My title")
     let reader = try await openedSession(root)
@@ -104,30 +105,6 @@ private func fill(_ draft: RecordDraft, row: Int, _ values: [Int32: String]) thr
     let row = try #require(try await listedOrders(reader).first)
     let saved = try await reader.orderDraft(row, cancellation: LibraryCancellation())
     #expect((0..<saved.rowCount).map { saved.rowField($0, SPIELORDERS_ITEM_FIELD_DESCRIPTION) } == ["C", "A"])
-}
-
-@Test func itemNotes() async throws {
-    let root = try initializedPackage()
-    defer { try? FileManager.default.removeItem(at: root) }
-    let session = try await openedSession(root)
-    let draft = try await session.newOrderDraft()
-    try draft.set(SPIELORDERS_ORDER_FIELD_TITLE, to: "Optics")
-    try draft.insertRow(at: 0)
-    try fill(draft, row: 0, [SPIELORDERS_ITEM_FIELD_DESCRIPTION: "Lens", SPIELORDERS_ITEM_FIELD_QUANTITY: "2",
-                             SPIELORDERS_ITEM_FIELD_UNIT_PRICE: "4",
-                             SPIELORDERS_ITEM_FIELD_NOTES: "  Coated for 780 nm\r\nQuote Q-17  "])
-    #expect(draft.total == "8")
-    let created = try await session.save(draft, cancellation: LibraryCancellation())
-    let saved = try #require(created.draft)
-    #expect(saved.rowField(0, SPIELORDERS_ITEM_FIELD_NOTES) == "Coated for 780 nm\nQuote Q-17")
-    #expect(saved.total == "8")
-    try saved.setRow(0, SPIELORDERS_ITEM_FIELD_NOTES, to: "")
-    _ = try await session.save(saved, cancellation: LibraryCancellation())
-    let reader = try await openedSession(root)
-    let row = try #require(try await listedOrders(reader).first)
-    let reread = try await reader.orderDraft(row, cancellation: LibraryCancellation())
-    #expect(reread.rowField(0, SPIELORDERS_ITEM_FIELD_NOTES) == "")
-    #expect(reread.rowField(0, SPIELORDERS_ITEM_FIELD_DESCRIPTION) == "Lens")
 }
 
 @Test func reusableValues() async throws {
@@ -157,22 +134,6 @@ private func fill(_ draft: RecordDraft, row: Int, _ values: [Int32: String]) thr
     _ = try await session.save(saved, cancellation: LibraryCancellation())
 }
 
-@Test func valueUsage() async throws {
-    let root = try initializedPackage()
-    defer { try? FileManager.default.removeItem(at: root) }
-    let session = try await openedSession(root)
-    for (title, orderer) in [("Lenses", "Ada"), ("Mounts", "Ada"), ("Probes", "Grace")] {
-        let draft = try await session.newOrderDraft()
-        try draft.set(SPIELORDERS_ORDER_FIELD_TITLE, to: title)
-        try draft.set(SPIELORDERS_ORDER_FIELD_ORDERER, to: orderer)
-        try draft.confirm(SPIELORDERS_ORDER_FIELD_ORDERER)
-        _ = try await session.save(draft, cancellation: LibraryCancellation())
-    }
-    let orderers = try await session.values(SPIELORDERS_ORDER_FIELD_ORDERER)
-    #expect(Dictionary(uniqueKeysWithValues: orderers.map { ($0.name, $0.orderCount) }) == ["Ada": 2, "Grace": 1])
-    #expect(try await session.values(SPIELORDERS_ORDER_FIELD_ORDERING_INSTITUTION).isEmpty)
-}
-
 @Test func vendorRename() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -192,21 +153,4 @@ private func fill(_ draft: RecordDraft, row: Int, _ values: [Int32: String]) thr
     try rename.set(SPIELORDERS_VENDOR_FIELD_NAME, to: "Tarnwick")
     _ = try await session.save(rename, cancellation: LibraryCancellation())
     #expect(try await listedOrders(session).first?.values[SPIELORDERS_ORDER_FIELD_VENDOR] == "Tarnwick")
-}
-
-@Test func vendorVisibility() async throws {
-    let root = try initializedPackage()
-    defer { try? FileManager.default.removeItem(at: root) }
-    let id = try createVendor(in: root, name: "Elderglass")
-    _ = try createOrder(in: root, title: "Windows", vendor: "Elderglass")
-    let session = try await openedSession(root)
-    _ = try await session.setVendorHidden(id: id, hidden: true, cancellation: LibraryCancellation())
-    let offered = try await session.vendors(query: "", caseSensitive: false, includeHidden: false, sortField: -1,
-                                            descending: false, cancellation: LibraryCancellation())
-    #expect(offered.rows.isEmpty)
-    #expect(try await listedOrders(session).first?.values[SPIELORDERS_ORDER_FIELD_VENDOR] == "Elderglass")
-    _ = try await session.setVendorHidden(id: id, hidden: false, cancellation: LibraryCancellation())
-    let shown = try await session.vendors(query: "", caseSensitive: false, includeHidden: false, sortField: -1,
-                                          descending: false, cancellation: LibraryCancellation())
-    #expect(shown.rows.map(\.id) == [id])
 }

@@ -32,12 +32,18 @@ public struct DraftProblem: Sendable {
     }
 }
 
-/// A save the library refused, or could not complete, with nothing written.
+/// A save the library refused, or could not complete. It wrote nothing, except what a commit
+/// that failed partway could not remove, which its details name.
 public struct SaveRefusal: Error, LocalizedError, Sendable {
     private let result: Int32
     public let problems: [DraftProblem]
     public var stale: Bool {
         problems.contains { [SPIELORDERS_FAILURE_PRECONDITIONS_CHANGED, SPIELORDERS_FAILURE_PLAN_EVIDENCE_UNCONFIRMED].contains($0.code) }
+    }
+    /// Whether the record itself changed on disk, rather than only something it depends on,
+    /// such as its Vendor's Name.
+    public var recordChanged: Bool {
+        problems.contains { $0.code == SPIELORDERS_FAILURE_PRECONDITIONS_CHANGED }
     }
     public var errorDescription: String? {
         (["Result: " + String(cString: spielorders_constant_name(result))] + problems.map(\.detail)).joined(separator: "\n\n")
@@ -268,7 +274,7 @@ extension PackageSession {
         }
     }
 
-    /// Plans and commits `draft`. A refusal throws `SaveRefusal` and writes nothing.
+    /// Plans and commits `draft`. A refusal throws `SaveRefusal`.
     public func save(_ draft: RecordDraft, cancellation: LibraryCancellation) throws -> SavedRecord {
         guard let package else { throw SessionAccessError.reopenRequired }
         do {
@@ -303,7 +309,7 @@ extension PackageSession {
                 }
             }
             if spielorders_report_kind(report) == SPIELORDERS_REPORT_COMMITTED {
-                warnings += refreshAfterCommit(package)
+                warnings += refreshAfterCommit(package, report: report)
             }
             return SavedRecord(recordID: recordID, draft: refreshed, warnings: warnings.map(\.presentation),
                                requiresReopen: self.package == nil || refreshed == nil, cleared: cleared)
@@ -327,7 +333,7 @@ extension PackageSession {
         outcome = nil
         warnings += try checked(spielorders_plan_commit(planned, &report, &outcome), outcome)
         if let report, spielorders_report_kind(report) == SPIELORDERS_REPORT_COMMITTED {
-            warnings += refreshAfterCommit(package)
+            warnings += refreshAfterCommit(package, report: report)
         }
         return warnings.map(\.presentation)
     }

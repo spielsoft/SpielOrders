@@ -76,7 +76,7 @@ impl Cli {
 //
 // **Exhaustive rather than read back out of the parse.** A command added to the tree does
 // not compile until it says how it is reported in, which is the same guarantee the
-// dispatch in `crate::command` gets and for the same reason: an accessor that searched the
+// dispatch in `crate::commands` gets and for the same reason: an accessor that searched the
 // matches for whichever level happened to carry the flags would answer for a command that
 // declares no output mode at all.
 
@@ -252,8 +252,8 @@ pub(crate) enum Family {
         /// Either may be omitted and takes its conventional default. Each must be a
         /// nonempty `/`-separated path inside the Package, and `removed_path` must name
         /// an ordinary direct child of it.
-        #[arg(value_name = "ASSIGNMENT", value_parser = Assignment::parse)]
-        assignments: Vec<Assignment>,
+        #[arg(value_name = "ASSIGNMENT", value_parser = InitAssignment::parse)]
+        assignments: Vec<InitAssignment>,
 
         #[command(flatten)]
         target: PackageTarget,
@@ -790,7 +790,7 @@ pub(crate) enum ContactCommand {
 /// Where a `move` puts the member it took.
 ///
 /// **The key is checked here and the value is not**, which is the same split
-/// [`Assignment`] makes and for the same reason: `position` is not a fact of the member the
+/// [`InitAssignment`] makes and for the same reason: `position` is not a fact of the member the
 /// core adjudicates but targeting this adapter must read before it can call a core
 /// capability, so a token naming something else has named nothing this command has. Which
 /// numbers name a member is the collection's own business, so the value travels as written.
@@ -937,7 +937,7 @@ pub(crate) fn repair_request(assignments: &[FieldAssignment]) -> RepairRequest {
 /// What is *not* refused here is an action a diagnosed case did not offer, or a resolution
 /// the action does not need. Both are perfectly formed applications the core refuses on
 /// the evidence, at exit `1`, naming the case.
-fn incomplete_repair_request(assignments: &[FieldAssignment]) -> Option<String> {
+fn repair_request_error(assignments: &[FieldAssignment]) -> Option<String> {
     for key in [CASE_KEY, ACTION_KEY] {
         if assignments
             .iter()
@@ -1123,7 +1123,8 @@ pub(crate) enum OrderCommand {
     /// directory entries the result still lacks: an entry this Order does not hold is moved
     /// in at the same relative path, and one it already holds stays behind. What remains of
     /// each other Order, including every entry left behind, is removed into the Removed
-    /// Orders Directory. Each entry left behind is confirmed first unless `--yes` is given.
+    /// Orders Directory. Each entry left behind is confirmed first unless `--yes` is given;
+    /// under `--json` or `--quiet`, or with no terminal to ask, the merge is refused instead.
     Merge {
         /// The other Order Directories, in precedence order.
         #[arg(required = true, num_args = 1.., value_name = "ORDER")]
@@ -1256,12 +1257,12 @@ pub(crate) enum ItemCommand {
 ///
 /// The two configuration keys are spelled as `.spielorders/config.toml` spells them.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct Assignment {
+pub(crate) struct InitAssignment {
     pub key: &'static str,
     pub value: String,
 }
 
-impl Assignment {
+impl InitAssignment {
     /// The keys `init` accepts.
     ///
     /// What `init` takes, not a claim about what the configuration permits.
@@ -1293,8 +1294,8 @@ impl Assignment {
 
 /// One canonical `field=value` assignment naming a field of a record.
 ///
-/// **The field is not checked here**, which is the whole difference from `init`'s
-/// [`Assignment`]: those two keys are configuration the adapter must read before any core
+/// **The field is not checked here**, which is the whole difference from
+/// [`InitAssignment`]: those two keys are configuration the adapter must read before any core
 /// capability exists to consult, while a record's fields are the Package's own. So an
 /// unknown field, an immutable one, a technical one, and a repeated one are all refused by
 /// the core, at exit `1`, each named in one typed report — and what is refused *here* is
@@ -1918,7 +1919,7 @@ fn parse_command(arguments: &[OsString], batch: bool) -> Result<Cli, clap::Error
         _ => None,
     };
     if let Some((command_name, entity, shorthand, subject)) = creating
-        && let Some(message) = combined_subject_forms(command_name, entity, shorthand, subject)
+        && let Some(message) = mixed_subjects(command_name, entity, shorthand, subject)
     {
         // `ValueValidation` rather than `ArgumentConflict`, which the parser raises for the
         // exclusions declared on an option group.
@@ -1965,7 +1966,7 @@ fn parse_command(arguments: &[OsString], batch: bool) -> Result<Cli, clap::Error
         _ => None,
     };
     if let Some(assignments) = repairing
-        && let Some(message) = incomplete_repair_request(assignments)
+        && let Some(message) = repair_request_error(assignments)
     {
         return Err(command.error(ErrorKind::ValueValidation, message));
     }
@@ -1984,7 +1985,7 @@ fn parse_command(arguments: &[OsString], batch: bool) -> Result<Cli, clap::Error
 ///
 /// A repeated *field* is not checked here. It is the core's refusal, reported with every
 /// other refused assignment of the same set — see [`FieldAssignment`].
-fn combined_subject_forms(
+fn mixed_subjects(
     command: &str,
     entity: &str,
     shorthand: &str,
@@ -2006,7 +2007,7 @@ fn combined_subject_forms(
 }
 
 /// The first key assigned more than once, where a command line assigns one twice.
-fn repeated_assignment(assignments: &[Assignment]) -> Option<&'static str> {
+fn repeated_assignment(assignments: &[InitAssignment]) -> Option<&'static str> {
     assignments
         .iter()
         .enumerate()

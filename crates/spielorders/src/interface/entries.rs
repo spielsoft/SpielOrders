@@ -2,17 +2,16 @@
 //! severity, a message, and where it is.
 
 use crate::interface::{
-    SPIELORDERS_FAMILY_CONTACT_FIELD, SPIELORDERS_FAMILY_FAILURE, SPIELORDERS_FAMILY_FINDING,
-    SPIELORDERS_FAMILY_ITEM_FIELD, SPIELORDERS_FAMILY_ORDER_FIELD, SPIELORDERS_FAMILY_REASON,
-    SPIELORDERS_FAMILY_TEXT_FIELD, SPIELORDERS_FAMILY_VENDOR_FIELD, SPIELORDERS_FAMILY_WARNING,
     SPIELORDERS_SEVERITY_ERROR, SPIELORDERS_SEVERITY_WARNING, SpielordersConstant, Text,
-    call::quietly, library::member, records::path_text,
+    call::quietly,
+    codes,
+    fields::{self, Table},
+    library::name,
+    records::path_text,
 };
 use crate::{
     Coded, Failure, Warning,
-    model::{
-        Diagnostic, DiagnosticEvidence, EvidenceOutcome, FactChange, FailedPath, Location, Severity,
-    },
+    model::{Diagnostic, DiagnosticEvidence, EvidenceOutcome, FactChange, FailedPath, Location},
 };
 use std::ffi::CString;
 
@@ -47,28 +46,54 @@ pub(crate) enum Subject {
 }
 
 impl Subject {
-    /// The field constant `name` spells for this subject, at a record's own facts or at
-    /// one of its rows.
+    /// The field constant of the field the library names `name` for this subject, at a
+    /// record's own facts or at one of its rows.
     pub(crate) fn field(self, name: &str, row: bool) -> SpielordersConstant {
-        let families: &[SpielordersConstant] = match (self, row) {
-            (Self::Order, false) => &[SPIELORDERS_FAMILY_ORDER_FIELD],
-            (Self::Order, true) => &[SPIELORDERS_FAMILY_ITEM_FIELD],
-            (Self::Vendor, false) => &[SPIELORDERS_FAMILY_VENDOR_FIELD],
-            (Self::Vendor, true) => &[SPIELORDERS_FAMILY_CONTACT_FIELD],
-            (Self::Text, _) => &[SPIELORDERS_FAMILY_TEXT_FIELD],
-            (Self::Other, false) => &[
-                SPIELORDERS_FAMILY_ORDER_FIELD,
-                SPIELORDERS_FAMILY_VENDOR_FIELD,
-            ],
-            (Self::Other, true) => &[
-                SPIELORDERS_FAMILY_ITEM_FIELD,
-                SPIELORDERS_FAMILY_CONTACT_FIELD,
-            ],
+        let tables: &[Table] = match (self, row) {
+            (Self::Order, false) => &[Table::Order],
+            (Self::Order, true) => &[Table::Item],
+            (Self::Vendor, false) => &[Table::Vendor],
+            (Self::Vendor, true) => &[Table::Contact],
+            (Self::Text, _) => &[Table::Text],
+            (Self::Other, false) => &[Table::Order, Table::Vendor],
+            (Self::Other, true) => &[Table::Item, Table::Contact],
         };
-        families
+        tables
             .iter()
-            .find_map(|family| member(*family, name))
+            .map(|table| fields::constant(*table, name))
+            .find(|field| *field != SpielordersConstant::NONE)
             .unwrap_or(SpielordersConstant::NONE)
+    }
+
+    /// The field constant and row a library field path names, given the row the fault was
+    /// met at. A path into a record's collection, such as `items[0].quantity`, names that
+    /// row's field; `vendors[2].contacts[0].name` names a Contact's field at its row.
+    pub(crate) fn locate(self, path: &str, row: i64) -> (SpielordersConstant, i64) {
+        // `name[index]` and what follows it.
+        fn member_of<'a>(path: &'a str, name: &str) -> Option<(i64, &'a str)> {
+            let rest = path.strip_prefix(name)?.strip_prefix('[')?;
+            let (index, rest) = rest.split_once(']')?;
+            Some((index.parse().ok()?, rest))
+        }
+        let field = |table, rest: &str| {
+            rest.strip_prefix('.')
+                .map_or(SpielordersConstant::NONE, |name| {
+                    fields::constant(table, name)
+                })
+        };
+        if let Some((item, rest)) = member_of(path, "items") {
+            return (field(Table::Item, rest), item);
+        }
+        if let Some((_, rest)) = member_of(path, "vendors") {
+            return match rest
+                .strip_prefix('.')
+                .and_then(|rest| member_of(rest, "contacts"))
+            {
+                Some((contact, rest)) => (field(Table::Contact, rest), contact),
+                None => (field(Table::Vendor, rest), -1),
+            };
+        }
+        (self.field(path, row >= 0), row)
     }
 }
 
@@ -85,9 +110,9 @@ pub(crate) struct Entry {
     pub(crate) reason: SpielordersConstant,
 }
 
-/// The words a code spells, as a message a caller may show.
-fn sentence(code: &str, detail: Option<&str>) -> CString {
-    let mut text = code.replace('_', " ");
+/// The words a constant's name spells, as a message a caller may show.
+fn sentence(code: SpielordersConstant, detail: Option<&str>) -> CString {
+    let mut text = words(code);
     if let Some(first) = text.get_mut(0..1) {
         first.make_ascii_uppercase();
     }
@@ -98,7 +123,12 @@ fn sentence(code: &str, detail: Option<&str>) -> CString {
     c_text(text)
 }
 
-fn located(path: &FailedPath) -> Option<CString> {
+/// The words a constant's name spells.
+fn words(code: SpielordersConstant) -> String {
+    name(code).unwrap_or_default().replace('_', " ")
+}
+
+fn path_text_of(path: &FailedPath) -> Option<CString> {
     Some(match path {
         FailedPath::Located(location) => relative(location),
         FailedPath::Unlocated(path) => path_text(path),
@@ -108,21 +138,25 @@ fn located(path: &FailedPath) -> Option<CString> {
 /// The field and the place `failure` is about, where it names them.
 fn subject_of(failure: &Failure) -> (Option<&str>, Option<CString>) {
     match failure {
-        Failure::RootIsALink { root } => (None, located(root)),
+        Failure::CurrencyDiffers { location } => (Some("currency"), Some(relative(location))),
+        Failure::RootIsALink { root } => (None, path_text_of(root)),
         Failure::UnmanagedPackage(package) => (None, Some(relative(&package.root))),
         Failure::PackageAccessDenied(failed)
         | Failure::PackageOperationFailed(failed)
-        | Failure::FilesystemUnsupported(failed) => (None, located(&failed.path)),
+        | Failure::FilesystemUnsupported(failed)
+        | Failure::FilesystemUnsupportedCleanupIncomplete {
+            failure: failed, ..
+        } => (None, path_text_of(&failed.path)),
         Failure::NotAnOrderDirectory { directory, .. }
         | Failure::OrderNotFound { directory, .. }
         | Failure::LocatorUnusable { directory }
         | Failure::LocatorReachesNoPackageHoldingThisOrder { directory, .. } => {
-            (None, located(directory))
+            (None, path_text_of(directory))
         }
-        Failure::DamagedRecord { directory, field } => (field.as_deref(), located(directory)),
+        Failure::DamagedRecord { directory, field } => (field.as_deref(), path_text_of(directory)),
         Failure::PackageHasNoVendors { context, .. } => (None, Some(relative(&context.root))),
-        Failure::UnknownVendor { scope, .. }
-        | Failure::VendorNameInUse { scope, .. }
+        Failure::UnknownVendor { scope, .. } => (Some("vendor"), Some(relative(&scope.location))),
+        Failure::VendorNameInUse { scope, .. }
         | Failure::MissingRequiredName { scope }
         | Failure::UnknownCase { scope, .. }
         | Failure::UnauthorizedAction { scope, .. } => (None, Some(relative(&scope.location))),
@@ -157,6 +191,7 @@ fn subject_of(failure: &Failure) -> (Option<&str>, Option<CString>) {
             (None, Some(relative(&failure.location)))
         }
         Failure::IndexReplacementFailed(failure) => subject_of(failure),
+        Failure::RemovedOrderUnreadable(failure) => subject_of(failure),
         Failure::RepairResolutionUnexpected { field, .. } => (Some(field), None),
         _ => (None, None),
     }
@@ -166,6 +201,9 @@ fn subject_of(failure: &Failure) -> (Option<&str>, Option<CString>) {
 fn left_behind(failure: &Failure) -> &[crate::mutation::CleanupFailure] {
     match failure {
         Failure::CommitFailedCleanupIncomplete {
+            cleanup_failures, ..
+        }
+        | Failure::FilesystemUnsupportedCleanupIncomplete {
             cleanup_failures, ..
         } => cleanup_failures,
         Failure::IndexReplacementFailed(failure) => left_behind(failure),
@@ -192,21 +230,13 @@ impl Entry {
         }
     }
 
-    fn coded(family: SpielordersConstant, code: &str, detail: Option<&str>) -> Self {
-        Self::new(
-            member(family, code).unwrap_or(SpielordersConstant::NONE),
-            SPIELORDERS_SEVERITY_ERROR,
-            sentence(code, detail),
-        )
+    fn coded(code: SpielordersConstant, detail: Option<&str>) -> Self {
+        Self::new(code, SPIELORDERS_SEVERITY_ERROR, sentence(code, detail))
     }
 
     pub(crate) fn finding(diagnostic: &Diagnostic) -> Self {
-        let code = diagnostic.code.code();
-        let mut entry = Self::coded(SPIELORDERS_FAMILY_FINDING, code, None);
-        entry.severity = match diagnostic.severity {
-            Severity::Error => SPIELORDERS_SEVERITY_ERROR,
-            Severity::Warning => SPIELORDERS_SEVERITY_WARNING,
-        };
+        let mut entry = Self::coded(codes::finding(diagnostic.code), None);
+        entry.severity = codes::severity(diagnostic.severity);
         entry.path = relative(&diagnostic.primary_location);
         let (field, value) = match &diagnostic.evidence {
             DiagnosticEvidence::ManagedArtifact { field, .. } => (field.as_deref(), None),
@@ -233,7 +263,7 @@ impl Entry {
             _ => (None, None),
         };
         if let Some(field) = field {
-            entry.field = Subject::Other.field(field, false);
+            (entry.field, entry.row) = Subject::Other.locate(field, -1);
         }
         if let Some(value) = value {
             entry.after = c_text(value);
@@ -242,7 +272,7 @@ impl Entry {
     }
 
     pub(crate) fn warning(warning: &Warning) -> Self {
-        let mut entry = Self::coded(SPIELORDERS_FAMILY_WARNING, warning.code(), None);
+        let mut entry = Self::coded(codes::warning(warning), None);
         entry.severity = SPIELORDERS_SEVERITY_WARNING;
         let location = match warning {
             Warning::IndexRefreshFailed(failure)
@@ -271,7 +301,7 @@ impl Entry {
                 let mut entry = Self::new(
                     code,
                     SPIELORDERS_SEVERITY_WARNING,
-                    sentence(warning.code(), Some("left behind")),
+                    sentence(code, Some("left behind")),
                 );
                 entry.path = relative(&left.location);
                 entry
@@ -286,13 +316,24 @@ impl Entry {
     }
 
     fn located(failure: &Failure, subject: Subject, row: i64, entries: &mut Vec<Self>) {
-        let code = failure.code();
+        let code = codes::failure(failure);
         let at = |mut entry: Self, field: &str| {
-            entry.row = row;
-            entry.field = subject.field(field, row >= 0);
+            (entry.field, entry.row) = subject.locate(field, row);
             entry
         };
         match failure {
+            Failure::RemovedOrderUnreadable(read) => {
+                let first = entries.len();
+                Self::located(read, subject, row, entries);
+                if let Some(entry) = entries.get_mut(first) {
+                    entry.message = sentence(
+                        code,
+                        Some(
+                            "a removed Order cannot be read; fix it or move it out of the Removed Orders Directory",
+                        ),
+                    );
+                }
+            }
             Failure::InvalidDraft(faults) => {
                 for fault in faults {
                     let row = fault
@@ -304,56 +345,42 @@ impl Entry {
             }
             Failure::InvalidAssignments(rejected) => {
                 entries.extend(rejected.iter().map(|rejected| {
-                    let reason = rejected.reason.code();
-                    let mut entry = at(
-                        Self::coded(
-                            SPIELORDERS_FAMILY_FAILURE,
-                            code,
-                            Some(&reason.replace('_', " ")),
-                        ),
-                        &rejected.field,
-                    );
-                    entry.reason = member(SPIELORDERS_FAMILY_REASON, reason)
-                        .unwrap_or(SpielordersConstant::NONE);
+                    let reason = codes::reason(rejected.reason);
+                    let mut entry = at(Self::coded(code, Some(&words(reason))), &rejected.field);
+                    entry.reason = reason;
                     entry
                 }));
             }
             Failure::MissingRequiredFacts { fields }
             | Failure::MissingRequiredItemFacts { fields } => {
                 entries.extend(
-                    fields.iter().map(|field| {
-                        at(Self::coded(SPIELORDERS_FAMILY_FAILURE, code, None), field)
-                    }),
+                    fields
+                        .iter()
+                        .map(|field| at(Self::coded(code, None), field)),
                 );
             }
             Failure::UnknownValue { field, value } => {
-                let mut entry = at(Self::coded(SPIELORDERS_FAMILY_FAILURE, code, None), field);
+                let mut entry = at(Self::coded(code, None), field);
                 entry.after = c_text(value.as_str());
                 entries.push(entry);
             }
             Failure::BlankValue { field } => {
-                entries.push(at(
-                    Self::coded(SPIELORDERS_FAMILY_FAILURE, code, None),
-                    field,
-                ));
+                entries.push(at(Self::coded(code, None), field));
             }
             Failure::ValueInUse { field, orders, .. } => {
                 entries.extend(orders.iter().map(|order| {
-                    let mut entry = at(Self::coded(SPIELORDERS_FAMILY_FAILURE, code, None), field);
+                    let mut entry = at(Self::coded(code, None), field);
                     entry.path = relative(order);
                     entry
                 }));
             }
             Failure::UnconfirmedReusableValue { field, proposed } => {
-                let mut entry = at(Self::coded(SPIELORDERS_FAMILY_FAILURE, code, None), field);
+                let mut entry = at(Self::coded(code, None), field);
                 entry.after = c_text(proposed.as_str());
                 entries.push(entry);
             }
             Failure::InvalidFactValue { fact, value } => {
-                let mut entry = at(
-                    Self::coded(SPIELORDERS_FAMILY_FAILURE, code, None),
-                    fact.code(),
-                );
+                let mut entry = at(Self::coded(code, None), fact.code());
                 entry.after = c_text(value.as_str());
                 entries.push(entry);
             }
@@ -361,8 +388,7 @@ impl Entry {
                 outcome: EvidenceOutcome::Changed(stale),
             } => {
                 entries.extend(stale.changed.iter().map(|changed| {
-                    let mut entry =
-                        Self::coded(SPIELORDERS_FAMILY_FAILURE, code, Some(&changed.name));
+                    let mut entry = Self::coded(code, Some(&changed.name));
                     entry.after = c_text(match changed.change {
                         FactChange::Differs => "differs",
                         FactChange::Vanished => "vanished",
@@ -373,7 +399,7 @@ impl Entry {
                 }));
             }
             Failure::PackageInvalid(diagnosis) | Failure::OrderInvalid(diagnosis) => {
-                entries.push(Self::coded(SPIELORDERS_FAMILY_FAILURE, code, None));
+                entries.push(Self::coded(code, None));
                 entries.extend(
                     diagnosis
                         .diagnostic_groups
@@ -384,7 +410,7 @@ impl Entry {
             }
             Failure::VendorReferenced { orders, .. } => {
                 entries.extend(orders.iter().map(|order| {
-                    let mut entry = Self::coded(SPIELORDERS_FAMILY_FAILURE, code, None);
+                    let mut entry = Self::coded(code, None);
                     entry.path = relative(order);
                     entry
                 }));
@@ -392,13 +418,13 @@ impl Entry {
             Failure::DamagedOrder {
                 paths, diagnostics, ..
             } => {
-                let mut entry = Self::coded(SPIELORDERS_FAMILY_FAILURE, code, None);
+                let mut entry = Self::coded(code, None);
                 entry.path = relative(&paths.directory);
                 entries.push(entry);
                 entries.extend(diagnostics.iter().map(Self::finding));
             }
             Failure::DamagedPackage(package) | Failure::PackageMetadataUnsupported(package) => {
-                let mut entry = Self::coded(SPIELORDERS_FAMILY_FAILURE, code, None);
+                let mut entry = Self::coded(code, None);
                 entry.path = relative(&package.context.root);
                 entries.push(entry);
                 entries.extend(
@@ -413,13 +439,29 @@ impl Entry {
                 failure: stopped,
                 cleanup_failures,
             } => {
-                let mut entry = Self::coded(SPIELORDERS_FAMILY_FAILURE, code, None);
+                let mut entry = Self::coded(code, None);
                 entry.row = row;
                 entry.path = relative(&stopped.location);
                 entries.push(entry);
                 entries.extend(cleanup_failures.iter().map(|left| {
-                    let mut entry =
-                        Self::coded(SPIELORDERS_FAMILY_FAILURE, code, Some("left behind"));
+                    let mut entry = Self::coded(code, Some("left behind"));
+                    entry.row = row;
+                    entry.path = relative(&left.location);
+                    entry
+                }));
+            }
+            Failure::FilesystemUnsupportedCleanupIncomplete {
+                failure: unsupported,
+                cleanup_failures,
+            } => {
+                let mut entry = Self::coded(code, None);
+                entry.row = row;
+                if let Some(path) = path_text_of(&unsupported.path) {
+                    entry.path = path;
+                }
+                entries.push(entry);
+                entries.extend(cleanup_failures.iter().map(|left| {
+                    let mut entry = Self::coded(code, Some("left behind"));
                     entry.row = row;
                     entry.path = relative(&left.location);
                     entry
@@ -430,21 +472,21 @@ impl Entry {
             | Failure::AccessDenied(provider)
             | Failure::QueryRefused(provider)
             | Failure::Unsupported(provider) => {
-                entries.push(Self::coded(SPIELORDERS_FAMILY_FAILURE, code, None));
+                entries.push(Self::coded(code, None));
                 entries.extend(
                     provider
                         .diagnostics
                         .iter()
                         .filter_map(|diagnostic| diagnostic.detail.as_deref())
-                        .map(|said| Self::coded(SPIELORDERS_FAMILY_FAILURE, code, Some(said))),
+                        .map(|said| Self::coded(code, Some(said))),
                 );
             }
             _ => {
                 let (field, location) = subject_of(failure);
-                let mut entry = Self::coded(SPIELORDERS_FAMILY_FAILURE, code, None);
+                let mut entry = Self::coded(code, None);
                 entry.row = row;
                 if let Some(field) = field {
-                    entry.field = subject.field(field, row >= 0);
+                    (entry.field, entry.row) = subject.locate(field, row);
                 }
                 if let Some(path) = location {
                     entry.path = path;

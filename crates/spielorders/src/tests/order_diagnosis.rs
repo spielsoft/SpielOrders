@@ -6,7 +6,7 @@ use crate::Failure;
 use crate::tests::support::{
     FixedUuid, Operation, PlatformFileSystem, ScriptedFileSystem, TemporaryTree, adoption, case,
     created_vendor, diagnosed_handle, diagnosed_order, effects, findings, initialized_package,
-    json, order_record, valid, validated_order, validated_package,
+    json, record_path, valid, validated_order, validated_package,
 };
 use crate::{Assignments, Diagnosis, Report};
 
@@ -25,7 +25,7 @@ const SUPPORTING_A: &[u8] = include_bytes!(concat!(
 ));
 
 /// An adopted Order carrying a README and one opaque sentinel, so every diagnosis can
-/// also be shown never to read Supporting Material.
+/// also be shown never to inspect Supporting Material.
 fn adopted_order(root: &Path, basename: &str, uuid: &str, vendor: Option<&str>) -> PathBuf {
     let directory = root.join("Orders").join(basename);
     fs::create_dir_all(&directory).expect("the fixture Order Directory is created");
@@ -59,18 +59,6 @@ fn adopted_order(root: &Path, basename: &str, uuid: &str, vendor: Option<&str>) 
     directory
 }
 
-/// The values the case in `diagnosis` offering `action` requires for it.
-fn required(diagnosis: &Diagnosis, action: RepairAction) -> serde_json::Value {
-    assert!(
-        diagnosis
-            .cases
-            .iter()
-            .any(|case| case.actions.contains(&action)),
-        "a case offers {action:?}"
-    );
-    json(&action.required_values())
-}
-
 fn codes(diagnosis: &Diagnosis) -> Vec<DiagnosticCode> {
     findings(diagnosis)
         .map(|diagnostic| diagnostic.code)
@@ -94,58 +82,58 @@ fn actions(diagnosis: &Diagnosis, code: DiagnosticCode) -> Vec<RepairAction> {
 /// Damages an Order in one of the shapes the integrity decision enumerates.
 fn damage(directory: &Path, shape: &str, root: &Path) {
     match shape {
-        "missing" => fs::remove_file(order_record(directory)).unwrap(),
-        "malformed" => fs::write(order_record(directory), b"{ not json").unwrap(),
+        "missing" => fs::remove_file(record_path(directory)).unwrap(),
+        "malformed" => fs::write(record_path(directory), b"{ not json").unwrap(),
         "invalid shape" => fs::write(
-            order_record(directory),
+            record_path(directory),
             br#"{"schema_version":1,"nope":true}"#,
         )
         .unwrap(),
         "unsupported version" => {
-            let text = fs::read_to_string(order_record(directory))
+            let text = fs::read_to_string(record_path(directory))
                 .unwrap()
                 .replace("\"schema_version\": 1", "\"schema_version\": 2");
-            fs::write(order_record(directory), text).unwrap();
+            fs::write(record_path(directory), text).unwrap();
         }
         "semantically invalid" => {
-            let text = fs::read_to_string(order_record(directory))
+            let text = fs::read_to_string(record_path(directory))
                 .unwrap()
                 .replace("2026-08-22", "2026-02-30");
-            fs::write(order_record(directory), text).unwrap();
+            fs::write(record_path(directory), text).unwrap();
         }
         "unresolved vendor" => {
-            let text = fs::read_to_string(order_record(directory))
+            let text = fs::read_to_string(record_path(directory))
                 .unwrap()
                 .replace(VENDOR_ID, "00000000-0000-4000-8000-000000000000");
-            fs::write(order_record(directory), text).unwrap();
+            fs::write(record_path(directory), text).unwrap();
         }
         "stale locator" => {
-            let text = fs::read_to_string(order_record(directory))
+            let text = fs::read_to_string(record_path(directory))
                 .unwrap()
                 .replace("\"../..\"", "\"../../..\"");
-            fs::write(order_record(directory), text).unwrap();
+            fs::write(record_path(directory), text).unwrap();
         }
         "staging" => {
             fs::write(
                 directory.join(".spielorders/.order.json.spielorders-stage"),
-                fs::read(order_record(directory)).unwrap(),
+                fs::read(record_path(directory)).unwrap(),
             )
             .unwrap();
         }
         "duplicate id" => {
             // A second physical Order carrying this Order's identity.
             let twin = adopted_order(root, "2026_08_22_Twin", OTHER_ORDER_ID, None);
-            let text = fs::read_to_string(order_record(&twin))
+            let text = fs::read_to_string(record_path(&twin))
                 .unwrap()
                 .replace(OTHER_ORDER_ID, ORDER_ID);
-            fs::write(order_record(&twin), text).unwrap();
+            fs::write(record_path(&twin), text).unwrap();
         }
         other => panic!("unknown damage shape {other}"),
     }
 }
 
 #[test]
-fn every_damaged_order_cause_the_integrity_decision_enumerates_is_diagnosed() {
+fn every_diagnosed_condition_reports_its_code_and_offers_only_the_repairs_that_execute() {
     // The closed integrity decision enumerates the Damaged Order causes: a missing,
     // unreadable, malformed, unsupported-version, or semantically invalid
     // `order.json`; an unresolved Vendor Reference; or a duplicate Order ID. An
@@ -153,20 +141,71 @@ fn every_damaged_order_cause_the_integrity_decision_enumerates_is_diagnosed() {
     // here rather than a representative sample. Each reuses the code the Package-wide
     // read model already publishes for that condition, never a second vocabulary for
     // the same evidence.
-    for (shape, expected) in [
-        ("missing", DiagnosticCode::ManagedArtifactMissing),
-        ("malformed", DiagnosticCode::ManagedArtifactInvalidSyntax),
-        ("invalid shape", DiagnosticCode::ManagedArtifactInvalidShape),
+    //
+    // Diagnosis is the input to the repair capabilities, so each case names only
+    // actions one of them executes. Malformed JSON is never partially salvaged, an
+    // unsupported version is never interpreted, and missing metadata is never adopted:
+    // each is reported as a finding with no case rather than omitted, so a caller can
+    // tell "healthy" from "nothing safe can be done here".
+    for (shape, expected, damaged, offered) in [
+        (
+            "missing",
+            DiagnosticCode::ManagedArtifactMissing,
+            true,
+            &[][..],
+        ),
+        (
+            "malformed",
+            DiagnosticCode::ManagedArtifactInvalidSyntax,
+            true,
+            &[],
+        ),
+        (
+            "invalid shape",
+            DiagnosticCode::ManagedArtifactInvalidShape,
+            true,
+            &[RepairAction::ReplaceManagedRecord],
+        ),
         (
             "unsupported version",
             DiagnosticCode::ManagedArtifactWrongVersion,
+            true,
+            &[],
         ),
-        ("semantically invalid", DiagnosticCode::OrderSemanticInvalid),
+        (
+            "semantically invalid",
+            DiagnosticCode::OrderSemanticInvalid,
+            true,
+            &[RepairAction::ReplaceManagedRecord],
+        ),
         (
             "unresolved vendor",
             DiagnosticCode::VendorReferenceUnresolved,
+            true,
+            &[
+                RepairAction::AssignExistingVendor,
+                RepairAction::CreateAndAssignVendor,
+                RepairAction::ClearVendorReference,
+            ],
         ),
-        ("duplicate id", DiagnosticCode::OrderIdDuplicate),
+        (
+            "duplicate id",
+            DiagnosticCode::OrderIdDuplicate,
+            true,
+            &[RepairAction::AdoptNewOrderIdentity],
+        ),
+        (
+            "staging",
+            DiagnosticCode::StagingArtifactPresent,
+            false,
+            &[RepairAction::PromoteStagingCandidate],
+        ),
+        (
+            "stale locator",
+            DiagnosticCode::OrderPackageLocatorMismatch,
+            false,
+            &[RepairAction::RepairPackageLocator],
+        ),
     ] {
         let (_tree, root) = initialized_package("diagnosis-enumeration");
         created_vendor(&root, "Tarnwick", VENDOR_ID);
@@ -187,8 +226,30 @@ fn every_damaged_order_cause_the_integrity_decision_enumerates_is_diagnosed() {
             "{shape} reports {expected:?}, got {:?}",
             codes(&diagnosis)
         );
-        assert!(!valid(&diagnosis), "{shape} is not a valid Order");
+        if damaged {
+            assert!(!valid(&diagnosis), "{shape} is not a valid Order");
+        }
         assert_eq!(examined(&diagnosis), directory, "{shape}");
+        if offered.is_empty() {
+            assert!(
+                diagnosis.cases.is_empty(),
+                "{shape} exposes no repair case, got {:?}",
+                diagnosis.cases
+            );
+        } else {
+            assert_eq!(actions(&diagnosis, expected), offered, "{shape}");
+        }
+    }
+
+    // What each action needs is supplied by the user, never guessed; a promotion needs
+    // nothing because the diagnosed candidate is the only one it may promote.
+    for (action, required) in [
+        (RepairAction::ReplaceManagedRecord, json(&["record"])),
+        (RepairAction::PromoteStagingCandidate, serde_json::json!([])),
+        (RepairAction::AssignExistingVendor, json(&["vendor"])),
+        (RepairAction::CreateAndAssignVendor, json(&["name"])),
+    ] {
+        assert_eq!(json(&action.required_values()), required, "{action:?}");
     }
 }
 
@@ -197,9 +258,9 @@ fn an_unreadable_record_is_diagnosed_as_the_decision_names_it() {
     // This cause needs an injected read failure rather than a filesystem state.
     let (_tree, root) = initialized_package("diagnosis-unreadable");
     let directory = adopted_order(&root, "2026_08_22_Laser_components", ORDER_ID, None);
-    let before = fs::read(order_record(&directory)).unwrap();
+    let before = fs::read(record_path(&directory)).unwrap();
 
-    let unreadable = ScriptedFileSystem::new().failing(Operation::Read, order_record(&directory));
+    let unreadable = ScriptedFileSystem::new().failing(Operation::Read, record_path(&directory));
     let diagnosis = diagnosed_order(&directory, &unreadable)
         .result
         .expect("an unreadable record is diagnosable");
@@ -211,7 +272,7 @@ fn an_unreadable_record_is_diagnosed_as_the_decision_names_it() {
     );
     assert!(!valid(&diagnosis));
     assert!(diagnosis.cases.is_empty());
-    assert_eq!(fs::read(order_record(&directory)).unwrap(), before);
+    assert_eq!(fs::read(record_path(&directory)).unwrap(), before);
 }
 
 #[test]
@@ -269,147 +330,7 @@ fn an_invalid_order_fails_validation_and_answers_diagnosis() {
 }
 
 #[test]
-fn every_actionable_family_offers_only_actions_a_repair_capability_executes() {
-    // Diagnosis is the input to the repair capabilities, so each case must name only
-    // actions one of them can actually execute. The mapping below is the handoff:
-    // ReplaceManagedRecord and PromoteStagingCandidate are owned by the confirmed
-    // managed-metadata/staging repair; the Vendor, duplicate-identity, and locator
-    // resolutions are owned by the explicit semantic repair.
-    let (_tree, root) = initialized_package("diagnosis-actionable");
-    created_vendor(&root, "Tarnwick", VENDOR_ID);
-
-    // Parseable but schema-invalid metadata: one confirmed complete replacement.
-    let directory = adopted_order(&root, "2026_08_22_Shape", ORDER_ID, Some("Tarnwick"));
-    damage(&directory, "invalid shape", &root);
-    let diagnosis = diagnosed_order(&directory, &PlatformFileSystem)
-        .result
-        .unwrap();
-    assert_eq!(
-        actions(&diagnosis, DiagnosticCode::ManagedArtifactInvalidShape),
-        [RepairAction::ReplaceManagedRecord]
-    );
-    assert_eq!(
-        required(&diagnosis, RepairAction::ReplaceManagedRecord),
-        json(&["record"]),
-        "a replacement is supplied by the user, never guessed"
-    );
-
-    // Semantically invalid but parseable: the same single safe action.
-    let (_tree, root) = initialized_package("diagnosis-actionable-semantic");
-    let directory = adopted_order(&root, "2026_08_22_Semantic", ORDER_ID, None);
-    damage(&directory, "semantically invalid", &root);
-    let diagnosis = diagnosed_order(&directory, &PlatformFileSystem)
-        .result
-        .unwrap();
-    assert_eq!(
-        actions(&diagnosis, DiagnosticCode::OrderSemanticInvalid),
-        [RepairAction::ReplaceManagedRecord]
-    );
-
-    // An abandoned staging artifact: promote exactly that candidate.
-    let (_tree, root) = initialized_package("diagnosis-actionable-staging");
-    let directory = adopted_order(&root, "2026_08_22_Staging", ORDER_ID, None);
-    damage(&directory, "staging", &root);
-    let diagnosis = diagnosed_order(&directory, &PlatformFileSystem)
-        .result
-        .unwrap();
-    assert_eq!(
-        actions(&diagnosis, DiagnosticCode::StagingArtifactPresent),
-        [RepairAction::PromoteStagingCandidate]
-    );
-    assert!(
-        required(&diagnosis, RepairAction::PromoteStagingCandidate) == serde_json::json!([]),
-        "the diagnosed candidate is the only one that may be promoted"
-    );
-
-    // An unresolved Vendor Reference: exactly the three authorized resolutions, and
-    // never an inferred one.
-    let (_tree, root) = initialized_package("diagnosis-actionable-vendor");
-    created_vendor(&root, "Tarnwick", VENDOR_ID);
-    let directory = adopted_order(&root, "2026_08_22_Vendor", ORDER_ID, Some("Tarnwick"));
-    damage(&directory, "unresolved vendor", &root);
-    let diagnosis = diagnosed_order(&directory, &PlatformFileSystem)
-        .result
-        .unwrap();
-    assert_eq!(
-        actions(&diagnosis, DiagnosticCode::VendorReferenceUnresolved),
-        [
-            RepairAction::AssignExistingVendor,
-            RepairAction::CreateAndAssignVendor,
-            RepairAction::ClearVendorReference,
-        ]
-    );
-    assert_eq!(
-        required(&diagnosis, RepairAction::AssignExistingVendor),
-        json(&["vendor"])
-    );
-    assert_eq!(
-        required(&diagnosis, RepairAction::CreateAndAssignVendor),
-        json(&["name"])
-    );
-
-    // A duplicate Order ID: adopt a fresh identity for the chosen physical Order.
-    let (_tree, root) = initialized_package("diagnosis-actionable-duplicate");
-    let directory = adopted_order(&root, "2026_08_22_Laser_components", ORDER_ID, None);
-    damage(&directory, "duplicate id", &root);
-    let diagnosis = diagnosed_order(&directory, &PlatformFileSystem)
-        .result
-        .unwrap();
-    assert_eq!(
-        actions(&diagnosis, DiagnosticCode::OrderIdDuplicate),
-        [RepairAction::AdoptNewOrderIdentity]
-    );
-
-    // A stale technical locator: recompute it from the physical relationship.
-    let (_tree, root) = initialized_package("diagnosis-actionable-locator");
-    let directory = adopted_order(&root, "2026_08_22_Locator", ORDER_ID, None);
-    damage(&directory, "stale locator", &root);
-    let diagnosis = diagnosed_order(&directory, &PlatformFileSystem)
-        .result
-        .unwrap();
-    assert_eq!(
-        actions(&diagnosis, DiagnosticCode::OrderPackageLocatorMismatch),
-        [RepairAction::RepairPackageLocator]
-    );
-}
-
-#[test]
-fn no_unsafe_family_exposes_an_invented_repair() {
-    // Malformed JSON is never partially salvaged, an unsupported version is never
-    // interpreted, and missing metadata is never adopted. Each is reported as a
-    // finding with no action rather than omitted, so a caller can tell "healthy" from
-    // "nothing safe can be done here".
-    for (shape, expected) in [
-        ("malformed", DiagnosticCode::ManagedArtifactInvalidSyntax),
-        (
-            "unsupported version",
-            DiagnosticCode::ManagedArtifactWrongVersion,
-        ),
-        ("missing", DiagnosticCode::ManagedArtifactMissing),
-    ] {
-        let (_tree, root) = initialized_package("diagnosis-unsafe");
-        let directory = adopted_order(&root, "2026_08_22_Laser_components", ORDER_ID, None);
-        damage(&directory, shape, &root);
-
-        let diagnosis = diagnosed_order(&directory, &PlatformFileSystem)
-            .result
-            .unwrap();
-
-        assert!(
-            diagnosis.cases.is_empty(),
-            "{shape} exposes no repair case, got {:?}",
-            diagnosis.cases
-        );
-        assert!(
-            codes(&diagnosis).contains(&expected),
-            "{shape} is reported by its own code"
-        );
-        assert!(!valid(&diagnosis), "{shape}");
-    }
-}
-
-#[test]
-fn diagnosis_writes_nothing_for_any_shape_and_never_reads_supporting_material() {
+fn diagnosis_writes_nothing_for_any_shape_and_never_inspects_supporting_material() {
     for shape in [
         "healthy",
         "malformed",
@@ -433,7 +354,7 @@ fn diagnosis_writes_nothing_for_any_shape_and_never_reads_supporting_material() 
             damage(&directory, shape, &root);
         }
         let index_before = fs::read(root.join(".spielorders/index.json")).unwrap();
-        let record_before = fs::read(order_record(&directory)).ok();
+        let record_before = fs::read(record_path(&directory)).ok();
         let readme_before = fs::read(directory.join("README.md")).unwrap();
         let sentinel_before = fs::read(directory.join("quote.bin")).unwrap();
 
@@ -449,7 +370,7 @@ fn diagnosis_writes_nothing_for_any_shape_and_never_reads_supporting_material() 
             "{shape} replaces no derived index"
         );
         assert_eq!(
-            fs::read(order_record(&directory)).ok(),
+            fs::read(record_path(&directory)).ok(),
             record_before,
             "{shape}"
         );
@@ -469,66 +390,11 @@ fn diagnosis_writes_nothing_for_any_shape_and_never_reads_supporting_material() 
                 .exists(),
             "{shape} stages nothing of its own"
         );
-        for read in scripted.paths(Operation::Read) {
-            let read = read.to_string_lossy().to_string();
-            assert!(
-                !read.contains("quote.bin"),
-                "{shape} never reads Supporting Material, but read {read}"
-            );
-        }
-    }
-}
-
-#[test]
-fn diagnosing_one_order_leaves_its_siblings_usable_and_its_own_bytes_untouched() {
-    let (_tree, root) = initialized_package("diagnosis-isolation");
-    created_vendor(&root, "Tarnwick", VENDOR_ID);
-    let healthy = adopted_order(
-        &root,
-        "2026_08_22_Healthy",
-        OTHER_ORDER_ID,
-        Some("Tarnwick"),
-    );
-    let damaged = adopted_order(&root, "2026_08_22_Damaged", ORDER_ID, Some("Tarnwick"));
-    damage(&damaged, "semantically invalid", &root);
-    let damaged_before = fs::read(order_record(&damaged)).unwrap();
-
-    let diagnosis = diagnosed_order(&damaged, &PlatformFileSystem)
-        .result
-        .expect("the damaged Order diagnoses");
-
-    assert!(!valid(&diagnosis));
-    assert!(
-        codes(&diagnosis).contains(&DiagnosticCode::OrderSemanticInvalid),
-        "got {:?}",
-        codes(&diagnosis)
-    );
-    // Its own bytes are evidence, not something diagnosis repairs.
-    assert_eq!(fs::read(order_record(&damaged)).unwrap(), damaged_before);
-
-    // The healthy sibling is unaffected, and its own scoped diagnosis excludes the
-    // damaged Order's findings entirely.
-    let sibling = diagnosed_order(&healthy, &PlatformFileSystem)
-        .result
-        .expect("the sibling diagnoses");
-    assert!(
-        valid(&sibling),
-        "a damaged Order does not block a healthy one"
-    );
-    assert_eq!(codes(&sibling), Vec::<DiagnosticCode>::new());
-    assert!(sibling.cases.is_empty());
-    assert_eq!(examined(&sibling), healthy);
-
-    // And the damaged Order's diagnosis names only its own scope.
-    for diagnostic in findings(&diagnosis) {
+        let sentinel = directory.join("quote.bin");
+        let inspected = scripted.naming(|path| path.starts_with(&sentinel));
         assert!(
-            diagnostic
-                .primary_location
-                .absolute_path
-                .as_path()
-                .starts_with(&damaged),
-            "a scoped diagnosis reports only its own Order, but named {:?}",
-            diagnostic.primary_location.absolute_path.as_path()
+            inspected.is_empty(),
+            "{shape} never inspects Supporting Material: {inspected:?}"
         );
     }
 }
@@ -537,7 +403,7 @@ fn diagnosing_one_order_leaves_its_siblings_usable_and_its_own_bytes_untouched()
 fn case_handles_are_deterministic_for_a_snapshot_and_disappear_once_corrected() {
     let (_tree, root) = initialized_package("diagnosis-handles");
     let directory = adopted_order(&root, "2026_08_22_Laser_components", ORDER_ID, None);
-    let healthy_record = fs::read(order_record(&directory)).unwrap();
+    let healthy_record = fs::read(record_path(&directory)).unwrap();
     damage(&directory, "stale locator", &root);
 
     let first = diagnosed_order(&directory, &PlatformFileSystem)
@@ -579,7 +445,7 @@ fn case_handles_are_deterministic_for_a_snapshot_and_disappear_once_corrected() 
 
     // Handles are not persisted identities: once the condition is gone, so is the
     // case, which is what lets a repair capability reject a stale handle.
-    fs::write(order_record(&directory), &healthy_record).unwrap();
+    fs::write(record_path(&directory), &healthy_record).unwrap();
     let corrected = diagnosed_order(&directory, &PlatformFileSystem)
         .result
         .unwrap();
@@ -662,7 +528,7 @@ fn a_directory_that_is_not_an_order_and_a_damaged_package_are_refused() {
 fn a_package_wide_failure_is_never_downgraded_to_an_order_finding() {
     let (_tree, root) = initialized_package("diagnosis-damaged-package");
     let directory = adopted_order(&root, "2026_08_22_Laser_components", ORDER_ID, None);
-    let before = fs::read(order_record(&directory)).unwrap();
+    let before = fs::read(record_path(&directory)).unwrap();
     // The Vendor aggregate is package-wide canonical state, and an Order-scoped
     // answer depends on it to resolve Vendor References. With it untrustworthy,
     // reporting this Order as healthy would be a downgrade, not a diagnosis.
@@ -700,7 +566,7 @@ fn a_package_wide_failure_is_never_downgraded_to_an_order_finding() {
         "the evidence for the refusal travels with it: {diagnostics:?}"
     );
     assert_eq!(
-        fs::read(order_record(&directory)).unwrap(),
+        fs::read(record_path(&directory)).unwrap(),
         before,
         "the refusal reads evidence and changes nothing"
     );
@@ -722,10 +588,10 @@ fn a_changed_unresolved_vendor_produces_a_different_handle_at_the_same_path() {
     // repair would act on differs.
     let mut current = vendor;
     let mut repoint = |next: &str| {
-        let text = fs::read_to_string(order_record(&directory))
+        let text = fs::read_to_string(record_path(&directory))
             .unwrap()
             .replace(&current, next);
-        fs::write(order_record(&directory), text).unwrap();
+        fs::write(record_path(&directory), text).unwrap();
         current = next.to_owned();
         diagnosed_handle(&directory, DiagnosticCode::VendorReferenceUnresolved)
     };
@@ -741,29 +607,6 @@ fn a_changed_unresolved_vendor_produces_a_different_handle_at_the_same_path() {
 }
 
 #[test]
-fn a_changed_staged_candidate_produces_a_different_handle_at_the_same_path() {
-    let (_tree, root) = initialized_package("diagnosis-handle-staging");
-    let directory = adopted_order(&root, "2026_08_22_Laser_components", ORDER_ID, None);
-    let staged = directory.join(".spielorders/.order.json.spielorders-stage");
-
-    // Two different abandoned candidates at one staging name. Promotion writes the
-    // candidate's bytes, so which candidate is there is the whole fact being repaired.
-    let stage = |bytes: &[u8]| {
-        fs::write(&staged, bytes).unwrap();
-        diagnosed_handle(&directory, DiagnosticCode::StagingArtifactPresent)
-    };
-
-    let first = stage(b"{\"schema_version\": 1, \"title\": \"one\"}\n");
-    let second = stage(b"{\"schema_version\": 1, \"title\": \"two\"}\n");
-
-    assert_ne!(
-        first, second,
-        "a confirmation to promote one staged candidate must not promote a different \
-         one that replaced it"
-    );
-}
-
-#[test]
 fn a_changed_duplicate_participant_set_produces_a_different_handle() {
     const THIRD_ORDER_ID: &str = "2b7c8d9e-0f1a-4b2c-8d3e-4f5a6b7c8d9e";
     let (_tree, root) = initialized_package("diagnosis-handle-duplicate");
@@ -775,10 +618,10 @@ fn a_changed_duplicate_participant_set_produces_a_different_handle() {
     // are unchanged; who it conflicts with is not, and resolving the conflict means
     // designating a survivor among a different set of directories.
     let third = adopted_order(&root, "2026_08_22_Third", THIRD_ORDER_ID, None);
-    let text = fs::read_to_string(order_record(&third))
+    let text = fs::read_to_string(record_path(&third))
         .unwrap()
         .replace(THIRD_ORDER_ID, ORDER_ID);
-    fs::write(order_record(&third), text).unwrap();
+    fs::write(record_path(&third), text).unwrap();
     let against_two = diagnosed_handle(&directory, DiagnosticCode::OrderIdDuplicate);
 
     assert_ne!(
@@ -795,7 +638,7 @@ fn a_changed_invalid_record_produces_a_different_handle_at_the_same_path() {
     // One record at one path, invalid in two different ways. A replacement is confirmed
     // against what the diagnosis said was wrong, so the two must not share a handle.
     let invalidate = |text: &str| {
-        fs::write(order_record(&directory), text).unwrap();
+        fs::write(record_path(&directory), text).unwrap();
         diagnosed_handle(&directory, DiagnosticCode::ManagedArtifactInvalidShape)
     };
 

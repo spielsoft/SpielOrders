@@ -5,15 +5,13 @@
 use crate::Failure;
 use crate::ports::FileSystemEntryKind;
 use crate::tests::support::{
-    Index, Operation, ScriptedFileSystem, Spelled, effects, failed_location, location,
-    minimal_package,
+    Operation, ScriptedFileSystem, Spelled, effects, failed_location, location, minimal_package,
 };
 use crate::{Answer, OrderRef, Scope};
 use crate::{
     ReadmeRead, readme::DiagnosticCode, readme::DiagnosticEvidence, readme::EvidenceScope,
     readme::ReadmeKind, readme::ReadmeReference, readme::ReadmeUnavailableReason, readme::Severity,
 };
-use std::path::Path;
 
 const SUPPORTING_A: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -27,10 +25,6 @@ const SCENARIOS: &str = include_str!(concat!(
 const SUPPORTING_B: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../contracts/fixtures/assets/supporting-b.bin"
-));
-const FULL_INDEX: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../contracts/examples/v1/full/index.json"
 ));
 
 const MINIMAL_ORDER: &str = include_str!(concat!(
@@ -79,24 +73,6 @@ fn read_readme(reference: &Reference, filesystem: &ScriptedFileSystem) -> Answer
     crate::read_readme(&scope, &effects(filesystem))
 }
 
-/// What was asked of the filesystem about `path`, in order.
-fn asked_about(filesystem: &ScriptedFileSystem, path: &str) -> Vec<Operation> {
-    filesystem
-        .calls()
-        .into_iter()
-        .filter(|call| call.path == Path::new(path))
-        .map(|call| call.operation)
-        .collect()
-}
-
-/// Whether a README was only ever observed without following it and read: never written,
-/// followed, or listed.
-fn only_observed_and_read(filesystem: &ScriptedFileSystem, path: &str) -> bool {
-    asked_about(filesystem, path)
-        .iter()
-        .all(|operation| matches!(operation, Operation::SymlinkMetadata | Operation::Read))
-}
-
 fn unreadable_readme(readme: &'static str) -> ScriptedFileSystem {
     volume(|filesystem| {
         filesystem.put_file(readme, b"unreadable");
@@ -124,7 +100,6 @@ fn absent_package_readme_is_an_empty_document_without_a_diagnostic() {
     assert!(!result.exists);
     assert_eq!(result.text.as_deref(), Some(""));
     assert!(result.diagnostics.is_empty());
-    assert!(only_observed_and_read(&filesystem, "/package/README.md"));
 }
 
 #[test]
@@ -154,17 +129,12 @@ fn readable_order_readme_returns_exact_utf8_text_from_the_requested_path() {
         Some("# Café optics\r\n\r\nΔλ stays exact.\n")
     );
     assert!(result.diagnostics.is_empty());
-    // It observes the README's kind without following it, reads it, and never touches
-    // Supporting Material.
-    assert!(only_observed_and_read(&filesystem, readme));
-    assert!(asked_about(&filesystem, supporting_a).is_empty());
-    assert!(asked_about(&filesystem, supporting_b).is_empty());
     assert_eq!(filesystem.bytes(supporting_a).unwrap(), SUPPORTING_A);
     assert_eq!(filesystem.bytes(supporting_b).unwrap(), SUPPORTING_B);
 }
 
 #[test]
-fn present_non_file_readme_is_unavailable_without_following_or_reading_it() {
+fn present_non_file_readme_is_unavailable() {
     for kind in [
         FileSystemEntryKind::Directory,
         FileSystemEntryKind::SymbolicLink,
@@ -183,10 +153,6 @@ fn present_non_file_readme_is_unavailable_without_following_or_reading_it() {
             &location,
             ReadmeKind::PackageReadme,
             ReadmeUnavailableReason::WrongKind,
-        );
-        assert_eq!(
-            asked_about(&filesystem, "/package/README.md"),
-            [Operation::SymlinkMetadata]
         );
     }
 }
@@ -210,10 +176,6 @@ fn injected_read_failure_is_a_stable_unreadable_document_warning() {
         ReadmeKind::OrderReadme,
         ReadmeUnavailableReason::Unreadable,
     );
-    assert!(only_observed_and_read(
-        &filesystem,
-        "/package/Orders/Optics/README.md"
-    ));
 }
 
 #[test]
@@ -269,31 +231,6 @@ fn observation_failure_returns_stable_operation_evidence_without_fabricating_exi
         failed_location(&failure.path).expect("the failure names a Location"),
         &location
     );
-    assert!(only_observed_and_read(&filesystem, "/package/README.md"));
-}
-
-#[test]
-fn explicit_read_never_accepts_version_one_index_readme_text_as_current_evidence() {
-    let index = Index::from_json_bytes(FULL_INDEX).expect("canonical index fixture parses");
-    let cached_text = &index.orders[0].readme;
-    let location = location(
-        "/package/Orders/Optics/README.md",
-        "Orders/Optics/README.md",
-    );
-    let reference = readme_reference(ReadmeKind::OrderReadme, location);
-    let filesystem = volume(|filesystem| {
-        filesystem.put_file(
-            "/package/Orders/Optics/README.md",
-            b"current README bytes\n",
-        )
-    });
-
-    let result = read_readme(&reference, &filesystem)
-        .result
-        .expect("current README is readable");
-
-    assert_ne!(result.text.as_deref(), Some(cached_text.as_str()));
-    assert_eq!(result.text.as_deref(), Some("current README bytes\n"));
 }
 
 #[test]

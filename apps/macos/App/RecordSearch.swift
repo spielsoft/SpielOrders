@@ -30,6 +30,15 @@ enum SearchScope: Hashable {
         }
     }
 
+    /// Where the search looks, as No Results names it.
+    var name: String {
+        switch self {
+        case .allFields: "All Fields"
+        case let .field(field): Self.label(field)
+        case .folderContents: "Folder Contents"
+        }
+    }
+
     func placeholder(in destination: DesktopModel.Destination) -> String {
         switch self {
         case .allFields: destination == .vendors ? "Search Vendors" : "Search Orders"
@@ -67,6 +76,12 @@ struct RecordQuery: Equatable {
 
     /// Whether Spotlight is asked for Supporting Material.
     var searchesFiles: Bool { scope == .folderContents && !text.isEmpty }
+
+    /// Whether Search In or Match Case narrows the search from its default.
+    var narrowed: Bool { scope != .allFields || matchCase }
+
+    /// Where the search looks, as No Results and the Search In button say it.
+    var extent: String { scope.name + (matchCase ? ", matching case" : "") }
 }
 
 /// The search field above the list it filters, with its Search In menu beside it.
@@ -110,7 +125,7 @@ struct RecordSearch: View {
 
     private func actions(_ problem: Notice) -> [NoticeAction] {
         guard !problem.details.isEmpty else { return [] }
-        return [NoticeAction("Details…", identifier: "search.problem.details") { [model] in
+        return [NoticeAction("Details", identifier: "search.problem.details") { [model] in
             model.showDetails([problem])
         }]
     }
@@ -131,7 +146,7 @@ private struct SearchInMenu: View {
     var body: some View {
         Menu {
             Section("Search In") {
-                choice("All Fields", .allFields, identifier: "search.scope.allFields")
+                choice(SearchScope.allFields.name, .allFields, identifier: "search.scope.allFields")
                 ForEach(SearchScope.fields(in: model.destination), id: \.self) { field in
                     choice(SearchScope.label(field), .field(field),
                            identifier: "search.scope.\(RecordFieldLabel.key(field))")
@@ -144,22 +159,20 @@ private struct SearchInMenu: View {
             Divider()
             Toggle(matchCaseLabel, isOn: Binding(get: { model.search.matchCase }, set: model.setMatchCase))
                 .accessibilityIdentifier("search.matchCase")
-            if model.destination == .vendors {
-                Divider()
-                Toggle("Include Hidden Vendors",
-                       isOn: Binding(get: { model.includeHiddenVendors }, set: model.setIncludeHiddenVendors))
-                    .accessibilityIdentifier("vendors.showHidden")
-            }
         } label: {
-            Image(systemName: "line.3.horizontal.decrease")
+            Image(systemName: model.search.narrowed
+                ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease")
         }
+        // Filled in the accent color while Search In or Match Case narrows the search.
+        .tint(model.search.narrowed ? .accentColor : nil)
         .menuStyle(.button)
         .buttonStyle(.borderless)
         .buttonBorderShape(.circle)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("Search In")
+        .help(model.search.narrowed ? "Search In: \(model.search.extent)" : "Search In")
         .accessibilityLabel("Search In")
+        .accessibilityValue(model.search.extent)
         .accessibilityIdentifier("search.scope")
     }
 

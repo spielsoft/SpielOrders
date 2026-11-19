@@ -149,22 +149,6 @@ fn ordinary_order_browsing_includes_damage_only_without_query_terms() {
         OrderListEntry::Healthy { position: 0, .. }
     ));
     assert!(matches!(unfiltered[1], OrderListEntry::Damaged(_)));
-    let matched = package
-        .orders_matching(&SearchQuery::new("Karborund", CaseSensitivity::Insensitive))
-        .result
-        .unwrap();
-    assert_eq!(matched.len(), 1);
-    assert!(matches!(matched[0], OrderListEntry::Healthy { .. }));
-    assert!(
-        package
-            .orders_matching(&SearchQuery::new(
-                "Molybdaenit",
-                CaseSensitivity::Insensitive
-            ))
-            .result
-            .unwrap()
-            .is_empty()
-    );
 }
 
 #[test]

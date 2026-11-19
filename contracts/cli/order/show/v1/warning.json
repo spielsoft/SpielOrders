@@ -57,17 +57,6 @@
       "path": "Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace/README.md",
       "before": null,
       "after": null
-    },
-    {
-      "code": "readme_unavailable",
-      "severity": "warning",
-      "message": "Readme unavailable",
-      "field": null,
-      "reason": null,
-      "position": null,
-      "path": "Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace/README.md",
-      "before": null,
-      "after": null
     }
   ],
   "error": null

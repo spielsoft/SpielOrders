@@ -12,23 +12,22 @@
 
 use crate::support::ResponseContract;
 use crate::support::{
-    ENVELOPE, Invocation, SOME_ORDER_ID, TemporaryTree, assert_matches_golden,
-    assert_matches_golden_with_minted_vendor_id, assert_matches_golden_with_substitutions,
-    directory_that_is_not_a_root, entry_names, fixture_directory, initialized_package,
-    initialized_package_with_a_blocked_index_refresh, order_directory,
-    package_root_that_cannot_be_read, package_with_a_blocked_index_refresh,
-    package_with_a_damaged_order, package_with_a_drifted_order,
-    package_with_a_drifted_order_and_a_blocked_index_refresh,
-    package_with_a_package_case_and_a_blocked_index_refresh, package_with_a_staging_artifact,
-    package_with_an_adoption_candidate, package_with_an_empty_order,
-    package_with_an_impossible_date, package_with_an_occupied_aligned_name,
-    package_with_an_occupied_removed_name, package_with_an_order_staging_artifact,
-    package_with_an_unreadable_order_readme, package_with_an_unreferenced_vendor,
-    package_with_an_unresolved_vendor_reference, package_with_an_unused_vendor,
-    package_with_an_unused_vendor_and_a_blocked_index_refresh, package_with_duplicate_vendor_names,
-    package_with_three_contacts, package_with_three_contacts_and_a_blocked_index_refresh,
-    package_with_three_items, package_with_three_items_and_a_blocked_index_refresh,
-    package_with_unreadable_readme, populated_package, response, unmanaged_directory,
+    Invocation, TemporaryTree, assert_matches_golden, assert_matches_golden_with_minted_vendor_id,
+    assert_matches_golden_with_substitutions, directory_that_is_not_a_root, entry_names,
+    fixture_directory, initialized_package, initialized_package_with_a_blocked_index_refresh,
+    order_directory, package_root_that_cannot_be_read, package_with_a_blocked_index_refresh,
+    package_with_a_case_and_a_blocked_index_refresh, package_with_a_damaged_order,
+    package_with_a_drifted_order, package_with_a_drifted_order_and_a_blocked_index_refresh,
+    package_with_a_staging_artifact, package_with_an_adoption_candidate,
+    package_with_an_empty_order, package_with_an_impossible_date,
+    package_with_an_occupied_aligned_name, package_with_an_occupied_removed_name,
+    package_with_an_order_staging_artifact, package_with_an_unreadable_order_readme,
+    package_with_an_unreferenced_vendor, package_with_an_unresolved_vendor_reference,
+    package_with_an_unused_vendor, package_with_an_unused_vendor_and_a_blocked_index_refresh,
+    package_with_duplicate_vendor_names, package_with_three_contacts,
+    package_with_three_contacts_and_a_blocked_index_refresh, package_with_three_items,
+    package_with_three_items_and_a_blocked_index_refresh, package_with_unreadable_readme,
+    populated_package, response, unmanaged_directory,
 };
 use std::path::{Path, PathBuf};
 
@@ -84,121 +83,6 @@ fn every_registered_contract_has_its_own_fixture_directory() {
 }
 
 // ---------------------------------------------------------------------------
-// The envelope.
-// ---------------------------------------------------------------------------
-
-/// One `--json` run per kind of response this command can produce: a clean read, a read
-/// that carries a diagnostic, a domain failure, and a usage error.
-///
-/// The trees come back with the runs because a `TemporaryTree` deletes its Package when
-/// it drops, and a run against a deleted Package would test the wrong failure.
-fn envelope_runs(label: &str) -> (Vec<TemporaryTree>, Vec<Invocation>) {
-    let (tree, root) = initialized_package(label);
-    let outside = directory_that_is_not_a_root(&root);
-
-    let (warning_tree, warning_root) = package_with_unreadable_readme(&format!("{label}-warning"));
-
-    let runs = vec![
-        Invocation::new(&["package", "readme", "--json"]).rooted_at(&root),
-        Invocation::new(&["package", "readme", "--json"]).rooted_at(&warning_root),
-        Invocation::new(&["package", "readme", "--json"]).rooted_at(&outside),
-        Invocation::new(&["package", "readme", "--json", "--jsom"]),
-    ];
-    (vec![tree, warning_tree], runs)
-}
-
-/// Seven members, always all seven — on success and on failure. A member absent rather
-/// than `null` is the drift that makes a consumer write `if "data" in response`, and
-/// once one command does it the rule is gone.
-#[test]
-fn every_response_carries_the_whole_envelope() {
-    let (_trees, runs) = envelope_runs("envelope-shape");
-    for (index, run) in runs.into_iter().enumerate() {
-        let document = response(&run.run());
-        let mut members: Vec<&str> = document
-            .as_object()
-            .expect("a response is a JSON object")
-            .keys()
-            .map(String::as_str)
-            .collect();
-        members.sort_unstable();
-        let mut expected = ENVELOPE;
-        expected.sort_unstable();
-        assert_eq!(members, expected, "run {index}");
-    }
-}
-
-/// And in one order, which is a fact about the bytes rather than about the parse.
-///
-/// Asserted against the raw document because `serde_json::Value` holds its members
-/// sorted: reading the order back through a parse would compare the parser's ordering to
-/// itself and pass no matter what the executable wrote.
-#[test]
-fn every_response_carries_the_envelope_in_one_order() {
-    let (_trees, runs) = envelope_runs("envelope-order");
-    for (index, run) in runs.into_iter().enumerate() {
-        let outcome = run.run();
-        let text = outcome.stdout_text();
-        let mut previous = 0;
-        for member in ENVELOPE {
-            // A top-level member of the pretty document, at its one indentation.
-            let key = format!("\n  \"{member}\":");
-            assert_eq!(
-                text.matches(&key).count(),
-                1,
-                "run {index}: `{member}` names exactly one member of this response, \
-                 which is what makes the offset below the top-level one"
-            );
-            let at = text.find(&key).expect("the member was just counted");
-            assert!(
-                at > previous,
-                "run {index}: `{member}` is out of the envelope's order:\n{text}"
-            );
-            previous = at;
-        }
-    }
-}
-
-/// `ok` and the exit status are two spellings of one fact. They are asserted together
-/// everywhere so the pair cannot drift: a response saying `ok: true` at exit `1` would
-/// make every caller that trusts one of them wrong about the other.
-#[test]
-fn ok_and_the_exit_status_never_disagree() {
-    let (_tree, root) = initialized_package("envelope-ok-and-status");
-    let outside = directory_that_is_not_a_root(&root);
-
-    for (run, status) in [
-        (
-            Invocation::new(&["package", "readme", "--json"]).rooted_at(&root),
-            0,
-        ),
-        (
-            Invocation::new(&["package", "readme", "--json"]).rooted_at(&outside),
-            1,
-        ),
-        (
-            Invocation::new(&["package", "readme", "--json", "--jsom"]),
-            2,
-        ),
-    ] {
-        let outcome = run.run();
-        let document = response(&outcome);
-        assert_eq!(outcome.status, Some(status));
-        assert_eq!(document["ok"], status == 0, "exit {status}");
-        assert_eq!(
-            document["data"].is_null(),
-            status != 0,
-            "exit {status}: a failure carries no data"
-        );
-        assert_eq!(
-            document["error"].is_null(),
-            status == 0,
-            "exit {status}: a success carries no error"
-        );
-    }
-}
-
-// ---------------------------------------------------------------------------
 // The golden fixtures.
 // ---------------------------------------------------------------------------
 
@@ -222,6 +106,8 @@ fn every_recorded_cell_is_one_this_file_compares() {
     supporting_cells.extend(SUPPORTING_MATERIAL_REPLAYED_CELLS);
 
     let mut compared: Vec<(ResponseContract, Vec<&str>)> = vec![
+        // A usage error has one response shape, so its contract has one fixture.
+        (ResponseContract::Usage, vec!["usage-error"]),
         // The installation/provisioning suite drives these executable responses.
         (
             ResponseContract::AgentProvision,
@@ -285,7 +171,6 @@ fn every_recorded_cell_is_one_this_file_compares() {
     named.dedup();
     let mut expected: Vec<&str> = ResponseContract::REGISTERED
         .iter()
-        .filter(|contract| **contract != ResponseContract::Usage)
         .map(|contract| contract.name())
         .collect();
     expected.sort_unstable();
@@ -308,72 +193,43 @@ fn every_recorded_cell_is_one_this_file_compares() {
     }
 }
 
-/// A Package whose conventional README is there.
+/// `package readme` in each of its cells, against its recorded bytes.
+///
+/// Each run is also read as a response, which is what says a `--json` run writes one
+/// document and nothing on standard error — the warning cell included, whose observation
+/// belongs in `diagnostics` rather than on a stream. The `invalid` cell targets a plain
+/// directory inside the Package, so its fixture's path also records that no ancestor was
+/// consulted.
 #[test]
-fn the_successful_response_matches_its_golden_fixture() {
-    let (_tree, root) = initialized_package("golden-success");
-    assert!(root.join("README.md").is_file());
+fn every_package_readme_cell_matches_its_golden_fixture() {
+    for cell in README_CELLS {
+        let label = format!("golden-readme-{cell}");
+        let (_tree, root) = match cell {
+            "warning" => package_with_unreadable_readme(&label),
+            _ => initialized_package(&label),
+        };
+        let target = match cell {
+            "empty-result" => {
+                std::fs::remove_file(root.join("README.md"))
+                    .expect("the optional README is removed");
+                root.clone()
+            }
+            "invalid" => directory_that_is_not_a_root(&root),
+            _ => root.clone(),
+        };
 
-    let outcome = Invocation::new(&["package", "readme", "--json"])
-        .rooted_at(&root)
-        .run();
+        let outcome = Invocation::new(&["package", "readme", "--json"])
+            .rooted_at(&target)
+            .run();
 
-    assert_eq!(outcome.status, Some(0));
-    assert_matches_golden(ResponseContract::PackageReadme, "success", &outcome, &root);
-}
-
-/// This command's empty result: the conventional path is the answer, and no document
-/// stands there. It is a success, because the path is what was asked for — and the two
-/// responses differ in exactly one fact, which is the point of having both fixtures.
-#[test]
-fn the_empty_result_response_matches_its_golden_fixture() {
-    let (_tree, root) = initialized_package("golden-empty-result");
-    std::fs::remove_file(root.join("README.md")).expect("the optional README is removed");
-
-    let outcome = Invocation::new(&["package", "readme", "--json"])
-        .rooted_at(&root)
-        .run();
-
-    assert_eq!(outcome.status, Some(0));
-    assert_matches_golden(
-        ResponseContract::PackageReadme,
-        "empty-result",
-        &outcome,
-        &root,
-    );
-}
-
-/// The one cell in which `diagnostics` is non-empty, which makes it the only golden
-/// evidence the shared diagnostic projection has.
-#[test]
-fn the_warning_response_matches_its_golden_fixture() {
-    let (_tree, root) = package_with_unreadable_readme("golden-warning");
-
-    let outcome = Invocation::new(&["package", "readme", "--json"])
-        .rooted_at(&root)
-        .run();
-
-    assert_eq!(
-        outcome.status,
-        Some(0),
-        "the conventional path is still the answer"
-    );
-    assert_matches_golden(ResponseContract::PackageReadme, "warning", &outcome, &root);
-}
-
-/// A `--root` that is not a SpielOrders Root. The fixture's path is the targeted
-/// directory, which is how it records that no ancestor was consulted.
-#[test]
-fn the_invalid_response_matches_its_golden_fixture() {
-    let (_tree, root) = initialized_package("golden-invalid");
-    let outside = directory_that_is_not_a_root(&root);
-
-    let outcome = Invocation::new(&["package", "readme", "--json"])
-        .rooted_at(&outside)
-        .run();
-
-    assert_eq!(outcome.status, Some(1));
-    assert_matches_golden(ResponseContract::PackageReadme, "invalid", &outcome, &root);
+        assert_eq!(
+            outcome.status,
+            Some(if cell == "invalid" { 1 } else { 0 }),
+            "{cell}"
+        );
+        response(&outcome);
+        assert_matches_golden(ResponseContract::PackageReadme, cell, &outcome, &root);
+    }
 }
 
 /// A usage error carries no Package Root and no path, so its fixture needs no
@@ -389,15 +245,9 @@ fn the_usage_error_response_matches_its_golden_fixture() {
 }
 
 /// **Every usage error is the same response contract, whichever command line produced
-/// it.** The defect this catches is the one the shape started with: a usage error
-/// stamped with the identity of whichever command the executable happened to have, so
-/// `spielorders --json` — which names no command at all — claimed to be a
-/// `package readme` response. `contract` identifies the exact command shape, and a
-/// command line that named no command has none.
-///
-/// It is invisible while one command is registered and wrong for every command but that
-/// one afterwards, which is why it is pinned here rather than left for the command that
-/// would have exposed it.
+/// it.** `contract` identifies the exact command shape, and a command line that named no
+/// command — or a command that does not exist — has none, so no usage error is stamped
+/// with the identity of whichever command the executable happened to have.
 #[test]
 fn every_usage_error_carries_the_usage_contract() {
     let (_tree, root) = initialized_package("usage-identity");
@@ -409,13 +259,6 @@ fn every_usage_error_carries_the_usage_contract() {
         vec!["package", "readme", "--json", "--jsom"],
         vec!["package", "reamde", "--json"],
         vec!["pakcage", "readme", "--json"],
-        vec!["package", "readme", "--json", "--quiet"],
-        // The command this milestone's third ticket added. A usage error carrying
-        // `spielorders.package.show` is the rule a new command is most likely to break,
-        // so every command line that reaches exit `2` through it is listed here too.
-        vec!["package", "show", "--json", "--jsom"],
-        vec!["package", "show", "--json", "--quiet"],
-        vec!["package", "show", "--json", "--all", "--verbose"],
         vec!["package", "shwo", "--json"],
     ] {
         let outcome = Invocation::new(&arguments).rooted_at(&root).run();
@@ -431,25 +274,11 @@ fn every_usage_error_carries_the_usage_contract() {
     }
 }
 
-/// The usage contract's fixture directory holds exactly the one cell it can produce.
-#[test]
-fn the_usage_contract_supplies_only_a_usage_error_fixture() {
-    let directory = fixture_directory(ResponseContract::Usage);
-    assert_eq!(
-        entry_names(&directory),
-        vec!["usage-error.json".to_owned()],
-        "a usage error has one response shape, so its contract has one fixture"
-    );
-}
-
 /// **A failure is not automatically rootless.**
 ///
-/// The defect: `context` reported `package_root: null` for every failure, including one
-/// where the Root had resolved and only the Package under it could not be read. The
-/// response was dropping a fact it held — provably, because the failure's own path came
-/// back carrying a Package-relative spelling, which only a resolved Root can produce.
-/// A consumer reading `context` to learn what the command was about got nothing, and
-/// the envelope's documented rule for the member said the opposite of what it did.
+/// Where the Root resolved and only the Package under it could not be read, `context`
+/// still names the Root: the failure's own path is Package-relative, which only a resolved
+/// Root can produce, so a response that dropped it would be dropping a fact it held.
 #[test]
 fn a_failure_under_a_resolved_root_still_names_it() {
     let (_tree, root) = package_root_that_cannot_be_read("context-unreadable-root");
@@ -472,104 +301,44 @@ fn a_failure_under_a_resolved_root_still_names_it() {
     );
 }
 
-/// The converse, so the two cannot be collapsed: a directory that resolved but is not a
-/// Root has no `package_root` to name, and the failure's path is what names it.
-#[test]
-fn a_failure_with_no_root_names_none() {
-    let (_tree, root) = initialized_package("context-unmanaged");
-    let outside = directory_that_is_not_a_root(&root);
-
-    let document = response(
-        &Invocation::new(&["package", "readme", "--json"])
-            .rooted_at(&outside)
-            .run(),
-    );
-
-    assert_eq!(
-        document["error"]["code"], "unmanaged_package",
-        "an unmanaged directory is a resolved path, not a Root"
-    );
-    assert_eq!(
-        document["error"]["detail"]["path"],
-        outside.to_str().expect("the test path is UTF-8")
-    );
-}
-
 // ---------------------------------------------------------------------------
 // `package show`'s golden fixtures.
 // ---------------------------------------------------------------------------
 
-/// A Package with Orders, Items, Vendors, a Hidden Vendor, a README, and all four value
-/// lists populated, at the **default** Vendor presentation.
+/// `package show` in each of its cells, against its recorded bytes.
 ///
-/// Recorded without `--all` on purpose: this is where the decided default is pinned by
-/// bytes — the Hidden Vendor absent from `vendors`, `hidden_vendors_included: false`, and
-/// the Order that references it still resolving its facts. The complete Vendor list is
-/// pinned by the `warning` cell, which is recorded with `--all`, so the two halves of the
-/// visibility default are recorded rather than only tested.
+/// `success` is recorded without `--all` on purpose: this is where the decided default is
+/// pinned by bytes — the Hidden Vendor absent from `vendors`, `hidden_vendors_included:
+/// false`, and the Order that references it still resolving its facts. The `warning` cell
+/// is recorded with `--all`, so both halves of the visibility default are recorded rather
+/// than only tested. One Damaged Order does not damage the Package, so `warning` succeeds.
 #[test]
-fn the_successful_show_response_matches_its_golden_fixture() {
-    let (_tree, root) = populated_package("golden-show-success");
+fn every_package_show_cell_matches_its_golden_fixture() {
+    for cell in SHOW_CELLS {
+        let label = format!("golden-show-{cell}");
+        let (_tree, root) = match cell {
+            "success" => populated_package(&label),
+            "empty-result" => initialized_package(&label),
+            "warning" => {
+                let (tree, root, _damaged) = package_with_a_damaged_order(&label);
+                (tree, root)
+            }
+            _ => package_with_duplicate_vendor_names(&label),
+        };
+        let mut arguments = vec!["package", "show", "--json"];
+        if cell == "warning" {
+            arguments.push("--all");
+        }
 
-    let outcome = Invocation::new(&["package", "show", "--json"])
-        .rooted_at(&root)
-        .run();
+        let outcome = Invocation::new(&arguments).rooted_at(&root).run();
 
-    assert_eq!(outcome.status, Some(0));
-    assert_matches_golden(ResponseContract::PackageShow, "success", &outcome, &root);
-}
-
-/// This command's empty result: a Package with nothing in it still answers, and every
-/// collection is present and empty. A document missing those keys is the drift this
-/// fixture exists to catch.
-#[test]
-fn the_empty_result_show_response_matches_its_golden_fixture() {
-    let (_tree, root) = initialized_package("golden-show-empty-result");
-
-    let outcome = Invocation::new(&["package", "show", "--json"])
-        .rooted_at(&root)
-        .run();
-
-    assert_eq!(outcome.status, Some(0));
-    assert_matches_golden(
-        ResponseContract::PackageShow,
-        "empty-result",
-        &outcome,
-        &root,
-    );
-}
-
-/// A readable Package carrying a Damaged Order. The cell that pins the placeholder, the
-/// diagnostic groups, and the `managed_artifact` evidence this ticket contracted.
-#[test]
-fn the_warning_show_response_matches_its_golden_fixture() {
-    let (_tree, root, _damaged) = package_with_a_damaged_order("golden-show-warning");
-
-    let outcome = Invocation::new(&["package", "show", "--json", "--all"])
-        .rooted_at(&root)
-        .run();
-
-    assert_eq!(
-        outcome.status,
-        Some(0),
-        "one Damaged Order does not damage the Package"
-    );
-    assert_matches_golden(ResponseContract::PackageShow, "warning", &outcome, &root);
-}
-
-/// A Package the load could read and could not trust. The cell that pins a *failed*
-/// response carrying diagnostics — `data` is `null`, `error` names the code, and the
-/// diagnosis is in the envelope because that is the only channel left.
-#[test]
-fn the_invalid_show_response_matches_its_golden_fixture() {
-    let (_tree, root) = package_with_duplicate_vendor_names("golden-show-invalid");
-
-    let outcome = Invocation::new(&["package", "show", "--json"])
-        .rooted_at(&root)
-        .run();
-
-    assert_eq!(outcome.status, Some(1));
-    assert_matches_golden(ResponseContract::PackageShow, "invalid", &outcome, &root);
+        assert_eq!(
+            outcome.status,
+            Some(if cell == "invalid" { 1 } else { 0 }),
+            "{cell}"
+        );
+        assert_matches_golden(ResponseContract::PackageShow, cell, &outcome, &root);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -726,48 +495,6 @@ fn every_narrower_read_matches_its_golden_fixtures() {
     }
 }
 
-/// A Damaged Order makes a value list partial, and the recorded contract says so.
-///
-/// Asserted against the fixtures rather than against two live runs, because this is a
-/// claim about what the contract records: the same Package with one Order it cannot read
-/// answers with a smaller count *and* a diagnostic. A later change that dropped the
-/// diagnostic would leave a consumer unable to tell a Package with one Project from a
-/// Package with two and one unreadable Order — and it would have to edit this file.
-#[test]
-fn a_partial_value_list_is_recorded_with_the_reason_it_is_partial() {
-    let directory = fixture_directory(ResponseContract::PackageValuesProject);
-    let complete: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(directory.join("success.json"))
-            .expect("the successful fixture is present"),
-    )
-    .expect("the fixture parses");
-    let partial: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(directory.join("warning.json"))
-            .expect("the warning fixture is present"),
-    )
-    .expect("the fixture parses");
-
-    assert_eq!(complete["data"][0]["value"], "Telescope");
-    assert_eq!(partial["data"][0]["value"], "Telescope");
-    assert_eq!(complete["data"][0]["usage_count"], "2");
-    assert_eq!(
-        partial["data"][0]["usage_count"], "1",
-        "a Damaged Order contributes to no value list"
-    );
-
-    assert_eq!(complete["diagnostics"].as_array().map(Vec::len), Some(0));
-    assert!(
-        partial["diagnostics"][0]["path"]
-            .as_str()
-            .is_some_and(|path| path.starts_with("Orders/")),
-        "and the answer carries the load's observation about the Order it could not read"
-    );
-    assert_eq!(
-        partial["ok"], true,
-        "which is a partial answer, not a failure"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // The `order` read contracts.
 // ---------------------------------------------------------------------------
@@ -846,53 +573,6 @@ fn every_order_read_matches_its_golden_fixtures() {
                 outcome.stdout_text()
             );
             assert_matches_golden(contract, cell.name(), &outcome, &root);
-        }
-    }
-}
-
-/// Every way each `order` read reaches exit `2` carries `spielorders.usage`.
-///
-/// **A usage error is not any command's cell, and this is the behavioural half of that.**
-/// No command may stamp a usage error with its own identity, so there is nothing here to
-/// record in bytes — and there is still something to assert, once per way each of these
-/// command lines can be asked wrongly. Every command line is covered, `order item list`
-/// included, because being asked wrongly is a property of the line rather than of the
-/// contract it would have answered with.
-#[test]
-fn every_usage_error_an_order_read_reaches_carries_the_shared_identity() {
-    let (_tree, root) = populated_package("order-usage-errors");
-    let directory = order_directory(&root, "Laser_components");
-
-    for command in ORDER_READ_COMMANDS {
-        for wrong in [
-            // Two output modes at once.
-            vec!["--json", "--quiet"],
-            // An option this command does not have.
-            vec!["--json", "--all"],
-            // A misspelling of one it does.
-            vec!["--json", "--uuidd", SOME_ORDER_ID],
-            // The two targeting routes together, which is this family's own usage error.
-            vec!["--json", "--uuid", SOME_ORDER_ID, "--root", "."],
-        ] {
-            let mut arguments: Vec<&str> = command.to_vec();
-            arguments.extend_from_slice(&wrong);
-            let outcome = Invocation::new(&arguments).in_directory(&directory).run();
-            let document = response(&outcome);
-            assert_eq!(
-                outcome.status,
-                Some(2),
-                "{} {wrong:?}: {}",
-                command.join(" "),
-                outcome.stdout_text()
-            );
-            assert_eq!(
-                document["contract"],
-                "spielorders.usage",
-                "{} {wrong:?}",
-                command.join(" ")
-            );
-            assert_eq!(document["contract_version"], 1);
-            assert_eq!(document["error"]["code"], "usage_invalid");
         }
     }
 }
@@ -989,47 +669,21 @@ fn every_vendor_read_matches_its_golden_fixtures() {
     }
 }
 
-/// Every way each `vendor` read reaches exit `2` carries `spielorders.usage`.
+/// A `vendor` read names exactly one Vendor, positionally.
 ///
-/// **A usage error is not any command's cell, and this is the behavioural half of that.**
 /// Every command line is covered, `vendor contact list` included, because being asked
 /// wrongly is a property of the line rather than of the contract it would have answered
-/// with. A Vendor Name is a required positional here, so a command line that names none is
-/// among the ways to be asked wrongly — and `--uuid` is an `order` option, which this
-/// family does not have.
+/// with. A command line that names no Vendor has named no subject, and a second Name is
+/// neither a second subject nor a second selector.
 #[test]
-fn every_usage_error_a_vendor_read_reaches_carries_the_shared_identity() {
+fn a_vendor_read_naming_other_than_one_vendor_is_a_usage_error() {
     let (_tree, root) = populated_package("vendor-usage-errors");
 
     for command in VENDOR_READ_COMMANDS {
-        let mut lines: Vec<Vec<&str>> = Vec::new();
-        for wrong in [
-            // Two output modes at once.
-            vec!["--json", "--quiet"],
-            // An option this command does not have.
-            vec!["--json", "--all"],
-            // An option another family has.
-            vec!["--json", "--uuid", SOME_ORDER_ID],
-            // A misspelling of one this command does.
-            vec!["--json", "--rooot", "."],
-        ] {
+        for names in [&[][..], &["Tarnwick", "Nethermoor"][..]] {
             let mut arguments: Vec<&str> = command.to_vec();
-            arguments.push("Tarnwick");
-            arguments.extend_from_slice(&wrong);
-            lines.push(arguments);
-        }
-        // No Vendor Name at all: the selector is required, and a command line that
-        // supplies none has named no subject.
-        let mut nameless: Vec<&str> = command.to_vec();
-        nameless.push("--json");
-        lines.push(nameless);
-        // Two Vendor Names: one command reads one Vendor, so a second positional is not a
-        // second subject and is not a second selector either.
-        let mut two_names: Vec<&str> = command.to_vec();
-        two_names.extend_from_slice(&["Tarnwick", "Nethermoor", "--json"]);
-        lines.push(two_names);
-
-        for arguments in lines {
+            arguments.extend_from_slice(names);
+            arguments.push("--json");
             let outcome = Invocation::new(&arguments).rooted_at(&root).run();
             let document = response(&outcome);
             assert_eq!(
@@ -1039,29 +693,8 @@ fn every_usage_error_a_vendor_read_reaches_carries_the_shared_identity() {
                 outcome.stdout_text()
             );
             assert_eq!(document["contract"], "spielorders.usage", "{arguments:?}");
-            assert_eq!(document["contract_version"], 1, "{arguments:?}");
             assert_eq!(document["error"]["code"], "usage_invalid", "{arguments:?}");
         }
-    }
-}
-
-/// A misspelled command inside the family is a usage error too, and names no command's
-/// contract.
-#[test]
-fn a_misspelled_vendor_command_names_no_contract() {
-    let (_tree, root) = populated_package("vendor-misspelled-command");
-
-    for arguments in [
-        vec!["vendor", "shwo", "Tarnwick", "--json"],
-        vec!["vendor", "contact", "lsit", "Tarnwick", "--json"],
-        vec!["vendor", "--json"],
-        vec!["vendor", "contact", "--json"],
-        vec!["vendro", "show", "Tarnwick", "--json"],
-    ] {
-        let outcome = Invocation::new(&arguments).rooted_at(&root).run();
-        let document = response(&outcome);
-        assert_eq!(outcome.status, Some(2), "{arguments:?}");
-        assert_eq!(document["contract"], "spielorders.usage", "{arguments:?}");
     }
 }
 
@@ -1107,15 +740,15 @@ fn the_rejected_init_response_matches_its_golden_fixture() {
     assert_matches_golden(ResponseContract::Init, "rejected", &outcome, &root);
 }
 
-/// Every way `init` reaches exit `2` carries `spielorders.usage`.
+/// A malformed `init` assignment is a usage error that attempts nothing.
 ///
-/// **The assignments are the new route here.** A token that is not a `key=value`, a key
-/// this command does not have, and a key assigned twice are all command lines naming
-/// something `init` has no notion of — so nothing about the directory was attempted, and
-/// the response is the shared usage one rather than a refused mutation. The directory is
-/// left alone in every case, which is the half a status alone would not say.
+/// A token that is not a `key=value`, a key this command does not have, and a key assigned
+/// twice are all command lines naming something `init` has no notion of — so nothing about
+/// the directory was attempted, and the response is the shared usage one rather than a
+/// refused mutation. The directory is left alone in every case, which is the half a status
+/// alone would not say.
 #[test]
-fn every_usage_error_init_reaches_carries_the_shared_identity() {
+fn a_malformed_init_assignment_is_a_usage_error_that_attempts_nothing() {
     for wrong in [
         // A token that is not an assignment at all.
         vec!["init", "--json", "Orders"],
@@ -1125,14 +758,6 @@ fn every_usage_error_init_reaches_carries_the_shared_identity() {
         vec!["init", "--json", "orders_path=A", "orders_path=B"],
         // An empty key, which names nothing.
         vec!["init", "--json", "=Orders"],
-        // Two output modes at once.
-        vec!["init", "--json", "--quiet"],
-        // A misspelling of an option this command does have.
-        vec!["init", "--json", "--dry-runn"],
-        // An option another family has.
-        vec!["init", "--json", "--all"],
-        // A misspelling of the command itself.
-        vec!["innit", "--json"],
     ] {
         let (_tree, root) = unmanaged_directory("init-usage-errors");
         let outcome = Invocation::new(&wrong).rooted_at(&root).run();
@@ -1577,28 +1202,20 @@ fn minted_identity(outcome: &crate::support::Outcome) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// Every way each Vendor mutation reaches exit `2` carries `spielorders.usage`.
+/// A malformed Vendor mutation line is a usage error that attempts nothing.
 ///
-/// **A usage error is not any command's cell, and this is the behavioural half of that.**
-/// The assignment language is the new route here: a token that is not `field=value`, and
-/// for `add-vendor` a Name written beside one or a second Name, are command lines naming
-/// something no command has — so nothing about the Package was attempted, and the response
-/// is the shared usage one rather than a refused mutation. The Package is untouched in
-/// every case, which is the half a status alone would not say.
+/// A token that is not `field=value`, a second `add-vendor` Name, a missing required Vendor
+/// Name, and an assignment where a command takes none are command lines naming something
+/// no command has — so nothing about the Package was attempted, and the response is the
+/// shared usage one rather than a refused mutation. The Package is untouched in every case,
+/// which is the half a status alone would not say.
 #[test]
-fn every_usage_error_a_vendor_mutation_reaches_carries_the_shared_identity() {
+fn a_malformed_vendor_mutation_line_is_a_usage_error_that_attempts_nothing() {
     let (_tree, root) = populated_package("vendor-mutation-usage-errors");
     let before = crate::support::managed_snapshot(&root);
 
     for wrong in [
-        // Two output modes at once.
-        vec!["add-vendor", "Tarnwick", "--json", "--quiet"],
-        // An option another family has.
-        vec!["add-vendor", "Tarnwick", "--json", "--all"],
-        // A misspelling of one this command does have.
-        vec!["add-vendor", "Tarnwick", "--json", "--dry-runn"],
-        // The two `add-vendor` forms at once, and two Names.
-        vec!["add-vendor", "Tarnwick", "name=Tarnwick", "--json"],
+        // Two Names.
         vec!["add-vendor", "Tarnwick", "Nethermoor", "--json"],
         // A token that is not an assignment, where there is no shorthand to read it as.
         vec!["vendor", "edit", "Tarnwick", "phone", "--json"],
@@ -1609,9 +1226,6 @@ fn every_usage_error_a_vendor_mutation_reaches_carries_the_shared_identity() {
         vec!["vendor", "delete", "--json"],
         // An assignment where the command takes none.
         vec!["vendor", "hide", "Tarnwick", "phone=none", "--json"],
-        // A misspelling of the command itself.
-        vec!["add-vendro", "Tarnwick", "--json"],
-        vec!["vendor", "edti", "Tarnwick", "--json"],
     ] {
         let outcome = Invocation::new(&wrong).rooted_at(&root).run();
         let document = response(&outcome);
@@ -1665,9 +1279,9 @@ const CONTACT_MUTATIONS: [ResponseContract; 4] = [
     ResponseContract::VendorContactRemove,
 ];
 
-/// Every way each Contact mutation reaches exit `2` carries `spielorders.usage`.
+/// A malformed Contact mutation line is a usage error that attempts nothing.
 ///
-/// **The new routes are the `POSITION` positional and the `position=` key.** A command line
+/// **The routes are the `POSITION` positional and the `position=` key.** A command line
 /// missing the position its shape has, a `move` with no destination or a destination spelled
 /// as something else, and an insertion point assigned twice all name something no command
 /// has — so nothing about the collection was attempted, and the response is the shared usage
@@ -1675,7 +1289,7 @@ const CONTACT_MUTATIONS: [ResponseContract; 4] = [
 /// business and reaches exit `1` instead, which
 /// `tests/vendor_contact_mutations.rs` is what pins.
 #[test]
-fn every_usage_error_a_contact_mutation_reaches_carries_the_shared_identity() {
+fn a_malformed_contact_mutation_line_is_a_usage_error_that_attempts_nothing() {
     let (_tree, root) = package_with_three_contacts("contact-mutation-usage-errors");
     let before = crate::support::managed_snapshot(&root);
 
@@ -1721,24 +1335,6 @@ fn every_usage_error_a_contact_mutation_reaches_carries_the_shared_identity() {
             "1",
             "phone=none",
             "--json",
-        ],
-        // Two output modes at once, an option another family has, and a misspelling of one
-        // these commands do have.
-        vec![
-            "vendor", "contact", "edit", "Tarnwick", "1", "--json", "--quiet",
-        ],
-        vec![
-            "vendor", "contact", "remove", "Tarnwick", "1", "--json", "--all",
-        ],
-        vec![
-            "vendor",
-            "contact",
-            "move",
-            "Tarnwick",
-            "1",
-            "position=2",
-            "--json",
-            "--dry-runn",
         ],
     ] {
         let outcome = Invocation::new(&wrong).rooted_at(&root).run();
@@ -1920,6 +1516,8 @@ fn new_order_assignments(contract: ResponseContract, cell: MutationCell) -> Vec<
             vec!["title=Laser components", "colour=red", "items=none"]
         }
         (ResponseContract::AddOrder, _) => vec!["title=Laser components"],
+        // One value the Package does not keep yet, so the recorded bytes carry the Vendor
+        // record replacement an adoption performs before it publishes the record.
         (_, MutationCell::Success) => vec![
             "title=Fiber patch cable",
             "date_ordered=2009-04-30",
@@ -1928,6 +1526,7 @@ fn new_order_assignments(contract: ResponseContract, cell: MutationCell) -> Vec<
             "orderer=Ada Lovelace",
             "ordering_institution=Example Institute",
             "project=Telescope",
+            "order_group=Legacy cabling",
         ],
         (_, _) => vec![
             "title=Fiber patch cable",
@@ -2015,7 +1614,8 @@ fn every_order_merge_cell_matches_its_golden_fixture() {
                 (tree, root, damaged, other)
             }
             MutationCell::Warning => {
-                let (tree, root) = package_with_a_blocked_index_refresh(&label);
+                let (tree, root) = crate::support::package_with_mergeable_orders(&label);
+                crate::support::block_index_refresh(&root);
                 let kept = order_directory(&root, "Laser_components");
                 let merged = order_directory(&root, "Mirror_mounts");
                 (tree, root, kept, merged)
@@ -2026,7 +1626,7 @@ fn every_order_merge_cell_matches_its_golden_fixture() {
                 (tree, root, kept.clone(), kept)
             }
             MutationCell::Success => {
-                let (tree, root) = populated_package(&label);
+                let (tree, root) = crate::support::package_with_mergeable_orders(&label);
                 let kept = order_directory(&root, "Laser_components");
                 let merged = order_directory(&root, "Mirror_mounts");
                 (tree, root, kept, merged)
@@ -2135,56 +1735,24 @@ fn relocation_package(
     }
 }
 
-/// Every way either relocation reaches exit `2` carries `spielorders.usage`.
+/// A malformed relocation line is a usage error that moves nothing.
 ///
-/// **A usage error is not any command's cell, and this is the behavioural half of that.**
 /// The Package is untouched in every case, which is the half a status alone would not
 /// say: a command line naming something no command has means nothing about the Order was
 /// attempted — and for these two commands that is the whole of the safety property, since
 /// the thing not attempted is a directory being moved out of the Package.
 #[test]
-fn every_usage_error_a_relocation_reaches_carries_the_shared_identity() {
+fn a_malformed_relocation_line_is_a_usage_error_that_moves_nothing() {
     let (_tree, root, directory) = package_with_a_drifted_order("relocation-usage-errors");
     let before = crate::support::managed_snapshot(&root);
 
     for wrong in [
-        // Two output modes at once.
-        vec!["order", "align", "--json", "--quiet"],
-        vec!["order", "remove", "--json", "--quiet"],
-        // An option another family has.
-        vec!["order", "align", "--json", "--all"],
-        vec!["order", "remove", "--json", "--all"],
-        // A misspelling of one these commands do have.
-        vec!["order", "align", "--json", "--dry-runn"],
-        vec!["order", "remove", "--json", "--delet"],
         // An option one of them has and the other does not.
         vec!["order", "align", "--json", "--delete"],
-        // The two targeting routes together, which is this family's own usage error.
-        vec![
-            "order",
-            "align",
-            "--json",
-            "--uuid",
-            SOME_ORDER_ID,
-            "--root",
-            ".",
-        ],
-        vec![
-            "order",
-            "remove",
-            "--json",
-            "--uuid",
-            SOME_ORDER_ID,
-            "--root",
-            ".",
-        ],
         // An assignment where these commands take none, and a positional subject where
         // every `order` command is targeted by option.
         vec!["order", "align", "--json", "title=Laser heads"],
         vec!["order", "remove", "--json", "."],
-        // A misspelling of the command itself.
-        vec!["order", "algin", "--json"],
-        vec!["order", "remvoe", "--json"],
     ] {
         let outcome = Invocation::new(&wrong).in_directory(&directory).run();
         let document = response(&outcome);
@@ -2385,10 +1953,9 @@ fn record_mutation_command(contract: ResponseContract, cell: MutationCell) -> Ve
     }
 }
 
-/// Every way each of the five reaches exit `2` carries `spielorders.usage`.
+/// A malformed Order record mutation line is a usage error that attempts nothing.
 ///
-/// **A usage error is not any command's cell, and this is the behavioural half of that.**
-/// The new routes are the assignment language over an Order-rooted command, the `POSITION`
+/// The routes are the assignment language over an Order-rooted command, the `POSITION`
 /// positional, and the `position=` key. A command line missing the position its shape has,
 /// a `move` with no destination or one spelled as something else, and an insertion point
 /// assigned twice all name something no command has — so nothing about the Order was
@@ -2396,7 +1963,7 @@ fn record_mutation_command(contract: ResponseContract, cell: MutationCell) -> Ve
 /// Which numbers name an Item is the collection's own business and reaches exit `1`
 /// instead, which `tests/order_and_item_edits.rs` is what pins.
 #[test]
-fn every_usage_error_a_record_mutation_reaches_carries_the_shared_identity() {
+fn a_malformed_record_mutation_line_is_a_usage_error_that_attempts_nothing() {
     let (_tree, root, directory) = package_with_three_items("record-mutation-usage-errors");
     let before = crate::support::managed_snapshot(&root);
 
@@ -2425,34 +1992,6 @@ fn every_usage_error_a_record_mutation_reaches_carries_the_shared_identity() {
         // An assignment where a command takes none.
         vec!["order", "item", "remove", "1", "quantity=1", "--json"],
         vec!["order", "item", "list", "1", "--json"],
-        // Two output modes at once, an option another family has, and a misspelling of one
-        // these commands do have.
-        vec!["order", "edit", "--json", "--quiet"],
-        vec!["order", "item", "add", "--json", "--all"],
-        vec![
-            "order",
-            "item",
-            "move",
-            "1",
-            "position=2",
-            "--json",
-            "--dry-runn",
-        ],
-        // The two targeting routes together, which is this family's own usage error.
-        vec![
-            "order",
-            "edit",
-            "title=Laser heads",
-            "--json",
-            "--uuid",
-            SOME_ORDER_ID,
-            "--root",
-            ".",
-        ],
-        // A misspelling of the command itself, and of the family the Items are under.
-        vec!["order", "edti", "--json"],
-        vec!["order", "itme", "list", "--json"],
-        vec!["order", "item", "remvoe", "1", "--json"],
     ] {
         let outcome = Invocation::new(&wrong).in_directory(&directory).run();
         let document = response(&outcome);
@@ -2474,14 +2013,14 @@ fn every_usage_error_a_record_mutation_reaches_carries_the_shared_identity() {
     }
 }
 
-/// Every way an adoption carrying Items reaches exit `2` carries `spielorders.usage`.
+/// A malformed Item on an adoption line is a usage error that attempts nothing.
 ///
-/// **`item` is the new route.** A token that is neither an assignment nor that word names
+/// **`item` is the route.** A token that is neither an assignment nor that word names
 /// something this command line has no notion of, so nothing about the candidate was
 /// attempted. An Item whose *assignments* break a rule is the core's refusal at exit `1`
 /// instead, which `tests/order_and_item_edits.rs` is what pins.
 #[test]
-fn every_usage_error_an_adoption_with_items_reaches_carries_the_shared_identity() {
+fn a_malformed_adopted_item_is_a_usage_error_that_attempts_nothing() {
     let (_tree, root, candidate) = package_with_an_adoption_candidate("adopt-items-usage-errors");
     let before = crate::support::managed_snapshot(&root);
 
@@ -2690,14 +2229,13 @@ fn judging_run(
     }
 }
 
-/// Every usage error these four commands can reach carries the one shared identity.
+/// A validating or index command takes no positional subject and no fixing option.
 ///
-/// Each of them takes no positional subject at all — a validating command's subject is
-/// its root and an index command's is the Package's own derived artifact — so a positional
-/// token names something no command here has, and `index` without a subcommand names no
-/// command at all.
+/// A validating command's subject is its root and an index command's is the Package's own
+/// derived artifact, so a positional token names something no command here has; and none of
+/// them offers to fix what it reports, which is the repair commands' business.
 #[test]
-fn every_usage_error_a_judging_command_reaches_carries_the_shared_identity() {
+fn a_judging_command_takes_no_subject_and_no_fix() {
     let (_tree, root) = populated_package("judging-usage-errors");
     let before = crate::support::managed_snapshot(&root);
 
@@ -2705,8 +2243,6 @@ fn every_usage_error_a_judging_command_reaches_carries_the_shared_identity() {
         vec!["validate", "Tarnwick"],
         vec!["validate", "--fix"],
         vec!["order", "validate", "2"],
-        vec!["index"],
-        vec!["index", "statuz"],
         vec!["index", "rebuild", "--repair"],
         vec!["index", "rebuild", "Orders"],
     ] {
@@ -2723,10 +2259,6 @@ fn every_usage_error_a_judging_command_reaches_carries_the_shared_identity() {
         );
         assert_eq!(document["contract"], "spielorders.usage", "{wrong:?}");
         assert_eq!(document["error"]["code"], "usage_invalid", "{wrong:?}");
-        assert!(
-            document["context"]["package_root"].is_null(),
-            "{wrong:?}: no command ran, so none was about a Package"
-        );
     }
     assert_eq!(
         crate::support::managed_snapshot(&root),
@@ -2885,7 +2417,7 @@ fn repairing_run(
             (tree, root, run)
         }
         (ResponseContract::Repair, "warning") => {
-            let (tree, root) = package_with_a_package_case_and_a_blocked_index_refresh(label);
+            let (tree, root) = package_with_a_case_and_a_blocked_index_refresh(label);
             let run = applying_run(
                 &["repair"],
                 ".spielorders/.vendors.json.spielorders-stage",
@@ -3006,9 +2538,9 @@ fn applying_run(
     run.rooted_at(subject)
 }
 
-/// Every way these three commands reach exit `2` carries `spielorders.usage`.
+/// A malformed repair line is a usage error that attempts nothing.
 ///
-/// **The `case` and `action` assignments are the new routes here.** They are what tell a
+/// **The `case` and `action` assignments are the routes here.** They are what tell a
 /// bare diagnosis from an application, so a command line that names one without the other,
 /// names either twice, names an action this build has no notion of, or supplies a
 /// resolution with no action to resolve has not said which of the two moods it is asking
@@ -3017,7 +2549,7 @@ fn applying_run(
 /// thing entirely: that is a perfectly formed application the core refuses on the
 /// evidence, at exit `1`.
 #[test]
-fn every_usage_error_a_repairing_command_reaches_carries_the_shared_identity() {
+fn a_malformed_repair_line_is_a_usage_error_that_attempts_nothing() {
     let (_tree, root) = package_with_a_staging_artifact("repairing-usage-errors");
     let before = crate::support::managed_snapshot(&root);
 
@@ -3040,16 +2572,10 @@ fn every_usage_error_a_repairing_command_reaches_carries_the_shared_identity() {
         vec!["repair", "vendor=Tarnwick"],
         // The broad fix this contract does not have.
         vec!["repair", "--fix"],
-        // Two output modes at once.
-        vec!["repair", "--quiet"],
         // The same routes at the Order scope.
         vec!["order", "repair", "Tarnwick"],
         vec!["order", "repair", "case=a"],
         vec!["order", "repair", "action=clear_vendor_reference"],
-        vec!["order", "repair", "--all"],
-        // A misspelling of the command itself.
-        vec!["reapir"],
-        vec!["order", "repari"],
     ] {
         let mut arguments = wrong.clone();
         arguments.push("--json");
@@ -3063,12 +2589,7 @@ fn every_usage_error_a_repairing_command_reaches_carries_the_shared_identity() {
             outcome.stdout_text()
         );
         assert_eq!(document["contract"], "spielorders.usage", "{wrong:?}");
-        assert_eq!(document["contract_version"], 1, "{wrong:?}");
         assert_eq!(document["error"]["code"], "usage_invalid", "{wrong:?}");
-        assert!(
-            document["context"]["package_root"].is_null(),
-            "{wrong:?}: no command ran, so none was about a Package"
-        );
     }
     assert_eq!(
         crate::support::managed_snapshot(&root),

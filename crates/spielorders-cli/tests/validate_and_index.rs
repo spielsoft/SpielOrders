@@ -6,9 +6,9 @@
 //! evolution.
 
 use crate::support::{
-    Invocation, Outcome, change_order_record, damage_index, managed_snapshot, modification_time,
-    package_with_a_staging_artifact, package_with_an_impossible_date, populated_package,
-    remove_index, response, reversion_index,
+    Invocation, Outcome, change_order_record, damage_index, future_index, managed_snapshot,
+    modification_time, package_with_a_staging_artifact, package_with_an_impossible_date,
+    populated_package, remove_index, response,
 };
 use serde_json::Value;
 use std::path::Path;
@@ -79,8 +79,9 @@ fn index_status(root: &Path) -> Outcome {
         .run()
 }
 
-/// A healthy Package is valid at exit `0` with a present, empty diagnostics collection;
-/// an error-severity finding is invalid at exit `1` and the diagnostics are the answer.
+/// A healthy Package is valid at exit `0` with present, empty diagnostics and repair-case
+/// collections; an error-severity finding is invalid at exit `1` and the diagnostics are
+/// the answer.
 #[test]
 fn validity_is_decided_by_severity_and_the_diagnostics_are_the_answer() {
     let (_healthy_tree, healthy) = populated_package("validate-healthy");
@@ -89,6 +90,7 @@ fn validity_is_decided_by_severity_and_the_diagnostics_are_the_answer() {
     let document = response(&outcome);
     assert_eq!(document["ok"], true);
     assert_eq!(findings(&document), Vec::new());
+    assert_eq!(document["data"]["cases"], serde_json::json!([]));
 
     let (_invalid_tree, invalid, _order) = package_with_an_impossible_date("validate-invalid");
     let outcome = validate(&invalid);
@@ -106,9 +108,7 @@ fn validity_is_decided_by_severity_and_the_diagnostics_are_the_answer() {
 /// A Package whose only finding is a warning is valid, exits `0`, and reports the warning
 /// and the repair it offers in full.
 ///
-/// The owner ruling this pins: severity alone decides the status, and the availability of
-/// a repair never does. A leftover staging artifact beside a valid destination is exactly
-/// the case that used to have to exit both `0` and `1`.
+/// Severity alone decides the status, and the availability of a repair never does.
 #[test]
 fn a_warning_leaves_the_package_valid_however_the_repair_it_offers_is_reported() {
     let (_tree, root) = package_with_a_staging_artifact("validate-warning");
@@ -132,9 +132,13 @@ fn a_warning_leaves_the_package_valid_however_the_repair_it_offers_is_reported()
         panic!("one case: {document}")
     };
     assert_eq!(case["code"], "staging_artifact_present");
-    assert_eq!(
-        case["actions"],
-        serde_json::json!([{"action": "promote_staging_candidate", "required_values": []}])
+    assert_eq!(case["actions"][0]["action"], "promote_staging_candidate");
+    assert_eq!(case["actions"][0]["required_values"], serde_json::json!([]));
+    assert!(
+        case["actions"][0]["command"]
+            .as_str()
+            .is_some_and(|command| command.starts_with("spielorders repair --root ")),
+        "the action names the Package repair that applies it: {case}"
     );
 
     // The human surface reports the finding and the repair offered for it.
@@ -226,10 +230,18 @@ fn a_package_scoped_suggestion_acts_on_the_package_it_was_printed_about() {
         "`{suggested}` applies: {}",
         outcome.stdout_text()
     );
+    assert!(
+        !root
+            .join(".spielorders/.vendors.json.spielorders-stage")
+            .exists(),
+        "and it acted on the Package the finding was about: the leftover stage is consumed"
+    );
     let after = findings(&response(&validate(&root)));
     assert!(
-        !after.contains(&("package".to_owned(), "staging_artifact_present".to_owned())),
-        "and it acted on the Package the finding was about: {after:?}"
+        after
+            .iter()
+            .all(|(_, code)| code != "staging_artifact_present"),
+        "and validating it again finds nothing left to promote: {after:?}"
     );
 }
 
@@ -294,7 +306,7 @@ fn index_status_reports_every_state_and_writes_nothing() {
         ),
         (
             "wrong-version",
-            Some(reversion_index as fn(&Path)),
+            Some(future_index as fn(&Path)),
             "wrong_version",
             Vec::new(),
         ),

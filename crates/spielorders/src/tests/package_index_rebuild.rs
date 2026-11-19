@@ -2,12 +2,10 @@
 //! Define the stable diagnostic vocabulary and evidence contract; Define the complete
 //! Package read projection and load-state contract.
 
-use crate::Coded;
 use crate::Failure;
 use crate::ports::FileSystemEntryKind;
-use crate::tests::support::assert_reported_beside;
 use crate::tests::support::{
-    FailedCommit, Index, Operation, PlatformFileSystem, ScriptedFileSystem, TemporaryTree, effects,
+    Index, Operation, PlatformFileSystem, ScriptedFileSystem, TemporaryTree, effects,
     enumerate_orders_as, failed_location, minimal_package, opened, rebuild_index,
 };
 use crate::{ChangeResult, Report};
@@ -67,22 +65,29 @@ fn rebuilt<F: crate::ports::FileSystem>(root: &Path, filesystem: &F) -> Result<(
     }
 }
 
+/// A missing, malformed, or stale index is rebuilt to the deterministic bytes, and no
+/// staging artifact is left behind.
 #[test]
-fn missing_index_is_rebuilt_exactly_and_the_package_becomes_available() {
-    let filesystem = minimal_package();
+fn a_missing_malformed_or_stale_index_is_rebuilt_exactly() {
+    for old_index in [None, Some(b"{ malformed".as_slice()), Some(MINIMAL_INDEX)] {
+        let filesystem = minimal_package();
+        if let Some(old_index) = old_index {
+            filesystem.put_file("/package/.spielorders/index.json", old_index);
+        }
 
-    assert!(
-        rebuilt(Path::new("/package"), &filesystem).is_ok(),
-        "a successful index rebuild makes the Package available"
-    );
-    assert_eq!(
-        filesystem.bytes("/package/.spielorders/index.json"),
-        Some(MINIMAL_INDEX.to_vec())
-    );
-    assert!(
-        !filesystem.exists("/package/.spielorders/.index.json.spielorders-stage"),
-        "no staging artifact is left behind"
-    );
+        assert!(
+            rebuilt(Path::new("/package"), &filesystem).is_ok(),
+            "the derived-index rebuild succeeds"
+        );
+        assert_eq!(
+            filesystem.bytes("/package/.spielorders/index.json"),
+            Some(MINIMAL_INDEX.to_vec())
+        );
+        assert!(
+            !filesystem.exists("/package/.spielorders/.index.json.spielorders-stage"),
+            "no staging artifact is left behind"
+        );
+    }
 }
 
 #[test]
@@ -107,297 +112,184 @@ fn index_kind_observation_failure_is_an_operation_failure_without_replacement() 
     assert_eq!(filesystem.effects(), []);
 }
 
+/// Each way an index can be unusable is assessed with its own reason, and the stored
+/// bytes are left exactly as they were.
 #[test]
-fn staging_write_failure_refuses_the_rebuild_and_leaves_the_index_missing() {
-    let filesystem = minimal_package();
-    filesystem.on(Operation::WriteNew).fails();
-
-    let Err(failed) = rebuilt(Path::new("/package"), &filesystem) else {
-        panic!("a replacement failure refuses the rebuild")
-    };
-    assert_reported_beside(&failed);
-    assert!(failed.cleanup_failures().is_empty());
-    assert_eq!(
-        failed.failure().location.package_relative_path.as_deref(),
-        Some(".spielorders/index.json")
-    );
-    assert!(!filesystem.exists("/package/.spielorders/index.json"));
-}
-
-#[test]
-fn wrong_kind_index_preserves_the_exact_malformed_reason() {
-    let filesystem = minimal_package();
-    filesystem.put_entry(
-        "/package/.spielorders/index.json",
-        FileSystemEntryKind::Directory,
-    );
-
-    let Ok(failed) = opened(Path::new("/package"), &filesystem).result else {
-        panic!("the injected replacement failure preserves the original assessment")
-    };
-
-    assert_eq!(failed.contents.index.state, PackageIndexState::Malformed);
-    assert_eq!(
-        failed.contents.index.malformed_reasons,
-        &[PackageIndexMalformedReason::WrongKind]
-    );
-}
-
-#[test]
-fn unreadable_index_preserves_the_exact_malformed_reason() {
-    let filesystem = minimal_package();
-    filesystem.put_file("/package/.spielorders/index.json", MINIMAL_INDEX);
-    filesystem
-        .on(Operation::Read)
-        .at("/package/.spielorders/index.json")
-        .fails();
-
-    let Ok(failed) = opened(Path::new("/package"), &filesystem).result else {
-        panic!("the injected replacement failure preserves the original assessment")
-    };
-
-    assert_eq!(failed.contents.index.state, PackageIndexState::Malformed);
-    assert_eq!(
-        failed.contents.index.malformed_reasons,
-        &[PackageIndexMalformedReason::Unreadable]
-    );
-}
-
-#[test]
-fn invalid_encoding_preserves_reason_and_old_bytes_on_replacement_failure() {
-    let filesystem = minimal_package();
-    filesystem.put_file("/package/.spielorders/index.json", &[0xff]);
-
-    let Ok(failed) = opened(Path::new("/package"), &filesystem).result else {
-        panic!("the injected replacement failure preserves the original assessment")
-    };
-
-    assert_eq!(
-        failed.contents.index.malformed_reasons,
-        &[PackageIndexMalformedReason::InvalidEncoding]
-    );
-    assert_eq!(
-        filesystem.bytes("/package/.spielorders/index.json"),
-        Some(vec![0xff])
-    );
-}
-
-#[test]
-fn invalid_syntax_preserves_the_exact_malformed_reason() {
-    let filesystem = minimal_package();
-    filesystem.put_file("/package/.spielorders/index.json", b"{ malformed");
-
-    let Ok(failed) = opened(Path::new("/package"), &filesystem).result else {
-        panic!("the injected replacement failure preserves the original assessment")
-    };
-
-    assert_eq!(
-        failed.contents.index.malformed_reasons,
-        &[PackageIndexMalformedReason::InvalidSyntax]
-    );
-}
-
-#[test]
-fn invalid_shape_preserves_the_exact_malformed_reason() {
-    let filesystem = minimal_package();
-    filesystem.put_file(
-        "/package/.spielorders/index.json",
-        b"{\"schema_version\":1,\"orders\":[]}",
-    );
-
-    let Ok(failed) = opened(Path::new("/package"), &filesystem).result else {
-        panic!("the injected replacement failure preserves the original assessment")
-    };
-
-    assert_eq!(
-        failed.contents.index.malformed_reasons,
-        &[PackageIndexMalformedReason::InvalidShape]
-    );
-}
-
-#[test]
-fn recognizable_wrong_version_is_distinct_from_malformed() {
-    let filesystem = minimal_package();
-    filesystem.put_file(
-        "/package/.spielorders/index.json",
-        b"{\"schema_version\":2,\"orders\":[],\"vendors\":[]}",
-    );
-
-    let Ok(failed) = opened(Path::new("/package"), &filesystem).result else {
-        panic!("the injected replacement failure preserves the original assessment")
-    };
-
-    assert_eq!(failed.contents.index.state, PackageIndexState::WrongVersion);
-    assert!(failed.contents.index.malformed_reasons.is_empty());
-}
-
-#[test]
-fn semantically_invalid_embedded_order_is_malformed_before_freshness() {
-    let filesystem = minimal_package();
+fn every_unusable_index_is_assessed_with_its_own_reason() {
+    let unnormalized = Index::from_json_bytes(
+        FULL_INDEX
+            .replacen("Laser components", " Laser components ", 1)
+            .as_bytes(),
+    )
+    .unwrap()
+    .to_json_bytes()
+    .unwrap();
     let impossible_date = FULL_INDEX.replacen("2026-07-19", "2026-02-31", 1);
-    filesystem.put_file(
-        "/package/.spielorders/index.json",
-        impossible_date.as_bytes(),
-    );
-
-    let Ok(failed) = opened(Path::new("/package"), &filesystem).result else {
-        panic!("the injected replacement failure preserves the original assessment")
-    };
-
-    assert_eq!(failed.contents.index.state, PackageIndexState::Malformed);
-    assert_eq!(
-        failed.contents.index.malformed_reasons,
-        &[PackageIndexMalformedReason::InvalidSemantics]
-    );
-}
-
-#[test]
-fn valid_noncanonical_json_preserves_non_deterministic_serialization_reason() {
-    let filesystem = minimal_package();
-    // The deterministic index fixture, made non-canonical here rather than relied
-    // upon to be non-canonical.
+    // The deterministic index fixture, made non-canonical here rather than relied upon
+    // to be non-canonical.
     let non_deterministic = [MINIMAL_INDEX, b"\n"].concat();
-    filesystem.put_file("/package/.spielorders/index.json", &non_deterministic);
-
-    let Ok(failed) = opened(Path::new("/package"), &filesystem).result else {
-        panic!("the injected replacement failure preserves the original assessment")
-    };
-
-    assert_eq!(
-        failed.contents.index.malformed_reasons,
-        &[PackageIndexMalformedReason::NonDeterministicSerialization]
+    /// What is stored at the index path (a directory where absent), and its assessment.
+    type Case<'a> = (
+        &'a str,
+        Option<&'a [u8]>,
+        PackageIndexState,
+        &'a [PackageIndexMalformedReason],
     );
+    let cases: [Case; 9] = [
+        (
+            "a directory",
+            None,
+            PackageIndexState::Malformed,
+            &[PackageIndexMalformedReason::WrongKind],
+        ),
+        (
+            "unreadable",
+            Some(MINIMAL_INDEX),
+            PackageIndexState::Malformed,
+            &[PackageIndexMalformedReason::Unreadable],
+        ),
+        (
+            "not UTF-8",
+            Some(&[0xff]),
+            PackageIndexState::Malformed,
+            &[PackageIndexMalformedReason::InvalidEncoding],
+        ),
+        (
+            "not JSON",
+            Some(b"{ malformed"),
+            PackageIndexState::Malformed,
+            &[PackageIndexMalformedReason::InvalidSyntax],
+        ),
+        (
+            "missing vendors",
+            Some(b"{\"schema_version\":1,\"orders\":[]}"),
+            PackageIndexState::Malformed,
+            &[PackageIndexMalformedReason::InvalidShape],
+        ),
+        (
+            "an impossible embedded date",
+            Some(impossible_date.as_bytes()),
+            PackageIndexState::Malformed,
+            &[PackageIndexMalformedReason::InvalidSemantics],
+        ),
+        (
+            "unnormalized embedded metadata",
+            Some(&unnormalized),
+            PackageIndexState::Malformed,
+            &[PackageIndexMalformedReason::InvalidSemantics],
+        ),
+        (
+            "non-deterministic serialization",
+            Some(&non_deterministic),
+            PackageIndexState::Malformed,
+            &[PackageIndexMalformedReason::NonDeterministicSerialization],
+        ),
+        (
+            "a recognizable other version",
+            Some(b"{\"schema_version\":2,\"orders\":[],\"vendors\":[]}"),
+            PackageIndexState::WrongVersion,
+            &[],
+        ),
+    ];
+
+    for (case, stored, state, reasons) in cases {
+        let filesystem = minimal_package();
+        match stored {
+            Some(bytes) => filesystem.put_file("/package/.spielorders/index.json", bytes),
+            None => filesystem.put_entry(
+                "/package/.spielorders/index.json",
+                FileSystemEntryKind::Directory,
+            ),
+        }
+        if case == "unreadable" {
+            filesystem
+                .on(Operation::Read)
+                .at("/package/.spielorders/index.json")
+                .fails();
+        }
+
+        let Ok(package) = opened(Path::new("/package"), &filesystem).result else {
+            panic!("{case}: a Package whose only problem is its index opens")
+        };
+
+        assert_eq!(package.contents.index.state, state, "{case}");
+        assert_eq!(package.contents.index.malformed_reasons, reasons, "{case}");
+        assert_eq!(
+            filesystem
+                .bytes("/package/.spielorders/index.json")
+                .as_deref(),
+            stored,
+            "{case}: the stored index is left as it was"
+        );
+    }
 }
 
+/// Each way a well-formed index can disagree with the canonical records is reported as
+/// its own stale reason, in a stable order.
 #[test]
-fn changed_membership() {
-    let filesystem = minimal_package();
-    filesystem.put_entry("/package/Orders/Order", FileSystemEntryKind::Directory);
-    filesystem.put_file(
-        "/package/Orders/Order/.spielorders/order.json",
-        MINIMAL_ORDER,
-    );
-    filesystem.put_file("/package/.spielorders/index.json", MINIMAL_INDEX);
-
-    let Ok(failed) = opened(Path::new("/package"), &filesystem).result else {
-        panic!("the injected replacement failure preserves the stale reasons")
+fn every_disagreement_with_canonical_records_is_its_own_stale_reason() {
+    let at_order = String::from_utf8(WRONG_PATH_INDEX.to_vec())
+        .unwrap()
+        .replacen("Elsewhere/Order", "Orders/Order", 1);
+    let former_title = at_order.replacen("Laser components", "Former title", 1);
+    let with_order = |index: &[u8]| {
+        let filesystem = minimal_package();
+        filesystem.put_entry("/package/Orders/Order", FileSystemEntryKind::Directory);
+        filesystem.put_file(
+            "/package/Orders/Order/.spielorders/order.json",
+            MINIMAL_ORDER,
+        );
+        filesystem.put_file("/package/.spielorders/index.json", index);
+        filesystem
     };
 
-    assert_eq!(
-        failed.contents.index.stale_reasons,
-        &[PackageIndexStaleReason::OrderMembershipChanged,]
-    );
-}
-
-#[test]
-fn index_order_path_mismatch_is_distinct_and_ordered_after_membership() {
-    let filesystem = minimal_package();
-    filesystem.put_entry("/package/Orders/Order", FileSystemEntryKind::Directory);
-    filesystem.put_file(
-        "/package/Orders/Order/.spielorders/order.json",
-        MINIMAL_ORDER,
-    );
-    filesystem.put_file("/package/.spielorders/index.json", WRONG_PATH_INDEX);
-
-    let Ok(failed) = opened(Path::new("/package"), &filesystem).result else {
-        panic!("the injected replacement failure preserves the stale reasons")
-    };
-
-    assert_eq!(
-        failed.contents.index.stale_reasons,
-        &[
-            PackageIndexStaleReason::OrderMembershipChanged,
-            PackageIndexStaleReason::OrderPathMismatch,
-        ]
-    );
-}
-
-#[test]
-fn managed_order_input_wrong_kind_is_a_separate_stale_reason() {
-    let filesystem = minimal_package();
-    filesystem.put_entry("/package/Orders/Damaged", FileSystemEntryKind::Directory);
-    filesystem.put_entry(
+    let unindexed = with_order(MINIMAL_INDEX);
+    let wrong_path = with_order(WRONG_PATH_INDEX);
+    let wrong_kind = minimal_package();
+    wrong_kind.put_entry("/package/Orders/Damaged", FileSystemEntryKind::Directory);
+    wrong_kind.put_entry(
         "/package/Orders/Damaged/.spielorders/order.json",
         FileSystemEntryKind::Directory,
     );
-    filesystem.put_file("/package/.spielorders/index.json", MINIMAL_INDEX);
+    wrong_kind.put_file("/package/.spielorders/index.json", MINIMAL_INDEX);
+    let vendors = minimal_package();
+    vendors.put_file("/package/.spielorders/vendors.json", FULL_VENDORS);
+    vendors.put_file("/package/.spielorders/index.json", MINIMAL_INDEX);
+    let record = with_order(former_title.as_bytes());
+    let readme = with_order(at_order.as_bytes());
+    readme.put_file("/package/Orders/Order/README.md", b"new notes\n");
 
-    let Ok(failed) = opened(Path::new("/package"), &filesystem).result else {
-        panic!("the injected replacement failure preserves the stale reasons")
-    };
-
-    assert_eq!(
-        failed.contents.index.stale_reasons,
-        &[
-            PackageIndexStaleReason::OrderMembershipChanged,
-            PackageIndexStaleReason::ManagedInputWrongKind,
-        ]
-    );
-    assert_eq!(failed.contents.damaged_orders.len(), 1);
-}
-
-#[test]
-fn canonical_vendor_change_is_a_separate_stale_reason() {
-    let filesystem = minimal_package();
-    filesystem.put_file("/package/.spielorders/vendors.json", FULL_VENDORS);
-    filesystem.put_file("/package/.spielorders/index.json", MINIMAL_INDEX);
-
-    let Ok(failed) = opened(Path::new("/package"), &filesystem).result else {
-        panic!("the injected replacement failure preserves the stale reasons")
-    };
-
-    assert_eq!(
-        failed.contents.index.stale_reasons,
-        &[PackageIndexStaleReason::VendorsChanged,]
-    );
-}
-
-#[test]
-fn canonical_order_metadata_change_is_a_separate_stale_reason() {
-    let filesystem = minimal_package();
-    filesystem.put_entry("/package/Orders/Order", FileSystemEntryKind::Directory);
-    filesystem.put_file(
-        "/package/Orders/Order/.spielorders/order.json",
-        MINIMAL_ORDER,
-    );
-    let stale_index = String::from_utf8(WRONG_PATH_INDEX.to_vec())
-        .unwrap()
-        .replacen("Elsewhere/Order", "Orders/Order", 1)
-        .replacen("Laser components", "Former title", 1);
-    filesystem.put_file("/package/.spielorders/index.json", stale_index.as_bytes());
-
-    let Ok(failed) = opened(Path::new("/package"), &filesystem).result else {
-        panic!("the injected replacement failure preserves the stale reasons")
-    };
-
-    assert_eq!(
-        failed.contents.index.stale_reasons,
-        &[PackageIndexStaleReason::OrderMetadataChanged,]
-    );
-}
-
-#[test]
-fn canonical_order_readme_change_is_a_separate_stale_reason() {
-    let filesystem = minimal_package();
-    filesystem.put_entry("/package/Orders/Order", FileSystemEntryKind::Directory);
-    filesystem.put_file(
-        "/package/Orders/Order/.spielorders/order.json",
-        MINIMAL_ORDER,
-    );
-    filesystem.put_file("/package/Orders/Order/README.md", b"new notes\n");
-    let stale_index = String::from_utf8(WRONG_PATH_INDEX.to_vec())
-        .unwrap()
-        .replacen("Elsewhere/Order", "Orders/Order", 1);
-    filesystem.put_file("/package/.spielorders/index.json", stale_index.as_bytes());
-
-    let Ok(failed) = opened(Path::new("/package"), &filesystem).result else {
-        panic!("the injected replacement failure preserves the stale reasons")
-    };
-
-    assert_eq!(
-        failed.contents.index.stale_reasons,
-        &[PackageIndexStaleReason::OrderReadmeChanged,]
-    );
+    use PackageIndexStaleReason::*;
+    for (case, filesystem, reasons) in [
+        (
+            "an unindexed Order",
+            unindexed,
+            &[OrderMembershipChanged][..],
+        ),
+        (
+            "an Order indexed elsewhere",
+            wrong_path,
+            &[OrderMembershipChanged, OrderPathMismatch],
+        ),
+        (
+            "a record of the wrong kind",
+            wrong_kind,
+            &[OrderMembershipChanged, ManagedInputWrongKind],
+        ),
+        ("changed Vendors", vendors, &[VendorsChanged]),
+        ("a changed record", record, &[OrderMetadataChanged]),
+        ("a changed README", readme, &[OrderReadmeChanged]),
+    ] {
+        let Ok(package) = opened(Path::new("/package"), &filesystem).result else {
+            panic!("{case}: a Package whose only problem is its index opens")
+        };
+        assert_eq!(
+            package.contents.index.state,
+            PackageIndexState::Stale,
+            "{case}"
+        );
+        assert_eq!(package.contents.index.stale_reasons, reasons, "{case}");
+    }
 }
 
 #[test]
@@ -475,27 +367,6 @@ fn rebuild_bytes_are_enumeration_independent_sorted_and_healthy_only() {
 }
 
 #[test]
-fn index_semantics_require_already_normalized_embedded_metadata() {
-    let filesystem = minimal_package();
-    let unnormalized = FULL_INDEX.replacen("Laser components", " Laser components ", 1);
-    let deterministic = Index::from_json_bytes(unnormalized.as_bytes())
-        .unwrap()
-        .to_json_bytes()
-        .unwrap();
-    filesystem.put_file("/package/.spielorders/index.json", &deterministic);
-
-    let Ok(failed) = opened(Path::new("/package"), &filesystem).result else {
-        panic!("an index containing unnormalized embedded metadata is malformed")
-    };
-
-    assert_eq!(failed.contents.index.state, PackageIndexState::Malformed);
-    assert_eq!(
-        failed.contents.index.malformed_reasons,
-        &[PackageIndexMalformedReason::InvalidSemantics]
-    );
-}
-
-#[test]
 fn unsorted_index_orders_are_invalid_semantics_before_freshness() {
     fn package_with_two_orders() -> ScriptedFileSystem {
         let filesystem = minimal_package();
@@ -542,7 +413,7 @@ fn unsorted_index_orders_are_invalid_semantics_before_freshness() {
     );
 
     let Ok(failed) = opened(Path::new("/package"), &filesystem).result else {
-        panic!("the injected replacement failure preserves invalid semantics")
+        panic!("a Package whose only problem is its index opens")
     };
     assert_eq!(failed.contents.index.state, PackageIndexState::Malformed);
     assert_eq!(
@@ -551,25 +422,10 @@ fn unsorted_index_orders_are_invalid_semantics_before_freshness() {
     );
 }
 
+/// Package-wide canonical damage, or a version this build does not read, refuses the
+/// rebuild and writes no index.
 #[test]
-fn malformed_and_uncertain_stale_indexes_are_rebuilt_exactly() {
-    for old_index in [b"{ malformed".as_slice(), MINIMAL_INDEX] {
-        let filesystem = minimal_package();
-        filesystem.put_file("/package/.spielorders/index.json", old_index);
-
-        assert!(
-            rebuilt(Path::new("/package"), &filesystem).is_ok(),
-            "the derived-index rebuild succeeds"
-        );
-        assert_eq!(
-            filesystem.bytes("/package/.spielorders/index.json"),
-            Some(MINIMAL_INDEX.to_vec())
-        );
-    }
-}
-
-#[test]
-fn package_wide_damage_and_unsupported_version_never_attempt_replacement() {
+fn package_wide_damage_and_an_unsupported_version_refuse_the_rebuild() {
     for filesystem in {
         let missing_vendors = minimal_package();
         missing_vendors.remove("/package/.spielorders/vendors.json");
@@ -581,114 +437,12 @@ fn package_wide_damage_and_unsupported_version_never_attempt_replacement() {
         );
         [missing_vendors, unsupported]
     } {
-        let Err(Failure::DamagedPackage(package) | Failure::PackageMetadataUnsupported(package)) =
-            opened(Path::new("/package"), &filesystem).result
-        else {
-            panic!("Package-wide canonical damage is diagnostic-only")
-        };
-        assert_eq!(package.index.state, PackageIndexState::Missing);
+        assert!(matches!(
+            rebuilt(Path::new("/package"), &filesystem),
+            Err(Failure::DamagedPackage(_) | Failure::PackageMetadataUnsupported(_))
+        ));
+        assert!(!filesystem.exists("/package/.spielorders/index.json"));
         assert_eq!(filesystem.effects(), []);
-    }
-}
-
-#[test]
-fn success_and_every_replacement_failure_preserve_and_never_touch_supporting_material() {
-    let scenarios = [
-        &[][..],
-        &[Operation::WriteNew],
-        &[Operation::SyncFile],
-        &[Operation::ReplaceFile],
-        &[Operation::SyncFile, Operation::RemoveFile],
-    ];
-    for failing in scenarios {
-        let filesystem = minimal_package();
-        filesystem.put_entry("/package/Orders/Order", FileSystemEntryKind::Directory);
-        filesystem.put_file(
-            "/package/Orders/Order/.spielorders/order.json",
-            MINIMAL_ORDER,
-        );
-        let supporting_a = "/package/Orders/Order/supporting-a.bin";
-        let supporting_b = "/package/Orders/Order/nested/supporting-b.bin";
-        filesystem.put_file(supporting_a, SUPPORTING_A);
-        filesystem.put_file(supporting_b, SUPPORTING_B);
-        for operation in failing {
-            filesystem.on(*operation).fails();
-        }
-
-        let result = rebuilt(Path::new("/package"), &filesystem);
-
-        assert_eq!(result.is_ok(), failing.is_empty(), "{failing:?}");
-        assert_eq!(filesystem.bytes(supporting_a), Some(SUPPORTING_A.to_vec()));
-        assert_eq!(filesystem.bytes(supporting_b), Some(SUPPORTING_B.to_vec()));
-        assert!(filesystem.calls().iter().all(|call| {
-            [Some(call.path.as_path()), call.source.as_deref()]
-                .into_iter()
-                .flatten()
-                .all(|path| path != Path::new(supporting_a) && path != Path::new(supporting_b))
-        }));
-    }
-}
-
-#[test]
-fn package_index_public_vocabulary_uses_every_closed_spelling() {
-    for (state, spelling) in [
-        (PackageIndexState::Current, "current"),
-        (PackageIndexState::Missing, "missing"),
-        (PackageIndexState::Malformed, "malformed"),
-        (PackageIndexState::WrongVersion, "wrong_version"),
-        (PackageIndexState::Stale, "stale"),
-        (PackageIndexState::NotAssessed, "not_assessed"),
-    ] {
-        assert_eq!(state.code(), spelling);
-    }
-    for (reason, spelling) in [
-        (PackageIndexMalformedReason::WrongKind, "wrong_kind"),
-        (PackageIndexMalformedReason::Unreadable, "unreadable"),
-        (
-            PackageIndexMalformedReason::InvalidEncoding,
-            "invalid_encoding",
-        ),
-        (PackageIndexMalformedReason::InvalidSyntax, "invalid_syntax"),
-        (PackageIndexMalformedReason::InvalidShape, "invalid_shape"),
-        (
-            PackageIndexMalformedReason::InvalidSemantics,
-            "invalid_semantics",
-        ),
-        (
-            PackageIndexMalformedReason::NonDeterministicSerialization,
-            "non_deterministic_serialization",
-        ),
-    ] {
-        assert_eq!(reason.code(), spelling);
-    }
-    for (reason, spelling) in [
-        (
-            PackageIndexStaleReason::OrderMembershipChanged,
-            "order_membership_changed",
-        ),
-        (
-            PackageIndexStaleReason::OrderPathMismatch,
-            "order_path_mismatch",
-        ),
-        (
-            PackageIndexStaleReason::ManagedInputWrongKind,
-            "managed_input_wrong_kind",
-        ),
-        (PackageIndexStaleReason::VendorsChanged, "vendors_changed"),
-        (
-            PackageIndexStaleReason::OrderMetadataChanged,
-            "order_metadata_changed",
-        ),
-        (
-            PackageIndexStaleReason::OrderReadmeChanged,
-            "order_readme_changed",
-        ),
-        (
-            PackageIndexStaleReason::ChangeEvidenceUncertain,
-            "change_evidence_uncertain",
-        ),
-    ] {
-        assert_eq!(reason.code(), spelling);
     }
 }
 
@@ -798,9 +552,6 @@ fn a_rebuild_refuses_an_index_that_appeared_where_the_load_observed_none() {
 /// rebuild heals an unreadable index — a rename replaces a file it never has to read —
 /// and calling that a changed destination would strand the Package in a state whose
 /// only repair is the rebuild being refused.
-///
-/// The two malformed-reason cases next door cannot see this: both inject a staging
-/// write failure, which fires before the destination is ever compared.
 #[test]
 fn an_unreadable_index_is_healed_rather_than_refused_as_a_changed_destination() {
     let filesystem = minimal_package();

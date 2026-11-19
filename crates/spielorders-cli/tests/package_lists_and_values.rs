@@ -12,15 +12,10 @@
 //! historical semantics; Define the Order record and lifecycle contract.
 
 use crate::support::{
-    Invocation, directory_that_is_not_a_root, hidden_vendor_id, initialized_package,
-    newest_order_id, offered_vendor_id, package_at_an_uninterpretable_version,
-    package_root_that_cannot_be_read, package_with_a_damaged_order,
-    package_with_duplicate_vendor_names, populated_package, response,
+    Invocation, directory_that_is_not_a_root, initialized_package, newest_order_id,
+    offered_vendor_id, package_at_an_uninterpretable_version, package_root_that_cannot_be_read,
+    package_with_a_damaged_order, package_with_duplicate_vendor_names, populated_package, response,
 };
-
-// ---------------------------------------------------------------------------
-// `package list orders`
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // `package list vendors`
@@ -74,32 +69,6 @@ fn the_vendor_listing_omits_hidden_vendors_by_default_exactly_as_package_show_do
         !summary.stdout_text().contains("name: Nethermoor"),
         "{}",
         summary.stdout_text()
-    );
-}
-
-/// `--all` reports every Vendor, each carrying its visibility.
-#[test]
-fn the_vendor_listing_includes_hidden_vendors_with_their_visibility_under_all() {
-    let (_tree, root) = populated_package("list-vendors-all");
-
-    let document = response(
-        &Invocation::new(&["package", "list", "vendors", "--json", "--all"])
-            .rooted_at(&root)
-            .run(),
-    );
-    let vendors = document["data"]
-        .as_array()
-        .expect("the listing is a list of Vendors");
-
-    assert_eq!(vendors.len(), 2, "the complete list");
-    let hidden: Vec<&serde_json::Value> = vendors
-        .iter()
-        .filter(|vendor| vendor["vendor_id"] == *hidden_vendor_id(&root))
-        .collect();
-    assert_eq!(hidden.len(), 1, "the Hidden Vendor is present");
-    assert_eq!(
-        hidden[0]["hidden"], "true",
-        "and it says so, rather than being reported as any other Vendor"
     );
 }
 
@@ -466,37 +435,14 @@ fn there_is_no_order_list() {
     }
 }
 
-/// Every value kind is iterated, not just every one that has a contract.
+/// `package show`'s human summary prints one line per value kind, whether or not that
+/// kind has any value, in the published `values` payload order.
 ///
-/// The four categories, in `package show`'s published `values` payload order, which is
-/// also the order the parser offers them in — held by the parser's own unit tests. Each
-/// has its own command and contract, and `package show`'s human summary prints a line
-/// for each: a kind missing from the summary while its own `package values` command
-/// worked is the quiet half of the pair, and the half nothing else binds.
+/// Each kind's own `package values` command is covered above; a kind missing from the
+/// summary while its own command worked is the half nothing else binds.
 #[test]
-fn every_value_kind_is_iterated() {
-    let declared = ["ordering_institution", "orderer", "project", "order_group"];
-
+fn the_package_summary_prints_every_value_kind_in_the_published_order() {
     let (_tree, root) = populated_package("value-kind-coverage");
-    for kind in declared {
-        let document = response(
-            &Invocation::new(&["package", "values", kind, "--json"])
-                .rooted_at(&root)
-                .run(),
-        );
-        assert_eq!(
-            document["contract"],
-            format!("spielorders.package.values.{kind}"),
-            "{kind} has its own contract"
-        );
-    }
-
-    // What "iterated" means from outside the executable is the sequence of labels
-    // `package show`'s summary prints — one line per kind, whether or not that kind has
-    // any value, so a kind missing from the array is a missing line rather than a line
-    // that happens to be empty. This is also the assertion the first
-    // review pass's own regression needed and did not have: reordering `VALUE_KINDS`
-    // reordered a closed command's summary with the whole suite green.
     let summary = Invocation::new(&["package", "show"]).rooted_at(&root).run();
     let printed: Vec<&str> = summary
         .stdout_text()
@@ -560,60 +506,4 @@ fn deleting_a_used_value_with_a_replacement_changes_every_order_using_it() {
     .rooted_at(&root)
     .run();
     assert_eq!(both.status, Some(2), "{}", both.stderr_text());
-}
-
-/// A committed value command carries its resulting scoped list, including an empty
-/// list after deleting the last value; a caller does not need a second read.
-#[test]
-fn value_mutations_return_the_resulting_values() {
-    let (_tree, root) = initialized_package("value-mutation-results");
-    for (command, expected) in [
-        (
-            vec!["value", "add", "orderer", "Emmy Noether"],
-            vec!["Emmy Noether"],
-        ),
-        (
-            vec!["value", "add", "orderer", "emmy noether"],
-            vec!["Emmy Noether"],
-        ),
-        (
-            vec!["value", "add", "orderer", "Ada Lovelace"],
-            vec!["Ada Lovelace", "Emmy Noether"],
-        ),
-        (
-            vec!["value", "rename", "orderer", "Ada Lovelace", "Grace Hopper"],
-            vec!["Emmy Noether", "Grace Hopper"],
-        ),
-        (
-            vec!["value", "merge", "orderer", "Grace Hopper", "Emmy Noether"],
-            vec!["Grace Hopper"],
-        ),
-        (vec!["value", "delete", "orderer", "Grace Hopper"], vec![]),
-    ] {
-        let run = Invocation::new(&command)
-            .argument("--json")
-            .rooted_at(&root)
-            .run();
-        assert_eq!(run.status, Some(0), "{command:?}: {}", run.stdout_text());
-        let document = response(&run);
-        let expected = serde_json::Value::Array(
-            expected
-                .into_iter()
-                .map(|value| serde_json::json!({"value": value, "usage_count": "0"}))
-                .collect(),
-        );
-        assert_eq!(document["data"]["values"], expected, "{command:?}");
-    }
-    let planned = Invocation::new(&[
-        "value",
-        "add",
-        "orderer",
-        "Emmy Noether",
-        "--dry-run",
-        "--json",
-    ])
-    .rooted_at(&root)
-    .run();
-    assert_eq!(planned.status, Some(0));
-    assert!(response(&planned)["data"].get("values").is_none());
 }

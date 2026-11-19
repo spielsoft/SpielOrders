@@ -9,8 +9,8 @@
  * receives from the library, never constructs, copies, or dereferences, and frees with
  * its own spielorders_<noun>_free (freeing NULL does nothing). Using a freed handle is
  * undefined. Handles are independent: freeing one never invalidates another. Every
- * handle except a Draft or a Hits is immutable and may be shared across threads; a Draft
- * or a Hits must not be used from two threads at once.
+ * handle except a Draft, a Hits, or a Batch is immutable and may be shared across
+ * threads; a Draft, a Hits, or a Batch must not be used from two threads at once.
  *
  * Arguments. A pointer is required (_Nonnull) unless its description says "or NULL";
  * passing NULL for a required one is undefined. Text is NUL-terminated UTF-8. A path is
@@ -94,8 +94,8 @@ typedef const char *_Nullable SpielordersOptionalPathBytes;
 // The `flags` bit of a Vendor list call that includes Hidden Vendors.
 #define SPIELORDERS_LIST_INCLUDE_HIDDEN 2
 
-// A batch of record changes, holding the Package as its changes so far leave it.
-typedef struct Batch Batch;
+// What a Batch handle holds, behind the handle.
+typedef struct SpielordersBatchData SpielordersBatchData;
 
 typedef struct SpielordersDiagnosisData SpielordersDiagnosisData;
 
@@ -133,7 +133,7 @@ typedef struct SpielordersPackage {
 
 // Record changes planned one after another against one load of a Package.
 typedef struct SpielordersBatch {
-  struct Batch *_Nonnull data;
+  struct SpielordersBatchData *_Nonnull data;
 } SpielordersBatch;
 
 // A list of failures, warnings, and findings. Read it with the
@@ -279,7 +279,8 @@ typedef struct SpielordersReport {
 // `ok`. The call did what it was asked.
 #define SPIELORDERS_RESULT_OK 0
 
-// `refused`. The request was refused and nothing was written; the outcome says why.
+// `refused`. The request was refused; the outcome says why. Nothing was written, except
+// what a commit that failed partway could not remove, which its outcome names.
 #define SPIELORDERS_RESULT_REFUSED 1
 
 // `cancelled`. The caller cancelled the call and nothing was written.
@@ -310,7 +311,7 @@ typedef struct SpielordersReport {
 // `package_operation_failed`. A filesystem operation failed for any other reason.
 #define SPIELORDERS_FAILURE_PACKAGE_OPERATION_FAILED 1005
 
-// `filesystem_unsupported`. The filesystem holding the Package cannot perform an operation a change needs, such as moving an entry without replacing one that may appear at its destination.
+// `filesystem_unsupported`. The filesystem holding the Package cannot perform an operation a change needs, such as moving an entry without replacing one that may appear at its destination. Where a commit had already begun, each entry it could not prove its own to undo follows as a `left behind` entry.
 #define SPIELORDERS_FAILURE_FILESYSTEM_UNSUPPORTED 1085
 
 // `package_invalid`.
@@ -328,7 +329,7 @@ typedef struct SpielordersReport {
 // `order_not_found`. The directory is not one of its Package's Orders. `root` is the Root it was looked for in, where one resolved.
 #define SPIELORDERS_FAILURE_ORDER_NOT_FOUND 1010
 
-// `damaged_record`. The Order record could not be read as one. `field` names the first field at fault where the record was still JSON to inspect.
+// `damaged_record`. The Order record could not be read as one. `field` names the first field at fault where the record was still JSON to inspect, and `row` the Item it belongs to.
 #define SPIELORDERS_FAILURE_DAMAGED_RECORD 1011
 
 // `locator_unusable`. The record's own technical locator is missing or malformed.
@@ -466,24 +467,6 @@ typedef struct SpielordersReport {
 // `commit_failed_cleanup_incomplete`. A commit stopped partway and could not remove what is named.
 #define SPIELORDERS_FAILURE_COMMIT_FAILED_CLEANUP_INCOMPLETE 1056
 
-// `candidate_changed`. The candidate a stage holds changed before it was promoted.
-#define SPIELORDERS_FAILURE_CANDIDATE_CHANGED 1057
-
-// `destination_changed`. The destination changed between being read and being replaced.
-#define SPIELORDERS_FAILURE_DESTINATION_CHANGED 1058
-
-// `candidate_invalid`. The record a commit assembled is not a valid record of its kind.
-#define SPIELORDERS_FAILURE_CANDIDATE_INVALID 1059
-
-// `invalid_destination`. The destination names no file a stage can be written beside, or one another write in the same commit already names.
-#define SPIELORDERS_FAILURE_INVALID_DESTINATION 1060
-
-// `ownership_uncertain`. What stands there is no longer provably what the commit created, so it is left.
-#define SPIELORDERS_FAILURE_OWNERSHIP_UNCERTAIN 1061
-
-// `prior_content_invalid`. What the destination held before does not validate, so it was not written back.
-#define SPIELORDERS_FAILURE_PRIOR_CONTENT_INVALID 1062
-
 // `index_replacement_failed`. The rebuilt Package Index could not be written; the detail is the failed commit.
 #define SPIELORDERS_FAILURE_INDEX_REPLACEMENT_FAILED 1063
 
@@ -546,6 +529,9 @@ typedef struct SpielordersReport {
 
 // `blank_value`. A value is required and blank.
 #define SPIELORDERS_FAILURE_BLANK_VALUE 1083
+
+// `currency_differs`. A merged Order would add Items priced in a currency other than the kept Order's; located at that Order, field currency.
+#define SPIELORDERS_FAILURE_CURRENCY_DIFFERS 1086
 
 // `not_batchable`. A batch holds edits to existing Orders and Vendors and new Vendors, and this change is none of those.
 #define SPIELORDERS_FAILURE_NOT_BATCHABLE 1084
@@ -762,7 +748,7 @@ typedef struct SpielordersReport {
 // `directory_name`. Read-only: the Order Directory's name.
 #define SPIELORDERS_ORDER_FIELD_DIRECTORY_NAME 9010
 
-// `total`. Read-only: the Order Total, unrounded.
+// `total`. Read-only: the Order Total, as computed in floating point and not rounded.
 #define SPIELORDERS_ORDER_FIELD_TOTAL 9011
 
 // `damage`. Read-only, on a damaged list entry: the name of its finding code.
@@ -784,7 +770,7 @@ typedef struct SpielordersReport {
 // `catalog_number`.
 #define SPIELORDERS_ITEM_FIELD_CATALOG_NUMBER 10003
 
-// `total`. Read-only: the row total, unrounded.
+// `total`. Read-only: the row total, as computed in floating point and not rounded.
 #define SPIELORDERS_ITEM_FIELD_TOTAL 10004
 
 // `notes`. Multiline remarks tied to this Item alone.
@@ -1053,8 +1039,8 @@ SpielordersResult spielorders_package_batch(const struct SpielordersPackage *_No
                                             struct SpielordersEntries *_Nullable *_Nullable outcome);
 
 // A draft of the Order at `directory` as `batch` holds it, saved by adding it to the
-// batch. Refuses SPIELORDERS_FAILURE_PRECONDITIONS_CHANGED for a directory that holds no
-// healthy Order of the Package.
+// batch. A directory that holds no healthy Order of the Package refuses as reading it
+// would, or SPIELORDERS_FAILURE_ORDER_NOT_FOUND where it holds another Package's Order.
 SpielordersResult spielorders_batch_order_draft(const struct SpielordersBatch *_Nonnull batch,
                                                 SpielordersPathBytes directory,
                                                 struct SpielordersDraft *_Nullable *_Nonnull draft,
@@ -1117,6 +1103,7 @@ SpielordersResult spielorders_package_validate(const struct SpielordersPackage *
                                                struct SpielordersEntries *_Nullable *_Nullable outcome);
 
 // Validates one Order Directory of `package`, damaged or not.
+// A directory outside `package` refuses SPIELORDERS_FAILURE_ORDER_NOT_FOUND.
 SpielordersResult spielorders_package_validate_order(const struct SpielordersPackage *_Nonnull package,
                                                      SpielordersPathBytes order_directory,
                                                      uint64_t token,
@@ -1130,6 +1117,7 @@ SpielordersResult spielorders_package_diagnose(const struct SpielordersPackage *
                                                struct SpielordersEntries *_Nullable *_Nullable outcome);
 
 // Diagnoses the repairs one Order Directory of `package` offers, damaged or not.
+// A directory outside `package` refuses SPIELORDERS_FAILURE_ORDER_NOT_FOUND.
 SpielordersResult spielorders_package_diagnose_order(const struct SpielordersPackage *_Nonnull package,
                                                      SpielordersPathBytes order_directory,
                                                      uint64_t token,
@@ -1153,6 +1141,12 @@ SpielordersConstant spielorders_diagnosis_case_code(const struct SpielordersDiag
 // The Package-relative path of the evidence case `case` was diagnosed from, or "".
 SpielordersText spielorders_diagnosis_case_path(const struct SpielordersDiagnosis *_Nonnull diagnosis,
                                                 int64_t case_);
+
+// The Order Directory case `case` belongs to, which `spielorders_package_diagnose_order`
+// diagnoses and `spielorders_package_validate_order` validates; "" for a case about the
+// Package's own artifacts, which `spielorders_package_diagnose` offers, and out of range.
+SpielordersPathBytes spielorders_diagnosis_case_order(const struct SpielordersDiagnosis *_Nonnull diagnosis,
+                                                      int64_t case_);
 
 // The handle that names case `case` to a later repair: its code, its path, and the
 // digest of the evidence it was diagnosed from, so a handle names nothing once that
@@ -1294,7 +1288,7 @@ SpielordersText spielorders_draft_row_field(const struct SpielordersDraft *_Nonn
                                             int64_t row,
                                             SpielordersConstant field);
 
-// The live Order Total of an Order draft, unrounded; "" while a row's numbers do not
+// The live Order Total of an Order draft, as computed in floating point and not rounded; "" while a row's numbers do not
 // parse, and for other drafts.
 SpielordersText spielorders_draft_total(const struct SpielordersDraft *_Nonnull draft);
 
@@ -1305,6 +1299,17 @@ SpielordersResult spielorders_draft_check(const struct SpielordersDraft *_Nonnul
 
 // Frees `draft`. Freeing NULL does nothing.
 void spielorders_draft_free(struct SpielordersDraft *_Nullable draft);
+
+// Why a record refuses the assignment `name=value` on its own, whatever else a set
+// assigns with it: the `SPIELORDERS_REASON_*` constant for an identity, a managed
+// technical field, an ordered collection, a name `family` has no assignable field for, a
+// required value left blank, or an Item number that is not finite; or -1 when the record
+// takes it. `family` is SPIELORDERS_FAMILY_ORDER_FIELD, _ITEM_FIELD, _VENDOR_FIELD, or
+// _CONTACT_FIELD, and any other family takes no assignment. Lets a caller holding
+// `field=value` text adjudicate it as the library does before setting a Draft field.
+SpielordersConstant spielorders_assignment_refusal(SpielordersConstant family,
+                                                   SpielordersText name,
+                                                   SpielordersText value);
 
 // How many entries `entries` (or NULL) holds; 0 for NULL.
 int64_t spielorders_entries_count(const struct SpielordersEntries *_Nullable entries);
@@ -1461,6 +1466,21 @@ SpielordersResult spielorders_package_orders_of_vendor(const struct SpielordersP
                                                        uint64_t token,
                                                        struct SpielordersList *_Nullable *_Nonnull list,
                                                        struct SpielordersEntries *_Nullable *_Nullable outcome);
+
+// The healthy Orders that use `value` of one reusable-value field
+// (SPIELORDERS_ORDER_FIELD_ORDERER, _ORDERING_INSTITUTION, _PROJECT, or _ORDER_GROUP), in
+// the Package's own order, each row read as spielorders_package_orders_of_vendor's are.
+// `value` matches as reuse does. An Order Group is one Project's: `project` names it, or
+// NULL or "" the Orders with no Project, and is ignored for any other field. The rows are
+// the Orders that spielorders_package_values, or spielorders_package_project_groups for
+// a group, counts for that value.
+SpielordersResult spielorders_package_orders_with_value(const struct SpielordersPackage *_Nonnull package,
+                                                        SpielordersConstant field,
+                                                        SpielordersText value,
+                                                        SpielordersOptionalText project,
+                                                        uint64_t token,
+                                                        struct SpielordersList *_Nullable *_Nonnull list,
+                                                        struct SpielordersEntries *_Nullable *_Nullable outcome);
 
 // The Order Groups of `project`, or of the Orders with no Project for NULL or "", each
 // row read with `SPIELORDERS_VALUE_FIELD_*`. A group belongs to the Project of the Orders
@@ -1641,9 +1661,10 @@ int64_t spielorders_package_index_reason_count(const struct SpielordersPackage *
 SpielordersConstant spielorders_package_index_reason(const struct SpielordersPackage *_Nonnull package,
                                                      int64_t index);
 
-// Reads the healthy Order at `order_directory`, with the findings local to it: from
-// `package` as opened while nothing has written to the Package since, otherwise afresh.
-// The read is the evidence a draft of it saves against.
+// Reads afresh the healthy Order at `order_directory`, one Order Directory of `package`,
+// with the findings local to it. A directory outside `package` refuses
+// SPIELORDERS_FAILURE_ORDER_NOT_FOUND. The read is the evidence a draft of it saves
+// against.
 SpielordersResult spielorders_package_read_order(const struct SpielordersPackage *_Nonnull package,
                                                  SpielordersPathBytes order_directory,
                                                  uint64_t token,
@@ -1883,8 +1904,14 @@ SpielordersPathBytes spielorders_plan_operation_path(const struct SpielordersPla
 int32_t spielorders_plan_operation_directory(const struct SpielordersPlan *_Nonnull plan,
                                              int64_t index);
 
-// How many changes `plan` makes to the record its draft edits.
+// How many changes `plan` makes to the record its draft edits, or, for an Order or Vendor
+// merge, to the record it keeps, with each Vendor a Vendor merge or deletion removes.
 int64_t spielorders_plan_change_count(const struct SpielordersPlan *_Nonnull plan);
+
+// The zero-based addition of a batch that change `index` of the batch's plan belongs to;
+// -1 for any other plan or out of range.
+int64_t spielorders_plan_change_addition(const struct SpielordersPlan *_Nonnull plan,
+                                         int64_t index);
 
 // The `SPIELORDERS_CHANGE_*` of change `index`, or -1 out of range.
 SpielordersConstant spielorders_plan_change_kind(const struct SpielordersPlan *_Nonnull plan,
@@ -1913,8 +1940,10 @@ SpielordersConstant spielorders_plan_change_reuse(const struct SpielordersPlan *
 
 // Commits `plan`. Takes no token: it ends committed, refused before its first write
 // (SPIELORDERS_FAILURE_PRECONDITIONS_CHANGED when anything it was planned against
-// changed), or failed with its rollback reported. Warnings arrive in the outcome with
-// SPIELORDERS_RESULT_OK. A plan may be committed once; a second commit refuses as its
+// changed, or SPIELORDERS_FAILURE_PLAN_EVIDENCE_UNCONFIRMED naming each fact it was
+// planned against that moved: a saved Order's Vendor and values, or the facts an Order
+// alignment, removal, or restoration found), or failed with its rollback reported.
+// Warnings arrive in the outcome with SPIELORDERS_RESULT_OK. A plan may be committed once; a second commit refuses as its
 // evidence no longer stands.
 SpielordersResult spielorders_plan_commit(const struct SpielordersPlan *_Nonnull plan,
                                           struct SpielordersReport *_Nullable *_Nonnull report,
@@ -1940,9 +1969,16 @@ struct SpielordersVendor *_Nullable spielorders_report_vendor(const struct Spiel
 // result even when the Package changes again.
 struct SpielordersList *_Nullable spielorders_report_values(const struct SpielordersReport *_Nonnull report);
 
-// Where the committed Order Directory now is, or "". Lists refresh by opening the
-// Package again.
+// Where the committed Order Directory now is, or "". Lists refresh from
+// spielorders_report_package, or by opening the Package again.
 SpielordersPathBytes spielorders_report_final_path(const struct SpielordersReport *_Nonnull report);
+
+// The Package as this commit left it, opened as spielorders_package_open opens it.
+// Each call returns an independent new handle: free it with spielorders_package_free;
+// freeing the report does not invalidate it. Returns NULL when no reusable Package is
+// available, including a refresh that could not prove a current index or a report for
+// non-Package work; then open the Package again. An unchanged commit may supply one.
+struct SpielordersPackage *_Nullable spielorders_report_package(const struct SpielordersReport *_Nonnull report);
 
 // Frees `report`. Freeing NULL does nothing.
 void spielorders_report_free(struct SpielordersReport *_Nullable report);

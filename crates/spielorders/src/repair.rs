@@ -15,17 +15,15 @@
 
 use crate::{
     Answer, Failure, Warning,
-    canonical::{OrderPaths, Touched, load_every_record},
+    canonical::{Touched, load_every_record, validate_package},
+    change::PlannedAct,
     diagnosis::{self, Breadth, Diagnosis},
-    filesystem::{
-        DestinationExpectation, promote_staged_file, replace_validated_file_expecting, staging_path,
-    },
-    metadata::{
-        Config, IndexDocument, OrderDocument, OrderId, VendorId, VendorsDocument, VersionDocument,
-    },
-    mutation::{IndexRefresh, MutationReport, Never, OperationKind, PlannedOperation},
+    filesystem::staging_path,
+    integrity::{Aggregate, Breach, Records, Substitution},
+    journal::{Expect, Journal, Subject},
+    metadata::{Config, IndexDocument, OrderDocument, VendorsDocument, VersionDocument},
+    mutation::{IndexRefresh, MutationReport, OperationKind},
     operations::FailedOperation,
-    package::vendor_aggregate_is_package_valid,
     paths::{locator_resolves_to_root, resolve_package_layout},
     ports::FileSystem,
     readme::{Location, located_in_package, rooted_at},
@@ -56,6 +54,15 @@ pub enum PackageConstraint {
     /// The technical locator does not lead from this Order Directory to this
     /// Package's SpielOrders Root.
     PackageRootMismatch,
+}
+
+impl From<Breach> for PackageConstraint {
+    fn from(breach: Breach) -> Self {
+        match breach {
+            Breach::OrderIdentityTaken => Self::OrderIdentityTaken,
+            Breach::VendorReferenceUnresolved => Self::VendorReferenceUnresolved,
+        }
+    }
 }
 
 /// Which managed artifact a candidate would become.
@@ -100,16 +107,16 @@ enum DiagnosedDestination {
 }
 
 impl DiagnosedDestination {
-    fn expectation(&self) -> DestinationExpectation<'_> {
+    fn expectation(&self) -> Expect {
         match self {
-            Self::Absent => DestinationExpectation::Absent,
-            Self::Content(observed) => DestinationExpectation::Exactly(observed),
+            Self::Absent => Expect::Absent,
+            Self::Content(observed) => Expect::Bytes(observed.clone()),
         }
     }
 }
 
 /// One complete, validated repair of one diagnosed case.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ArtifactRepairPlan {
     scope: RepairScope,
     directory: Location,
@@ -119,7 +126,7 @@ pub struct ArtifactRepairPlan {
     candidate: Vec<u8>,
     observed: DiagnosedDestination,
     source: Option<Location>,
-    pub(crate) operations: Vec<PlannedOperation>,
+    pub(crate) journal: Journal,
 }
 
 impl ArtifactRepairPlan {
@@ -313,19 +320,34 @@ fn plan_artifact_repair<F: FileSystem>(
         Some(staged) => rooted_at(&root, staged.clone()),
         None => in_scope(),
     };
-    let (candidate, record) =
+    let (candidate, meaning) =
         validated_candidate(artifact, bytes, &root, filesystem).ok_or_else(|| {
             Failure::InvalidCandidate {
                 candidate: candidate_location(),
             }
         })?;
-    // Valid as an Order says nothing about the Package it lands in. A record whose
-    // identity, Vendor Reference, or locator breaks a cross-record constraint would
-    // answer this diagnosed condition by creating another.
-    if let Some(record) = record
-        && let Some(constraint) =
-            package_evidence(&root, &directory, filesystem)?.broken_by(&record)
-    {
+    // Valid on its own says nothing about the Package it lands in. A record whose
+    // identity, Vendor Reference, or locator breaks a cross-record constraint, or an
+    // aggregate that takes away a Vendor an Order resolves, would answer this diagnosed
+    // condition by creating another.
+    let broken = match &meaning {
+        Meaning::Order(record) => package_constraint(&root, &directory, record, filesystem)?,
+        Meaning::Vendors(aggregate) => {
+            // Each record is judged as stored, so a damaged aggregate or Package hides no
+            // reference.
+            let report = validate_package(&root, filesystem)?;
+            report
+                .records()
+                .with_removed(&report.context, filesystem)?
+                .broken_by(&Substitution {
+                    vendors: Some(aggregate),
+                    ..Substitution::default()
+                })
+                .map(PackageConstraint::from)
+        }
+        Meaning::Other => None,
+    };
+    if let Some(constraint) = broken {
         return Err(Failure::CandidateDamagesPackage {
             constraint,
             candidate: candidate_location(),
@@ -336,18 +358,7 @@ fn plan_artifact_repair<F: FileSystem>(
     }
     let observed = diagnosed_destination(&root, &destination, filesystem)?;
 
-    let kind = match source {
-        Some(_) => OperationKind::PromoteStagingCandidate,
-        None => OperationKind::ReplaceManagedArtifact,
-    };
-    let operations = vec![
-        PlannedOperation::new(kind, located_in_package(&root, destination.clone())),
-        PlannedOperation::new(
-            OperationKind::RefreshPackageIndex,
-            located_in_package(&root, root.join(".spielorders").join("index.json")),
-        ),
-    ];
-    Ok(ArtifactRepairPlan {
+    let mut plan = ArtifactRepairPlan {
         scope,
         directory: located_in_package(&root, directory),
         artifact,
@@ -355,9 +366,11 @@ fn plan_artifact_repair<F: FileSystem>(
         candidate,
         observed,
         source: source.map(|source| located_in_package(&root, source)),
+        journal: Journal::new(&root),
         root,
-        operations,
-    })
+    };
+    plan.journal = plan.artifact_journal(&plan.candidate);
+    Ok(plan)
 }
 
 /// The candidate a repair publishes: one the caller supplied for the diagnosed artifact,
@@ -436,28 +449,28 @@ fn promoted_destination(staged: &Path) -> Option<PathBuf> {
 /// kind's own semantics. Anything less is refused rather than partially salvaged.
 ///
 /// **One judgement per kind**, each the one this repository already publishes for that
-/// artifact. An Order record validates as an Order and is returned parsed as well, because
-/// the Package constraints are asked of its meaning while the write is of its bytes. The
-/// Vendor aggregate is put to [`vendor_aggregate_is_package_valid`]; the configuration is
+/// artifact. An Order record validates as an Order and the Vendor aggregate is put to
+/// [`Aggregate::judge`], each returned judged as well, because the Package constraints are
+/// asked of its meaning while the write is of its bytes; the configuration is
 /// resolved as this Package's layout, because a configured path that escapes the Root or
 /// occupies the reserved metadata subtree is exactly what damages a Package; and the
 /// marker's declared version is settled by the type it deserializes into.
 ///
-/// The canonical bytes are returned rather than the caller's, so what is published is the
-/// document this build round-trips — except the user's own TOML configuration, and the
-/// derived index, whose bytes a rebuild owns.
+/// Canonical bytes compare candidates by meaning and supply explicit replacements —
+/// except the user's own TOML configuration and the derived index, whose bytes a rebuild
+/// owns. A staging promotion keeps the validated stage's own bytes.
 fn validated_candidate<F: FileSystem>(
     artifact: ManagedArtifact,
     bytes: &[u8],
     root: &Path,
     filesystem: &F,
-) -> Option<(Vec<u8>, Option<OrderDocument>)> {
+) -> Option<(Vec<u8>, Meaning)> {
     let canonical = match artifact {
         ManagedArtifact::OrderRecord => {
             let document = OrderDocument::from_json_bytes(bytes).ok()?;
             document.validate().ok()?;
             let bytes = document.to_json_bytes().ok()?;
-            return Some((bytes, Some(document)));
+            return Some((bytes, Meaning::Order(document)));
         }
         ManagedArtifact::Marker => VersionDocument::from_json_bytes(bytes)
             .ok()?
@@ -472,96 +485,57 @@ fn validated_candidate<F: FileSystem>(
         }
         ManagedArtifact::VendorAggregate => {
             let vendors = VendorsDocument::from_json_bytes(bytes).ok()?;
-            if !vendor_aggregate_is_package_valid(&vendors) {
-                return None;
-            }
-            vendors.to_json_bytes().ok()?
+            let aggregate = Aggregate::judge(&vendors).ok()?;
+            return Some((vendors.to_json_bytes().ok()?, Meaning::Vendors(aggregate)));
         }
         ManagedArtifact::DerivedIndex => {
             IndexDocument::from_json_bytes(bytes).ok()?;
             bytes.to_vec()
         }
     };
-    Some((canonical, None))
+    Some((canonical, Meaning::Other))
 }
 
-/// The Package facts a candidate for one Order Directory is judged against.
+/// What a valid candidate means to the Package beside it.
+enum Meaning {
+    Order(OrderDocument),
+    Vendors(Aggregate),
+    /// An artifact no other record depends on.
+    Other,
+}
+
+/// The first Package constraint an Order record `candidate` for `directory` breaks, when
+/// it breaks one.
 ///
-/// Read from the Package rather than from the diagnosis, because a diagnosis answers
-/// for one Order scope while these constraints are about the rest of the Package:
-/// which identities the other Order Directories hold, and which Vendors exist.
-struct PackageEvidence {
-    root: PathBuf,
-    directory: PathBuf,
-    identities_held_elsewhere: Vec<OrderId>,
-    vendor_ids: Vec<VendorId>,
-}
-
-/// Reads that evidence without changing anything, so it can be consulted while
-/// planning.
-fn package_evidence<F: FileSystem>(
+/// Read from the Package rather than from the diagnosis, because a diagnosis answers for
+/// one Order scope while these constraints are about the rest of the Package: which
+/// identities the other Order Directories hold, and which Vendors exist.
+fn package_constraint<F: FileSystem>(
     root: &Path,
     directory: &Path,
+    candidate: &OrderDocument,
     filesystem: &F,
-) -> Result<PackageEvidence, Failure> {
+) -> Result<Option<PackageConstraint>, Failure> {
     // The diagnosis this repair answers established a current Package moments ago.
     // Reaching the error means that stopped holding, and a candidate no evidence can
     // clear is refused rather than written, under what the read established.
     let package = load_every_record(root, filesystem)?;
-    let another_order = |paths: &OrderPaths| paths.directory.absolute_path != directory;
-    // Every discovered Order Directory except the one being repaired. A quarantined
-    // Order still holds the identity it was quarantined for, so consulting the
-    // healthy set alone would call a contested identity free.
-    let identities_held_elsewhere = package
-        .healthy_orders
-        .iter()
-        .filter(|order| another_order(&order.paths))
-        .map(|order| order.document.order_id.clone())
-        .chain(
-            package
-                .damaged_orders
-                .iter()
-                .filter(|order| another_order(&order.paths))
-                .filter_map(|order| order.order_id.clone()),
-        )
-        .collect();
-    let vendor_ids = package
-        .vendors
-        .iter()
-        .map(|vendor| vendor.vendor_id.clone())
-        .collect();
-    Ok(PackageEvidence {
-        root: root.to_path_buf(),
-        directory: directory.to_path_buf(),
-        identities_held_elsewhere,
-        vendor_ids,
-    })
-}
-
-impl PackageEvidence {
-    /// The first Package constraint this candidate breaks, when it breaks one.
-    fn broken_by(&self, candidate: &OrderDocument) -> Option<PackageConstraint> {
-        if self.identities_held_elsewhere.contains(&candidate.order_id) {
-            return Some(PackageConstraint::OrderIdentityTaken);
-        }
-        if let Some(vendor_id) = &candidate.vendor_id
-            && !self.vendor_ids.contains(vendor_id)
-        {
-            return Some(PackageConstraint::VendorReferenceUnresolved);
-        }
-        // Asked through the same predicate the Package loader applies to a stored
-        // record, so a candidate cannot be accepted on terms the loader would reject —
-        // including a candidate carrying no locator this build can follow, which the
-        // loader diagnoses as the same mismatch.
-        let follows_this_package = candidate
-            .package_root
-            .spelled()
-            .is_some_and(|locator| locator_resolves_to_root(&self.directory, locator, &self.root));
-        if !follows_this_package {
-            return Some(PackageConstraint::PackageRootMismatch);
-        }
-        None
+    let substitution = Substitution {
+        orders: vec![(directory, candidate)],
+        vendors: None,
+    };
+    if let Some(breach) = Records::of(&package).broken_by(&substitution) {
+        return Ok(Some(breach.into()));
     }
+    // Asked through the same predicate the Package loader applies to a stored record, so
+    // a candidate cannot be accepted on terms the loader would reject — including a
+    // candidate carrying no locator this build can follow, which the loader diagnoses as
+    // the same mismatch.
+    let follows_this_package = candidate
+        .package_root
+        .spelled()
+        .is_some_and(|locator| locator_resolves_to_root(directory, locator, root));
+    Ok((!follows_this_package).then_some(PackageConstraint::PackageRootMismatch))
 }
 
 pub(crate) type RepairReport = MutationReport<()>;
@@ -590,38 +564,61 @@ pub(crate) fn commit_repair<F: FileSystem>(
     Ok(MutationReport::committed((), warnings)).into()
 }
 
+impl ArtifactRepairPlan {
+    /// The commit publishing this repair's candidate at its destination, which must still
+    /// hold what the diagnosis found there: by promoting the diagnosed stage, which
+    /// completes the interrupted replacement it belongs to, or by replacing the artifact.
+    fn artifact_journal(&self, candidate: &[u8]) -> Journal {
+        let managed = PlannedAct::Managed;
+        let destination = self.destination().to_path_buf();
+        let mut journal = Journal::new(&self.root);
+        match self.source() {
+            Some(source) => journal.promote(
+                (source.to_path_buf(), candidate.to_vec()),
+                destination,
+                self.observed.expectation(),
+                managed(OperationKind::PromoteStagingCandidate),
+                Subject::Other,
+            ),
+            None => journal.replace(
+                destination,
+                candidate.to_vec(),
+                self.observed.expectation(),
+                managed(OperationKind::ReplaceManagedArtifact),
+                Subject::Other,
+            ),
+        }
+        journal.refreshing(located_in_package(
+            &self.root,
+            self.root.join(".spielorders").join("index.json"),
+        ));
+        journal
+    }
+}
+
 fn write_artifact<F: FileSystem>(plan: &ArtifactRepairPlan, filesystem: &F) -> Result<(), Failure> {
     // A promotion rereads its candidate immediately before acting; a stage that
     // changed since planning is no longer the candidate that was diagnosed.
-    if let Some(source) = plan.source() {
+    let candidate = if let Some(source) = plan.source() {
         match filesystem.read(source) {
             Ok(bytes)
                 if validated_candidate(plan.artifact, &bytes, &plan.root, filesystem)
-                    .is_some_and(|(candidate, _)| candidate == plan.candidate) => {}
+                    .is_some_and(|(candidate, _)| candidate == plan.candidate) =>
+            {
+                bytes
+            }
             _ => {
                 return Err(Failure::EvidenceChanged {
                     evidence: rooted_at(&plan.root, source.to_path_buf()),
                 });
             }
         }
-    }
+    } else {
+        plan.candidate.clone()
+    };
 
-    match plan.source() {
-        // Promotion completes the interrupted replacement the stage belongs to.
-        Some(source) => promote_staged_file(
-            source,
-            plan.destination(),
-            plan.observed.expectation(),
-            filesystem,
-        )
-        .map_err(|_| Failure::of_promotion(&plan.root, plan.destination())),
-        None => replace_validated_file_expecting(
-            plan.destination(),
-            &plan.candidate,
-            plan.observed.expectation(),
-            filesystem,
-            |_| Ok::<(), Never>(()),
-        )
-        .map_err(|error| Failure::of_replacement(&plan.root, plan.destination(), error)),
-    }
+    // The journal guards the exact bytes just validated, not their canonical spelling.
+    // A valid stage may use different whitespace or member order and is moved as-is.
+    plan.artifact_journal(&candidate).run(filesystem)?;
+    Ok(())
 }

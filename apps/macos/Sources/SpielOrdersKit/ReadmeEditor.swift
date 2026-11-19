@@ -1,7 +1,8 @@
 import AppKit
+import Markdown
 import SwiftUI
 
-/// A plain-text Markdown editor with light highlighting. Its text binding owns Undo, so
+/// A plain-text Markdown editor that highlights the Markdown it parses. Its text binding owns Undo, so
 /// the app can keep document-scoped changes in the window's shared history after navigation.
 public struct ReadmeEditor: NSViewRepresentable {
     @Binding private var text: String
@@ -14,8 +15,8 @@ public struct ReadmeEditor: NSViewRepresentable {
     private let height: ClosedRange<CGFloat>?
     private let onEnd: () -> Void
 
-    /// `height` bounds an editor that grows with its text and then scrolls; without it, the
-    /// editor fills the space offered. `onEnd` runs when the text stops being edited.
+    /// `height` bounds an editor that grows with its text and then scrolls, and that takes any
+    /// further height a frame that may grow offers; without it, the editor fills the space offered. `onEnd` runs when the text stops being edited.
     public init(text: Binding<String>, isEditable: Bool, label: String, identifier: String,
                 height: ClosedRange<CGFloat>?, onEnd: @escaping () -> Void) {
         _text = text
@@ -68,7 +69,9 @@ public struct ReadmeEditor: NSViewRepresentable {
         guard let height, let width = proposal.width, width.isFinite else { return nil }
         let editor = scroll.documentView as! NSTextView
         let fitted = Self.textHeight(String(decoding: shownText, as: UTF8.self), in: editor, width: width)
-        return CGSize(width: width, height: min(max(fitted, height.lowerBound), height.upperBound))
+        let grown = min(max(fitted, height.lowerBound), height.upperBound)
+        guard let offered = proposal.height, offered.isFinite else { return CGSize(width: width, height: grown) }
+        return CGSize(width: width, height: max(grown, offered))
     }
 
     /// The height `text` takes in `editor` at `width`, including a final empty line.
@@ -107,24 +110,89 @@ public struct ReadmeEditor: NSViewRepresentable {
             let undo = editor.undoManager
             undo?.disableUndoRegistration()
             defer { undo?.enableUndoRegistration() }
-            let range = NSRange(location: 0, length: storage.length)
+            let text = editor.string
             let font = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-            let strong = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
             storage.beginEditing()
-            storage.setAttributes([.font: font, .foregroundColor: NSColor.textColor], range: range)
-            let styles: [(String, [NSAttributedString.Key: Any])] = [
-                (#"(?m)^#{1,6} .*$"#, [.font: strong]),
-                (#"\*\*[^*\n]+\*\*"#, [.font: strong]),
-                (#"`[^`\n]+`"#, [.foregroundColor: NSColor.systemOrange]),
-                (#"\[[^\]\n]+\]\([^\)\n]+\)"#, [.foregroundColor: NSColor.linkColor]),
-            ]
-            for (pattern, attributes) in styles {
-                guard let expression = try? NSRegularExpression(pattern: pattern) else { continue }
-                for match in expression.matches(in: editor.string, range: range) {
-                    storage.addAttributes(attributes, range: match.range)
+            storage.setAttributes([.font: font, .foregroundColor: NSColor.textColor],
+                                  range: NSRange(location: 0, length: storage.length))
+            var styles = MarkdownStyles(text)
+            styles.visit(Document(parsing: text))
+            for (range, style) in styles.found {
+                switch style {
+                case let .traits(traits):
+                    storage.enumerateAttribute(.font, in: range) { value, run, _ in
+                        let current = value as? NSFont ?? font
+                        let descriptor = current.fontDescriptor.withSymbolicTraits(
+                            current.fontDescriptor.symbolicTraits.union(traits))
+                        storage.addAttribute(.font, value: NSFont(descriptor: descriptor, size: 0) ?? current,
+                                             range: run)
+                    }
+                case let .color(color):
+                    storage.addAttribute(.foregroundColor, value: color, range: range)
+                case .struck:
+                    storage.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: range)
                 }
             }
             storage.endEditing()
         }
+    }
+}
+
+/// How a Markdown element shows in the editor, its syntax left in place.
+private enum MarkdownStyle {
+    case traits(NSFontDescriptor.SymbolicTraits)
+    case color(NSColor)
+    case struck
+
+    /// Code's color: orange where it reads on a dark background, brown on a light one.
+    static let code = MarkdownStyle.color(NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .systemOrange : .systemBrown
+    })
+}
+
+/// The styled ranges of a parsed Markdown text, outer elements before the elements inside them.
+private struct MarkdownStyles: MarkupWalker {
+    private let text: String
+    /// Where each line starts in the text, as a UTF-8 offset.
+    private let lineStarts: [Int]
+    private(set) var found: [(NSRange, MarkdownStyle)] = []
+
+    init(_ text: String) {
+        self.text = text
+        var starts = [0]
+        for (offset, byte) in text.utf8.enumerated() where byte == UInt8(ascii: "\n") {
+            starts.append(offset + 1)
+        }
+        lineStarts = starts
+    }
+
+    mutating func visitHeading(_ heading: Heading) { mark(heading, .traits(.bold)) }
+    mutating func visitStrong(_ strong: Strong) { mark(strong, .traits(.bold)) }
+    mutating func visitEmphasis(_ emphasis: Emphasis) { mark(emphasis, .traits(.italic)) }
+    mutating func visitStrikethrough(_ strikethrough: Strikethrough) { mark(strikethrough, .struck) }
+    mutating func visitInlineCode(_ code: InlineCode) { mark(code, .code) }
+    mutating func visitCodeBlock(_ code: CodeBlock) { mark(code, .code) }
+    mutating func visitLink(_ link: Markdown.Link) { mark(link, .color(.linkColor)) }
+    mutating func visitImage(_ image: Markdown.Image) { mark(image, .color(.linkColor)) }
+    mutating func visitBlockQuote(_ quote: BlockQuote) { mark(quote, .color(.secondaryLabelColor)) }
+    mutating func visitThematicBreak(_ rule: ThematicBreak) { mark(rule, .color(.secondaryLabelColor)) }
+    mutating func visitHTMLBlock(_ html: HTMLBlock) { mark(html, .color(.secondaryLabelColor)) }
+    mutating func visitInlineHTML(_ html: InlineHTML) { mark(html, .color(.secondaryLabelColor)) }
+
+    private mutating func mark(_ markup: Markup, _ style: MarkdownStyle) {
+        if let range = markup.range, let lower = offset(range.lowerBound), let upper = offset(range.upperBound),
+           lower < upper {
+            let utf8 = text.utf8
+            let span = utf8.index(utf8.startIndex, offsetBy: lower)..<utf8.index(utf8.startIndex, offsetBy: upper)
+            found.append((NSRange(span, in: text), style))
+        }
+        descendInto(markup)
+    }
+
+    /// The UTF-8 offset of a parsed location, whose column counts UTF-8 bytes from 1.
+    private func offset(_ location: SourceLocation) -> Int? {
+        guard lineStarts.indices.contains(location.line - 1) else { return nil }
+        let offset = lineStarts[location.line - 1] + location.column - 1
+        return min(offset, text.utf8.count)
     }
 }

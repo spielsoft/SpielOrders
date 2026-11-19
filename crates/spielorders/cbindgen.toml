@@ -18,8 +18,8 @@ header = """
  * receives from the library, never constructs, copies, or dereferences, and frees with
  * its own spielorders_<noun>_free (freeing NULL does nothing). Using a freed handle is
  * undefined. Handles are independent: freeing one never invalidates another. Every
- * handle except a Draft or a Hits is immutable and may be shared across threads; a Draft
- * or a Hits must not be used from two threads at once.
+ * handle except a Draft, a Hits, or a Batch is immutable and may be shared across
+ * threads; a Draft, a Hits, or a Batch must not be used from two threads at once.
  *
  * Arguments. A pointer is required (_Nonnull) unless its description says "or NULL";
  * passing NULL for a required one is undefined. Text is NUL-terminated UTF-8. A path is

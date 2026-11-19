@@ -5,12 +5,12 @@ use crate::{
     Assignments, Change, ChangeResult, Diagnosis, Failure, OrderRef, Package, Plan, Report, Scope,
     VendorRef, commit, plan, readme_writes::ReadmeOriginal, repair_cases::RepairAction,
 };
+use crate::{change::PlannedAct, mutation::CleanupFailure, mutation::CommitFailure};
 use crate::{
     metadata::OrderDocument, metadata::Vendor, operations::FailedPath, readme::Diagnostic,
     readme::DiagnosticCode, readme::DiagnosticEvidence, readme::Location, readme::Severity,
     repair_cases::RepairCase,
 };
-use crate::{mutation::CleanupFailure, mutation::CommitFailure};
 use std::ops::Deref;
 use std::{
     cell::RefCell,
@@ -20,8 +20,10 @@ use std::{
 };
 
 mod scripted;
+mod syncs;
 
 pub use scripted::{Answer, Operation, Outside, Script, ScriptedFileSystem};
+pub use syncs::{Sync, Syncs};
 
 pub use crate::platform::PlatformFileSystem;
 
@@ -632,14 +634,32 @@ pub fn reusable(kind: &str, value: &str) -> serde_json::Value {
     serde_json::json!({ "kind": kind, "value": value })
 }
 
+/// The name a planned act is published under: its variant's name in snake case, as its
+/// `SPIELORDERS_OPERATION_*` constant spells it.
+fn act_name(act: PlannedAct) -> String {
+    let variant = match act {
+        PlannedAct::Managed(kind) => format!("{kind:?}"),
+        PlannedAct::Creation(act) => format!("{act:?}"),
+    };
+    let mut spelling = String::new();
+    for character in variant.chars() {
+        if character.is_ascii_uppercase() && !spelling.is_empty() {
+            spelling.push('_');
+        }
+        spelling.push(character.to_ascii_lowercase());
+    }
+    spelling
+}
+
 /// Each operation committing `plan` performs, as its kind and the path it acts on, in
 /// order, which is what a dry run shows a caller.
 pub fn operations(plan: &Plan) -> Vec<String> {
     plan.operations()
         .into_iter()
-        .map(|(kind, at)| {
+        .map(|(act, at)| {
             format!(
-                "{kind} {}",
+                "{} {}",
+                act_name(act),
                 at.package_relative_path
                     .as_deref()
                     .expect("a planned operation is inside the Package")
@@ -652,7 +672,7 @@ pub fn operations(plan: &Plan) -> Vec<String> {
 pub fn operation_kinds(plan: &Plan) -> Vec<String> {
     plan.operations()
         .into_iter()
-        .map(|(kind, _)| kind)
+        .map(|(act, _)| act_name(act))
         .collect()
 }
 
@@ -660,7 +680,7 @@ pub fn operation_kinds(plan: &Plan) -> Vec<String> {
 pub fn operation_path(plan: &Plan, kind: &str) -> PathBuf {
     plan.operations()
         .into_iter()
-        .find(|(each, _)| each == kind)
+        .find(|(each, _)| act_name(*each) == kind)
         .map(|(_, at)| at.absolute_path.clone())
         .unwrap_or_else(|| panic!("the plan performs {kind}: {:?}", plan.operations()))
 }
@@ -697,20 +717,6 @@ pub fn committed_vendor(root: &Path, result: &ChangeResult) -> Vendor {
     .vendor
 }
 
-/// Every path `filesystem` saw `operation` act on: what an operation touched, never the
-/// order it touched it in.
-pub fn touched_by(
-    filesystem: &ScriptedFileSystem,
-    operation: Operation,
-) -> std::collections::BTreeSet<PathBuf> {
-    filesystem.paths(operation).into_iter().collect()
-}
-
-/// `paths` as the set [`touched_by`] answers.
-pub fn path_set(paths: &[&str]) -> std::collections::BTreeSet<PathBuf> {
-    paths.iter().map(PathBuf::from).collect()
-}
-
 /// Whether the Package at `root` holds a derived index its open proves current, which the
 /// open then leaves exactly as it found it.
 pub fn index_is_current(root: &Path) -> bool {
@@ -733,34 +739,33 @@ pub fn adopted_directory(plan: &Plan) -> PathBuf {
 
 /// The Order record `plan` would write.
 pub fn planned_order(plan: &Plan) -> &OrderDocument {
-    plan.order_record()
+    &plan
+        .order_record()
         .expect("the plan writes an Order record")
-        .0
+        .document
 }
 
 /// The Vendor the Order record `plan` would write references.
 pub fn planned_order_vendor(plan: &Plan) -> Option<&Vendor> {
     plan.order_record()
         .expect("the plan writes an Order record")
-        .1
+        .vendor
+        .as_ref()
 }
 
 /// Whether `plan` reuses the Package's spelling of the Reusable Free-Entry Value in
 /// `field` or introduces a new one, as [`reusable`] spells it.
 pub fn planned_reuse(plan: &Plan, field: &str) -> serde_json::Value {
-    use crate::package::ReusableValue;
-    let values = plan
+    use crate::values::{ReusableValue, ReusableValueKind};
+    let values = &plan
         .order_record()
         .expect("the plan writes an Order record")
-        .2;
-    let value = match field {
-        "orderer" => &values.orderer,
-        "ordering_institution" => &values.ordering_institution,
-        "project" => &values.project,
-        "order_group" => &values.order_group,
-        other => panic!("{other} is not a Reusable Free-Entry Value"),
-    };
-    match value {
+        .values;
+    let kind = ReusableValueKind::ALL
+        .into_iter()
+        .find(|kind| kind.field() == field)
+        .unwrap_or_else(|| panic!("{field} is not a Reusable Free-Entry Value"));
+    match values.of(kind) {
         ReusableValue::Absent => serde_json::json!({ "kind": "absent" }),
         ReusableValue::Reused(value) => reusable("reused", value),
         ReusableValue::New(value) => reusable("new", value),
@@ -771,6 +776,26 @@ pub fn planned_reuse(plan: &Plan, field: &str) -> serde_json::Value {
 pub fn planned_vendor(plan: &Plan) -> &Vendor {
     plan.vendor_record()
         .expect("the plan writes a Vendor record")
+}
+
+/// The facts a refused commit says no longer stand, as `(name, change)` pairs.
+///
+/// The refusal is only useful if it says *which* fact moved, so every test below
+/// reads the names rather than the rejection's variant alone.
+pub fn unconfirmed_facts(
+    report: &Result<Report, Failure>,
+) -> Vec<(&str, crate::evidence::FactChange)> {
+    let Err(Failure::PlanEvidenceUnconfirmed { outcome }) = report else {
+        panic!("a plan whose evidence moved is refused before any effect: {report:?}");
+    };
+    let crate::evidence::EvidenceOutcome::Changed(stale) = outcome else {
+        panic!("the refusal names the evidence that changed: {outcome:?}");
+    };
+    stale
+        .changed
+        .iter()
+        .map(|fact| (fact.name.as_str(), fact.change))
+        .collect()
 }
 
 /// Every finding `diagnosis` reports, in its groups' order.
@@ -1018,7 +1043,7 @@ pub fn adopted_order(root: &Path, basename: &str, uuid: &str) -> std::path::Path
 }
 
 /// An Order Directory's canonical record.
-pub fn order_record(directory: &Path) -> std::path::PathBuf {
+pub fn record_path(directory: &Path) -> std::path::PathBuf {
     directory.join(".spielorders/order.json")
 }
 
@@ -1227,6 +1252,19 @@ pub fn readme_original(path: &Path) -> crate::readme_writes::ReadmeOriginal {
 /// Order Directory.
 pub fn current_readme(directory: &Path) -> crate::readme_writes::ReadmeOriginal {
     readme_original(&directory.join("README.md"))
+}
+
+/// A volume that behaves as FAT or exFAT does: it keeps no comparable change evidence,
+/// and it has no exclusive rename.
+pub fn exfat_like() -> ScriptedFileSystem {
+    let filesystem = ScriptedFileSystem::new();
+    filesystem
+        .on(Operation::ObserveFileChange)
+        .reports_evidence(crate::ports::FileChangeEvidence::Uncertain);
+    filesystem
+        .on(Operation::RenameNew)
+        .fails_with(std::io::ErrorKind::Unsupported);
+    filesystem
 }
 
 /// What the interface reports of `failure`: each entry's code and Package-relative

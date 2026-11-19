@@ -2,6 +2,7 @@
 
 use crate::metadata::{DateOrdered, OrderDocument, OrderItem, normalize_optional_single_line};
 use serde::Serialize;
+use std::cmp::Ordering;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValidatedOrder {
@@ -71,6 +72,22 @@ impl OrderDocument {
             item_totals,
             order_total,
         })
+    }
+
+    /// Where this Order stands against `other` in a Package: the later Date Ordered first,
+    /// then by the bytes of the Order Title, then by Order ID.
+    pub(crate) fn listing_order(&self, other: &Self) -> Ordering {
+        other
+            .date_ordered
+            .as_str()
+            .cmp(self.date_ordered.as_str())
+            .then_with(|| {
+                self.title
+                    .as_str()
+                    .as_bytes()
+                    .cmp(other.title.as_str().as_bytes())
+            })
+            .then_with(|| self.order_id.as_str().cmp(other.order_id.as_str()))
     }
 }
 

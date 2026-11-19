@@ -26,12 +26,12 @@
         "path": "<PACKAGE_ROOT>/Orders/.<TODAY>_Tarnwick_Laser_components_Ada_Lovelace.spielorders-stage/README.md"
       },
       {
-        "kind": "commit_directory",
-        "path": "<PACKAGE_ROOT>/Orders/<TODAY>_Tarnwick_Laser_components_Ada_Lovelace"
-      },
-      {
         "kind": "replace_vendor_record",
         "path": "<PACKAGE_ROOT>/.spielorders/vendors.json"
+      },
+      {
+        "kind": "commit_directory",
+        "path": "<PACKAGE_ROOT>/Orders/<TODAY>_Tarnwick_Laser_components_Ada_Lovelace"
       },
       {
         "kind": "refresh_package_index",

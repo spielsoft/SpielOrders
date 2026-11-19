@@ -6,6 +6,7 @@ use crate::{
     Answer, Failure,
     digest::ContentDigest,
     filesystem::{DestinationExpectation, replace_validated_file_expecting},
+    integrity::{Aggregate, AggregateFault, Records, named_vendor, resolves},
     metadata::{
         Config, IndexDocument, IndexOrder, IndexOrderDirectory, MetadataErrorKind, OrderDocument,
         OrderId, PackageRoot, PackageRootLocator, StoredValues, Vendor, VendorId, VendorsDocument,
@@ -16,7 +17,7 @@ use crate::{
     operations::refuse_linked_root,
     operations::{FailedOperation, FailedPath},
     order::{OrderValidationFailure, ValidatedOrder},
-    package::{PackageMetadata, PackageMetadataValidationFailure, index_semantics_are_valid},
+    package::index_semantics_are_valid,
     paths::{
         ConfiguredPath, ConfiguredPathFailure, DirectChildClassification, DirectChildObservation,
         PackagePathError, discover_order_direct_children, locator_resolves_to_root,
@@ -34,7 +35,6 @@ use crate::{
     },
     values::ValueProjections,
 };
-use serde::Serialize;
 use std::{
     cell::RefCell,
     collections::BTreeMap,
@@ -60,8 +60,7 @@ pub struct ManagedContext {
     pub package_readme: ReadmeReference,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PackageIndexState {
     Current,
     Missing,
@@ -71,10 +70,7 @@ pub enum PackageIndexState {
     NotAssessed,
 }
 
-impl crate::code::Coded for PackageIndexState {}
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum PackageIndexMalformedReason {
     WrongKind,
     Unreadable,
@@ -85,8 +81,7 @@ pub enum PackageIndexMalformedReason {
     NonDeterministicSerialization,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum PackageIndexStaleReason {
     OrderMembershipChanged,
     OrderPathMismatch,
@@ -96,10 +91,6 @@ pub enum PackageIndexStaleReason {
     OrderReadmeChanged,
     ChangeEvidenceUncertain,
 }
-
-impl crate::code::Coded for PackageIndexStaleReason {}
-
-impl crate::code::Coded for PackageIndexMalformedReason {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PackageIndexRecord {
@@ -159,7 +150,7 @@ impl HealthyOrder {
 
     /// This Order's technical locator, which a healthy Order always carries: being healthy
     /// is the load having followed that locator from this Directory to this Root.
-    pub(crate) fn package_root(&self) -> &PackageRoot {
+    pub(crate) fn locator(&self) -> &PackageRoot {
         self.document
             .package_root
             .spelled()
@@ -375,11 +366,22 @@ pub(crate) struct ExhaustiveValidationReport {
     pub(crate) diagnostic_groups: Vec<DiagnosticGroup>,
     pub(crate) examined_orders: Vec<OrderPaths>,
     index: PackageIndexRecord,
+    records: ExhaustiveInspectionEvidence,
 }
 
 impl ExhaustiveValidationReport {
     pub(crate) fn metadata_state(&self) -> MetadataState {
         self.metadata_state
+    }
+
+    /// The Order records this validation examined, with the Vendor aggregate as decoded,
+    /// or `None` where it could not be decoded, however damaged the Package is.
+    pub(crate) fn records(&self) -> Records<'_> {
+        Records::new(
+            self.records.vendors.as_deref(),
+            &self.records.healthy,
+            &self.records.damaged,
+        )
     }
 
     /// The Package this report validated, as a refusal, when its own scope carries an
@@ -415,13 +417,13 @@ pub(crate) fn validate_package<F: FileSystem>(
     filesystem: &F,
 ) -> Result<ExhaustiveValidationReport, Failure> {
     let mut exhaustive_evidence = ExhaustiveInspectionEvidence::default();
-    let canonical = inspect_canonical_package_with_breadth(
+    let canonical = inspect(
         selected_root,
         filesystem,
-        CanonicalInspectionBreadth::Exhaustive,
+        InspectionBreadth::Exhaustive,
         &mut exhaustive_evidence,
     );
-    let mut order_paths = exhaustive_evidence.order_paths;
+    let mut order_paths = std::mem::take(&mut exhaustive_evidence.order_paths);
     order_paths.sort_by(|left, right| left.directory.cmp(&right.directory));
     let (context, metadata_state, mut diagnostic_groups, index) = match canonical {
         Ok(package) => (
@@ -461,6 +463,7 @@ pub(crate) fn validate_package<F: FileSystem>(
         diagnostic_groups,
         examined_orders: order_paths,
         index,
+        records: exhaustive_evidence,
     })
 }
 
@@ -491,7 +494,7 @@ pub(crate) fn open<F: FileSystem>(
 ///
 /// Where it is depends only on the Root's managed paths, so a Package whose records are
 /// damaged, or at a metadata version this build does not interpret, still answers.
-pub(crate) fn read_package_readme<F: FileSystem>(
+pub(crate) fn read_readme<F: FileSystem>(
     selected_root: &Path,
     filesystem: &F,
 ) -> Result<ReadmeRead, Failure> {
@@ -741,7 +744,7 @@ fn assessed<F: FileSystem>(selected_root: &Path, filesystem: &F) -> Result<Asses
             replaceable: None,
         });
     }
-    let package = load_canonical(selected_root, &filesystem)
+    let package = load_records(selected_root, &filesystem)
         .map_err(|unusable| assessed_without_freshness(unusable, &filesystem))?;
     let context = package.context.clone();
     let StoredIndexAssessment {
@@ -852,7 +855,7 @@ pub struct PackageIndexRebuildPlan {
 
 /// A rejected rebuild is a failed commit: the replacement did not happen and the stored
 /// index holds what it held, with any stage it could not remove named as its cleanup.
-pub(crate) type PackageIndexRebuildReport = MutationReport<()>;
+pub(crate) type IndexRebuildReport = MutationReport<()>;
 
 /// Plans a deliberate replacement of the derived Package Index from healthy canonical
 /// records.
@@ -860,16 +863,16 @@ pub(crate) type PackageIndexRebuildReport = MutationReport<()>;
 /// The canonical records are the source, never the stored index. The comparison against
 /// the stored projection supplies the state the rebuild reports.
 ///
-/// Nothing here writes. [`commit_package_index_rebuild`] is what replaces the file, and a
+/// Nothing here writes. [`commit_index_rebuild`] is what replaces the file, and a
 /// plan that is never committed is the dry run.
-pub(crate) fn plan_package_index_rebuild<F: FileSystem>(
+pub(crate) fn plan_index_rebuild<F: FileSystem>(
     selected_root: &Path,
     filesystem: &F,
 ) -> Answer<PackageIndexRebuildPlan> {
-    Answer::of(|| plan_index_rebuild(selected_root, filesystem))
+    Answer::of(|| plan_rebuild_of(selected_root, filesystem))
 }
 
-fn plan_index_rebuild<F: FileSystem>(
+fn plan_rebuild_of<F: FileSystem>(
     selected_root: &Path,
     filesystem: &F,
 ) -> Result<PackageIndexRebuildPlan, Failure> {
@@ -878,7 +881,7 @@ fn plan_index_rebuild<F: FileSystem>(
     // project, and the index is never evidence for what they should have been. The
     // index's own validity is still assessed, because that is what the refusal is about
     // the index of.
-    let package = load_canonical(selected_root, &filesystem)
+    let package = load_records(selected_root, &filesystem)
         .map_err(|unusable| assessed_without_freshness(unusable, &filesystem))?;
     let context = package.context.clone();
     let StoredIndexAssessment {
@@ -912,11 +915,24 @@ fn plan_index_rebuild<F: FileSystem>(
 /// comparison, and atomic rename, against the index this plan assessed — so a writer that
 /// landed since is refused rather than overwritten. A refusal leaves the stored index
 /// exactly as it was.
-pub(crate) fn commit_package_index_rebuild<F: FileSystem>(
+pub(crate) fn commit_index_rebuild<F: FileSystem>(
     plan: PackageIndexRebuildPlan,
     filesystem: &F,
-) -> Answer<PackageIndexRebuildReport> {
+) -> Answer<IndexRebuildReport> {
     let index_path = plan.package.context.index.absolute_path.clone();
+    // The records are read again now. An index written from a plan's earlier read would be
+    // newer than a record changed since, and so would prove that change's stale facts.
+    match plan_rebuild_of(&plan.package.context.root.absolute_path, filesystem) {
+        Ok(now) if now.candidate == plan.candidate => {}
+        Ok(_) => {
+            return Answer::of(|| {
+                Err(Failure::PreconditionsChanged {
+                    location: plan.package.context.index.clone(),
+                })
+            });
+        }
+        Err(failure) => return Answer::of(|| Err(failure)),
+    }
     let replacement = replace_validated_file_expecting(
         &index_path,
         &plan.candidate,
@@ -1138,11 +1154,12 @@ fn open_index<F: FileSystem>(
         .map(|entry| (relative_path(&root, &entry.path), entry.path.to_path_buf()))
         .collect::<Vec<_>>();
     candidate_paths.sort_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
+    // A record outside this Package is no part of what the index can prove.
     let touched_paths = touched
         .orders
         .iter()
-        .map(|directory| relative_path(&root, directory))
-        .collect::<std::collections::BTreeSet<_>>();
+        .map(|directory| package_relative_path_text(&root, directory))
+        .collect::<Option<std::collections::BTreeSet<_>>>()?;
     let indexed_paths = index
         .orders
         .iter()
@@ -1175,18 +1192,30 @@ fn open_index<F: FileSystem>(
     }
 
     for (_, order_directory) in &candidate_paths {
-        // A record reached through a linked metadata directory is not this Order's own.
-        if filesystem
-            .symlink_metadata(&order_directory.join(".spielorders"))
-            .ok()?
-            != Some(FileSystemEntryKind::Directory)
+        if touched_paths.contains(&relative_path(&root, order_directory)) {
+            // A record reached through a linked metadata directory is not this Order's own.
+            if filesystem
+                .symlink_metadata(&order_directory.join(".spielorders"))
+                .ok()?
+                != Some(FileSystemEntryKind::Directory)
+            {
+                return None;
+            }
+            continue;
+        }
+        // An Order Directory renamed, moved in, or swapped with another since the index
+        // was written is newer than the index, though the records inside it keep their
+        // own status. Its status also proves every entry inside it the one the index was
+        // written beside: adding, removing, or renaming one makes the directory newer. So
+        // an absent README is still absent, and the metadata directory the indexed record
+        // was read through is still a directory and not a link.
+        let directory_observation = filesystem.observe_file_change(order_directory).ok()?;
+        if directory_observation.kind != Some(FileSystemEntryKind::Directory)
+            || !newer(index_observation, directory_observation)
         {
             return None;
         }
         let paths = order_paths(&root, order_directory);
-        if touched_paths.contains(&relative_path(&root, order_directory)) {
-            continue;
-        }
         let order_observation = filesystem
             .observe_file_change(&paths.order.absolute_path)
             .ok()?;
@@ -1205,17 +1234,7 @@ fn open_index<F: FileSystem>(
                     return None;
                 }
             }
-            // An absent README has no status of its own. Its Order Directory's does: an
-            // entry added, removed, or renamed there since the index was written makes
-            // the directory newer, so an older directory proves the README still absent.
-            None => {
-                let directory = filesystem.observe_file_change(order_directory).ok()?;
-                if directory.kind != Some(FileSystemEntryKind::Directory)
-                    || !newer(index_observation, directory)
-                {
-                    return None;
-                }
-            }
+            None => {}
             Some(_) => return None,
         }
     }
@@ -1242,8 +1261,7 @@ fn open_index<F: FileSystem>(
                 .ok()?,
         )
         .ok()?;
-        let validated = PackageMetadata::new(&[], &document).validate().ok()?;
-        let normalized = validated.vendors().clone();
+        let normalized = Aggregate::judge(&document).ok()?.into_document();
         (normalized.vendors, normalized.values)
     } else {
         (index.vendors, index.values)
@@ -1284,17 +1302,7 @@ fn open_index<F: FileSystem>(
     if !touched.is_empty() {
         // The records read here join the proven ones only as a valid Package would hold
         // them: one Order per identity, and every Vendor Reference resolving.
-        let identities = healthy_orders
-            .iter()
-            .map(|order| order.document.order_id.as_str())
-            .collect::<std::collections::BTreeSet<_>>();
-        let references_resolve =
-            healthy_orders.iter().all(|order| {
-                order.document.vendor_id.as_ref().is_none_or(|vendor_id| {
-                    vendors.iter().any(|vendor| vendor.vendor_id == *vendor_id)
-                })
-            });
-        if identities.len() != healthy_orders.len() || !references_resolve {
+        if !Records::new(Some(&vendors), &healthy_orders, &[]).sound() {
             return None;
         }
         sort_healthy_orders(&mut healthy_orders);
@@ -1318,9 +1326,9 @@ fn open_index<F: FileSystem>(
     ))
 }
 
-/// The Order at `order_directory`, read from its records, where it is plainly healthy: its
-/// record valid, its locator resolving to `root` from a direct child of the Orders
-/// Directory, its Vendor Reference resolving, and its README readable without findings.
+/// The Order at `order_directory`, read from its records, where it is plainly healthy:
+/// [`order_health`] finds it healthy against `vendors`, and its README reads without
+/// findings.
 fn touched_order<F: FileSystem>(
     root: &Path,
     orders_directory: &Path,
@@ -1329,33 +1337,11 @@ fn touched_order<F: FileSystem>(
     filesystem: &F,
 ) -> Option<HealthyOrder> {
     let paths = order_paths(root, order_directory);
-    if filesystem
-        .symlink_metadata(&paths.order.absolute_path)
-        .ok()?
-        != Some(FileSystemEntryKind::File)
-    {
-        return None;
-    }
-    let order =
-        OrderDocument::from_json_bytes(&filesystem.read(&paths.order.absolute_path).ok()?).ok()?;
-    let validated = order.validate().ok()?;
-    let resolved = filesystem.canonicalize(order_directory).ok()?;
-    let PackageRootLocator::Spelled(locator) = &validated.order().package_root else {
+    let OrderHealth::Healthy(validated) =
+        order_health(root, orders_directory, &paths, Some(vendors), filesystem).ok()?
+    else {
         return None;
     };
-    if resolved.parent() != Some(orders_directory)
-        || !locator_resolves_to_root(&resolved, locator, root)
-    {
-        return None;
-    }
-    if validated
-        .order()
-        .vendor_id
-        .as_ref()
-        .is_some_and(|vendor_id| !vendors.iter().any(|vendor| vendor.vendor_id == *vendor_id))
-    {
-        return None;
-    }
     let readme = read_document(&paths.readme, filesystem).ok()?;
     if !readme.diagnostics.is_empty() {
         return None;
@@ -1734,14 +1720,19 @@ fn stale_index_reasons(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CanonicalInspectionBreadth {
+enum InspectionBreadth {
     Ordinary,
     Exhaustive,
 }
 
+/// What only an exhaustive inspection keeps: every Order Directory it examined, and the
+/// Order records and Vendor aggregate it decoded, whether or not the Package is damaged.
 #[derive(Default)]
 struct ExhaustiveInspectionEvidence {
     order_paths: Vec<OrderPaths>,
+    healthy: Vec<HealthyOrder>,
+    damaged: Vec<DamagedOrder>,
+    vendors: Option<Vec<Vendor>>,
 }
 
 /// The current candidate at `selected_root`, or why there is none. It loads without
@@ -1766,7 +1757,7 @@ pub(crate) fn load_package<F: FileSystem>(
     let cached = PackageOpenFileSystem::new(filesystem);
     let package = match try_open_current_index(selected_root, &cached) {
         Some(package) => package,
-        None => load_canonical(selected_root, &cached)?,
+        None => load_records(selected_root, &cached)?,
     };
     filesystem.remember_package(&package);
     Ok(package)
@@ -1781,13 +1772,101 @@ pub(crate) fn load_package_to_change<F: FileSystem>(
     changed: &Touched,
     filesystem: &F,
 ) -> Result<CurrentPackageCandidate, Failure> {
+    // A Package this call already loaded, with nothing written since, supplies every
+    // record the change does not name.
+    if refuse_linked_root(selected_root, filesystem).is_ok()
+        && let Ok(root) = filesystem.canonicalize(selected_root)
+        && let Some(loaded) = filesystem.remembered_package(&root)
+        && let Some(package) = reread(loaded, changed, filesystem)
+    {
+        filesystem.remember_package(&package);
+        return Ok(package);
+    }
     let cached = PackageOpenFileSystem::new(filesystem);
     let package = match open_index(selected_root, &cached, changed) {
         Some((package, _)) => package,
-        None => load_canonical(selected_root, &cached)?,
+        None => load_records(selected_root, &cached)?,
     };
     filesystem.remember_package(&package);
     Ok(package)
+}
+
+/// `loaded` with the records `changed` names read again from disk: each a healthy Order
+/// `loaded` holds that still reads plainly healthy, and the Vendor record where `changed`
+/// names it. `None` wherever anything is in doubt, so the caller loads the Package anew.
+fn reread<F: FileSystem>(
+    loaded: CurrentPackageCandidate,
+    changed: &Touched,
+    filesystem: &F,
+) -> Option<CurrentPackageCandidate> {
+    if loaded.metadata_state != MetadataState::Current {
+        return None;
+    }
+    let root = loaded.context.root.absolute_path.clone();
+    let orders_directory = loaded
+        .context
+        .orders_directory
+        .as_ref()?
+        .absolute_path
+        .clone();
+    let named = |path: &Path| changed.orders.contains(path);
+    // An Order the load found damaged, or with findings of its own, is read whole.
+    if loaded
+        .damaged_orders
+        .iter()
+        .any(|order| named(&order.paths.directory.absolute_path))
+        || loaded.diagnostic_groups.iter().any(|group| {
+            changed
+                .orders
+                .iter()
+                .any(|directory| group.location.absolute_path.starts_with(directory))
+        })
+    {
+        return None;
+    }
+    let (vendors, values) = if changed.vendors {
+        let document = VendorsDocument::from_json_bytes(
+            &filesystem
+                .read(&loaded.context.vendors.absolute_path)
+                .ok()?,
+        )
+        .ok()?;
+        let normalized = Aggregate::judge(&document).ok()?.into_document();
+        (normalized.vendors, normalized.values)
+    } else {
+        (loaded.vendors, loaded.values)
+    };
+    let mut healthy_orders = Vec::with_capacity(loaded.healthy_orders.len());
+    let mut reread = 0;
+    for order in loaded.healthy_orders {
+        let directory = &order.paths.directory.absolute_path;
+        if !named(directory) {
+            healthy_orders.push(order);
+            continue;
+        }
+        healthy_orders.push(touched_order(
+            &root,
+            &orders_directory,
+            directory,
+            &vendors,
+            filesystem,
+        )?);
+        reread += 1;
+    }
+    if reread != changed.orders.len() || !Records::new(Some(&vendors), &healthy_orders, &[]).sound()
+    {
+        return None;
+    }
+    sort_healthy_orders(&mut healthy_orders);
+    Some(current_package_candidate(
+        loaded.context,
+        healthy_orders,
+        loaded.damaged_orders,
+        vendors,
+        values,
+        loaded.diagnostic_groups,
+        loaded.index,
+    ))
 }
 
 /// The Package at `selected_root` read from every record, for a change that selects the
@@ -1796,30 +1875,30 @@ pub(crate) fn load_every_record<F: FileSystem>(
     selected_root: &Path,
     filesystem: &F,
 ) -> Result<CurrentPackageCandidate, Failure> {
-    let package = load_canonical(selected_root, &PackageOpenFileSystem::new(filesystem))?;
+    let package = load_records(selected_root, &PackageOpenFileSystem::new(filesystem))?;
     filesystem.remember_package(&package);
     Ok(package)
 }
 
 /// The current candidate at `selected_root` read from every canonical record, never from
 /// the stored index.
-fn load_canonical<F: FileSystem>(
+fn load_records<F: FileSystem>(
     selected_root: &Path,
     filesystem: &F,
 ) -> Result<CurrentPackageCandidate, Failure> {
     let mut ignored_evidence = ExhaustiveInspectionEvidence::default();
-    inspect_canonical_package_with_breadth(
+    inspect(
         selected_root,
         filesystem,
-        CanonicalInspectionBreadth::Ordinary,
+        InspectionBreadth::Ordinary,
         &mut ignored_evidence,
     )
 }
 
-fn inspect_canonical_package_with_breadth<F: FileSystem>(
+fn inspect<F: FileSystem>(
     selected_root: &Path,
     filesystem: &F,
-    breadth: CanonicalInspectionBreadth,
+    breadth: InspectionBreadth,
     exhaustive_evidence: &mut ExhaustiveInspectionEvidence,
 ) -> Result<CurrentPackageCandidate, Failure> {
     refuse_linked_root(selected_root, filesystem)?;
@@ -1926,6 +2005,9 @@ fn inspect_canonical_package_with_breadth<F: FileSystem>(
         .and_then(|bytes| decode_version(&root, &version_path, &bytes, &mut package_diagnostics));
     let vendors = vendors_bytes
         .and_then(|bytes| decode_vendors(&root, &vendors_path, &bytes, &mut package_diagnostics));
+    if breadth == InspectionBreadth::Exhaustive {
+        exhaustive_evidence.vendors = vendors.as_ref().map(|document| document.vendors.clone());
+    }
     let Some(config) = config else {
         return damaged_without_context(&root, metadata_state, package_diagnostics);
     };
@@ -1963,7 +2045,7 @@ fn inspect_canonical_package_with_breadth<F: FileSystem>(
         stale_reasons: Vec::new(),
     };
 
-    if !package_diagnostics.is_empty() && breadth == CanonicalInspectionBreadth::Ordinary {
+    if !package_diagnostics.is_empty() && breadth == InspectionBreadth::Ordinary {
         normalize_diagnostics(&mut package_diagnostics);
         return Err(Failure::damaged(DamagedPackageProjection {
             context,
@@ -1982,12 +2064,12 @@ fn inspect_canonical_package_with_breadth<F: FileSystem>(
         vendors: Vec::new(),
         values: StoredValues::default(),
     });
-    let normalized_vendors = match PackageMetadata::new(&[], &vendors).validate() {
-        Ok(validated) => validated.vendors().clone(),
-        Err(failures) => {
-            for failure in failures {
-                match failure {
-                    PackageMetadataValidationFailure::DuplicateVendorId { vendor_indices } => {
+    let normalized_vendors = match Aggregate::judge(&vendors) {
+        Ok(aggregate) => aggregate.into_document(),
+        Err(faults) => {
+            for fault in faults {
+                match fault {
+                    AggregateFault::DuplicateVendorId { vendor_indices } => {
                         let vendor_id = vendors.vendors[vendor_indices[0]].vendor_id.clone();
                         package_diagnostics.push(Diagnostic::new(
                             DiagnosticCode::VendorIdDuplicate,
@@ -1998,7 +2080,7 @@ fn inspect_canonical_package_with_breadth<F: FileSystem>(
                             DiagnosticEvidence::VendorIdDuplicate { vendor_id },
                         ));
                     }
-                    PackageMetadataValidationFailure::DuplicateVendorName { vendor_indices } => {
+                    AggregateFault::DuplicateVendorName { vendor_indices } => {
                         let vendor_ids = vendor_indices
                             .iter()
                             .map(|index| vendors.vendors[*index].vendor_id.clone())
@@ -2019,10 +2101,9 @@ fn inspect_canonical_package_with_breadth<F: FileSystem>(
                             },
                         ));
                     }
-                    _ => unreachable!("no Orders or index participate in Vendor validation"),
                 }
             }
-            if breadth == CanonicalInspectionBreadth::Ordinary {
+            if breadth == InspectionBreadth::Ordinary {
                 normalize_diagnostics(&mut package_diagnostics);
                 return Err(Failure::damaged(DamagedPackageProjection {
                     context,
@@ -2049,6 +2130,7 @@ fn inspect_canonical_package_with_breadth<F: FileSystem>(
             );
         }
     };
+    let known_vendors = vendors_are_trustworthy.then_some(normalized_vendors.vendors.as_slice());
     let mut healthy_orders = Vec::new();
     let mut damaged_orders = Vec::new();
     let mut diagnostic_groups = Vec::new();
@@ -2058,198 +2140,35 @@ fn inspect_canonical_package_with_breadth<F: FileSystem>(
             continue;
         }
         let paths = order_paths(&root, &observation.path);
-        if breadth == CanonicalInspectionBreadth::Exhaustive {
+        if breadth == InspectionBreadth::Exhaustive {
             exhaustive_evidence.order_paths.push(paths.clone());
         }
-        let mut order_diagnostics = Vec::new();
-        let order_bytes = match required_artifact(
+        let validated = match order_health(
             &root,
-            &paths.order.absolute_path,
-            ManagedArtifactKind::Order,
-            EvidenceScope::Order,
+            &layout.orders_directory,
+            &paths,
+            known_vendors,
             filesystem,
-            &mut order_diagnostics,
         ) {
-            Ok(bytes) => bytes,
+            Ok(OrderHealth::Healthy(validated)) => validated,
+            Ok(OrderHealth::Damaged {
+                order_id,
+                vendor_id,
+                diagnostics,
+            }) => {
+                quarantine_order(
+                    paths,
+                    order_id,
+                    vendor_id,
+                    diagnostics,
+                    &mut damaged_orders,
+                    &mut diagnostic_groups,
+                );
+                continue;
+            }
             Err(failure) => return operation_failed(Some(&context.root), failure),
         };
-        let Some(order_bytes) = order_bytes else {
-            quarantine_order(
-                paths,
-                None,
-                None,
-                order_diagnostics,
-                &mut damaged_orders,
-                &mut diagnostic_groups,
-            );
-            continue;
-        };
-        let recognizable_order_version = recognizable_version(&order_bytes, "schema_version");
-        let (trustworthy_order_id, trustworthy_vendor_id) = if recognizable_order_version == Some(1)
-        {
-            extract_references(&order_bytes)
-        } else {
-            (None, None)
-        };
-        let order = match OrderDocument::from_json_bytes(&order_bytes) {
-            Ok(order) => order,
-            Err(error) => {
-                if recognizable_order_version.is_some_and(|version| version != 1) {
-                    order_diagnostics.push(Diagnostic::managed_artifact_with_details(
-                        DiagnosticCode::ManagedArtifactWrongVersion,
-                        EvidenceScope::Order,
-                        paths.order.clone(),
-                        ManagedArtifactKind::Order,
-                        None,
-                        Some("schema_version".into()),
-                        recognizable_order_version,
-                        Some(1),
-                    ));
-                } else {
-                    let code = match error.kind() {
-                        MetadataErrorKind::Encoding => {
-                            DiagnosticCode::ManagedArtifactInvalidEncoding
-                        }
-                        MetadataErrorKind::Syntax => DiagnosticCode::ManagedArtifactInvalidSyntax,
-                        MetadataErrorKind::Shape | MetadataErrorKind::Serialization => {
-                            DiagnosticCode::ManagedArtifactInvalidShape
-                        }
-                    };
-                    order_diagnostics.push(Diagnostic::managed_artifact_with_details(
-                        code,
-                        EvidenceScope::Order,
-                        paths.order.clone(),
-                        ManagedArtifactKind::Order,
-                        None,
-                        (error.kind() == MetadataErrorKind::Shape)
-                            .then(|| order_shape_field(&order_bytes))
-                            .flatten(),
-                        None,
-                        None,
-                    ));
-                }
-                quarantine_order(
-                    paths,
-                    trustworthy_order_id,
-                    trustworthy_vendor_id,
-                    order_diagnostics,
-                    &mut damaged_orders,
-                    &mut diagnostic_groups,
-                );
-                continue;
-            }
-        };
-        let validated = match order.validate() {
-            Ok(validated) => validated,
-            Err(failures) => {
-                let (field, reason) = semantic_evidence(&failures);
-                order_diagnostics.push(Diagnostic::new(
-                    DiagnosticCode::OrderSemanticInvalid,
-                    Severity::Error,
-                    EvidenceScope::Order,
-                    paths.order.clone(),
-                    Vec::new(),
-                    DiagnosticEvidence::OrderSemanticInvalid {
-                        order_id: order.order_id.clone(),
-                        field: field.into(),
-                        reason,
-                    },
-                ));
-                quarantine_order(
-                    paths,
-                    Some(order.order_id.clone()),
-                    order.vendor_id.clone(),
-                    order_diagnostics,
-                    &mut damaged_orders,
-                    &mut diagnostic_groups,
-                );
-                continue;
-            }
-        };
-        let resolved_order_directory = match tracking_filesystem.canonicalize(&observation.path) {
-            Ok(path) => path,
-            Err(_) => {
-                return operation_failed(
-                    Some(&context.root),
-                    tracking_filesystem
-                        .take_failure(&root)
-                        .expect("filesystem errors record their attempted operation"),
-                );
-            }
-        };
-        // The four damages the integrity decision calls repairable by recalculation, asked
-        // in one place so that all four earn the one diagnosis that offers that repair. A
-        // locator that is not there and one that is not a locator reach it here rather
-        // than failing the whole record: see `PackageRootLocator`.
-        let locator_reason = if resolved_order_directory.parent() != Some(&layout.orders_directory)
-        {
-            Some(OrderLocatorReason::NotActiveDirectChild)
-        } else {
-            match &validated.order().package_root {
-                PackageRootLocator::Absent => Some(OrderLocatorReason::Absent),
-                PackageRootLocator::Malformed(_) => Some(OrderLocatorReason::Malformed),
-                PackageRootLocator::Spelled(locator) => {
-                    (!locator_resolves_to_root(&resolved_order_directory, locator, &root))
-                        .then_some(OrderLocatorReason::DoesNotResolveToPackage)
-                }
-            }
-        };
-        if let Some(reason) = locator_reason {
-            order_diagnostics.push(Diagnostic::new(
-                DiagnosticCode::OrderPackageLocatorMismatch,
-                Severity::Error,
-                EvidenceScope::Order,
-                paths.order.clone(),
-                vec![context.root.clone()],
-                DiagnosticEvidence::OrderPackageLocatorMismatch {
-                    order_id: validated.order().order_id.clone(),
-                    package_root: validated
-                        .order()
-                        .package_root
-                        .stored_text()
-                        .map(str::to_owned),
-                    reason,
-                },
-            ));
-            quarantine_order(
-                paths,
-                Some(validated.order().order_id.clone()),
-                validated.order().vendor_id.clone(),
-                order_diagnostics,
-                &mut damaged_orders,
-                &mut diagnostic_groups,
-            );
-            continue;
-        }
-        if vendors_are_trustworthy
-            && let Some(vendor_id) = &validated.order().vendor_id
-            && !normalized_vendors
-                .vendors
-                .iter()
-                .any(|vendor| vendor.vendor_id == *vendor_id)
-        {
-            order_diagnostics.push(Diagnostic::new(
-                DiagnosticCode::VendorReferenceUnresolved,
-                Severity::Error,
-                EvidenceScope::Order,
-                paths.order.clone(),
-                Vec::new(),
-                DiagnosticEvidence::VendorReferenceUnresolved {
-                    order_id: validated.order().order_id.clone(),
-                    vendor_id: vendor_id.clone(),
-                },
-            ));
-            quarantine_order(
-                paths,
-                Some(validated.order().order_id.clone()),
-                validated.order().vendor_id.clone(),
-                order_diagnostics,
-                &mut damaged_orders,
-                &mut diagnostic_groups,
-            );
-            continue;
-        }
-        let readme_text = if breadth == CanonicalInspectionBreadth::Ordinary {
+        let readme_text = if breadth == InspectionBreadth::Ordinary {
             let readme = match read_document(&paths.readme, filesystem) {
                 Ok(readme) => readme,
                 Err(failure) => return operation_failed(Some(&context.root), failure),
@@ -2280,6 +2199,10 @@ fn inspect_canonical_package_with_breadth<F: FileSystem>(
     sort_healthy_orders(&mut healthy_orders);
     damaged_orders.sort_by(|left, right| left.paths.directory.cmp(&right.paths.directory));
     sort_diagnostic_groups(&mut diagnostic_groups);
+    if breadth == InspectionBreadth::Exhaustive {
+        exhaustive_evidence.healthy = healthy_orders.clone();
+        exhaustive_evidence.damaged = damaged_orders.clone();
+    }
     let package_has_errors = package_diagnostics
         .iter()
         .any(|diagnostic| diagnostic.severity == Severity::Error);
@@ -2293,7 +2216,7 @@ fn inspect_canonical_package_with_breadth<F: FileSystem>(
         sort_diagnostic_groups(&mut diagnostic_groups);
     }
 
-    if package_has_errors && breadth == CanonicalInspectionBreadth::Exhaustive {
+    if package_has_errors && breadth == InspectionBreadth::Exhaustive {
         return Err(Failure::damaged(DamagedPackageProjection {
             context,
             metadata_state,
@@ -2438,18 +2361,193 @@ fn current_package_candidate(
     }
 }
 
-fn extract_references(bytes: &[u8]) -> (Option<OrderId>, Option<VendorId>) {
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
-        return (None, None);
+fn stored_order_id(bytes: &[u8]) -> Option<OrderId> {
+    let record = serde_json::from_slice::<serde_json::Value>(bytes).ok()?;
+    serde_json::from_value(record.get("order_id")?.clone()).ok()
+}
+
+/// What one Order Directory's records make of it, judged by the rules every read of an
+/// Order applies.
+enum OrderHealth {
+    /// The record is present, valid, located in this Package, and names a Vendor that
+    /// resolves.
+    Healthy(Box<ValidatedOrder>),
+    /// The record fails one of those rules; `diagnostics` say which. The identity and the
+    /// Vendor are the ones the record can still be trusted to name.
+    Damaged {
+        order_id: Option<OrderId>,
+        vendor_id: Option<VendorId>,
+        diagnostics: Vec<Diagnostic>,
+    },
+}
+
+/// The health of the Order at `paths`, an Order Directory of the Package at `root` whose
+/// Orders Directory is `orders_directory`. Its Vendor Reference is judged against
+/// `vendors` where those are known; the README is the caller's to read.
+fn order_health<F: FileSystem>(
+    root: &Path,
+    orders_directory: &Path,
+    paths: &OrderPaths,
+    vendors: Option<&[Vendor]>,
+    filesystem: &F,
+) -> Result<OrderHealth, FailedOperation> {
+    let mut diagnostics = Vec::new();
+    let Some(order_bytes) = required_artifact(
+        root,
+        &paths.order.absolute_path,
+        ManagedArtifactKind::Order,
+        EvidenceScope::Order,
+        filesystem,
+        &mut diagnostics,
+    )?
+    else {
+        return Ok(OrderHealth::Damaged {
+            order_id: None,
+            vendor_id: None,
+            diagnostics,
+        });
     };
-    (
-        value
-            .get("order_id")
-            .and_then(|id| serde_json::from_value(id.clone()).ok()),
-        value
-            .get("vendor_id")
-            .and_then(|id| serde_json::from_value(id.clone()).ok()),
-    )
+    let recognizable_order_version = recognizable_version(&order_bytes, "schema_version");
+    // An identity is trusted only from a record of the version this build reads, so an
+    // unsupported record joins no duplicate detection. The Vendor a record names is
+    // kept as stored, whatever its version, so no change takes away a Vendor even a
+    // record this build cannot read still names.
+    let trustworthy_order_id = if recognizable_order_version == Some(1) {
+        stored_order_id(&order_bytes)
+    } else {
+        None
+    };
+    let order = match OrderDocument::from_json_bytes(&order_bytes) {
+        Ok(order) => order,
+        Err(error) => {
+            if recognizable_order_version.is_some_and(|version| version != 1) {
+                diagnostics.push(Diagnostic::managed_artifact_with_details(
+                    DiagnosticCode::ManagedArtifactWrongVersion,
+                    EvidenceScope::Order,
+                    paths.order.clone(),
+                    ManagedArtifactKind::Order,
+                    None,
+                    Some("schema_version".into()),
+                    recognizable_order_version,
+                    Some(1),
+                ));
+            } else {
+                let code = match error.kind() {
+                    MetadataErrorKind::Encoding => DiagnosticCode::ManagedArtifactInvalidEncoding,
+                    MetadataErrorKind::Syntax => DiagnosticCode::ManagedArtifactInvalidSyntax,
+                    MetadataErrorKind::Shape | MetadataErrorKind::Serialization => {
+                        DiagnosticCode::ManagedArtifactInvalidShape
+                    }
+                };
+                diagnostics.push(Diagnostic::managed_artifact_with_details(
+                    code,
+                    EvidenceScope::Order,
+                    paths.order.clone(),
+                    ManagedArtifactKind::Order,
+                    None,
+                    (error.kind() == MetadataErrorKind::Shape)
+                        .then(|| order_shape_field(&order_bytes))
+                        .flatten(),
+                    None,
+                    None,
+                ));
+            }
+            return Ok(OrderHealth::Damaged {
+                order_id: trustworthy_order_id,
+                vendor_id: named_vendor(&order_bytes),
+                diagnostics,
+            });
+        }
+    };
+    let validated = match order.validate() {
+        Ok(validated) => validated,
+        Err(failures) => {
+            let (field, reason) = semantic_evidence(&failures);
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::OrderSemanticInvalid,
+                Severity::Error,
+                EvidenceScope::Order,
+                paths.order.clone(),
+                Vec::new(),
+                DiagnosticEvidence::OrderSemanticInvalid {
+                    order_id: order.order_id.clone(),
+                    field: field.into(),
+                    reason,
+                },
+            ));
+            return Ok(OrderHealth::Damaged {
+                order_id: Some(order.order_id.clone()),
+                vendor_id: order.vendor_id.clone(),
+                diagnostics,
+            });
+        }
+    };
+    let resolved_order_directory = filesystem
+        .canonicalize(&paths.directory.absolute_path)
+        .map_err(|error| {
+            FailedOperation::filesystem(paths.directory.clone(), &error, filesystem)
+        })?;
+    // The four damages the integrity decision calls repairable by recalculation, asked
+    // in one place so that all four earn the one diagnosis that offers that repair. A
+    // locator that is not there and one that is not a locator reach it here rather
+    // than failing the whole record: see `PackageRootLocator`.
+    let locator_reason = if resolved_order_directory.parent() != Some(orders_directory) {
+        Some(OrderLocatorReason::NotActiveDirectChild)
+    } else {
+        match &validated.order().package_root {
+            PackageRootLocator::Absent => Some(OrderLocatorReason::Absent),
+            PackageRootLocator::Malformed(_) => Some(OrderLocatorReason::Malformed),
+            PackageRootLocator::Spelled(locator) => {
+                (!locator_resolves_to_root(&resolved_order_directory, locator, root))
+                    .then_some(OrderLocatorReason::DoesNotResolveToPackage)
+            }
+        }
+    };
+    if let Some(reason) = locator_reason {
+        diagnostics.push(Diagnostic::new(
+            DiagnosticCode::OrderPackageLocatorMismatch,
+            Severity::Error,
+            EvidenceScope::Order,
+            paths.order.clone(),
+            vec![managed_location(root.to_path_buf(), ".")],
+            DiagnosticEvidence::OrderPackageLocatorMismatch {
+                order_id: validated.order().order_id.clone(),
+                package_root: validated
+                    .order()
+                    .package_root
+                    .stored_text()
+                    .map(str::to_owned),
+                reason,
+            },
+        ));
+        return Ok(OrderHealth::Damaged {
+            order_id: Some(validated.order().order_id.clone()),
+            vendor_id: validated.order().vendor_id.clone(),
+            diagnostics,
+        });
+    }
+    if let Some(vendors) = vendors
+        && let Some(vendor_id) = &validated.order().vendor_id
+        && !resolves(vendors, vendor_id)
+    {
+        diagnostics.push(Diagnostic::new(
+            DiagnosticCode::VendorReferenceUnresolved,
+            Severity::Error,
+            EvidenceScope::Order,
+            paths.order.clone(),
+            Vec::new(),
+            DiagnosticEvidence::VendorReferenceUnresolved {
+                order_id: validated.order().order_id.clone(),
+                vendor_id: vendor_id.clone(),
+            },
+        ));
+        return Ok(OrderHealth::Damaged {
+            order_id: Some(validated.order().order_id.clone()),
+            vendor_id: validated.order().vendor_id.clone(),
+            diagnostics,
+        });
+    }
+    Ok(OrderHealth::Healthy(Box::new(validated)))
 }
 
 fn quarantine_order(
@@ -2478,34 +2576,14 @@ fn quarantine_duplicate_order_ids(
     damaged_orders: &mut Vec<DamagedOrder>,
     diagnostic_groups: &mut Vec<DiagnosticGroup>,
 ) {
-    let mut conflicts_by_id = std::collections::BTreeMap::<String, Vec<Location>>::new();
-    for (order_id, location) in healthy_orders
-        .iter()
-        .map(|order| (&order.document.order_id, &order.paths.directory))
-        .chain(damaged_orders.iter().filter_map(|order| {
-            order
-                .order_id
-                .as_ref()
-                .map(|id| (id, &order.paths.directory))
-        }))
-    {
-        conflicts_by_id
-            .entry(order_id.as_str().to_owned())
-            .or_default()
-            .push(location.clone());
-    }
-    conflicts_by_id.retain(|_, locations| locations.len() > 1);
-    for locations in conflicts_by_id.values_mut() {
-        locations.sort();
-    }
+    let conflicts_by_id = Records::new(None, healthy_orders, damaged_orders).contested();
     if conflicts_by_id.is_empty() {
         return;
     }
 
     let mut unique_orders = Vec::with_capacity(healthy_orders.len());
     for order in healthy_orders.drain(..) {
-        let Some(_conflict_locations) = conflicts_by_id.get(order.document.order_id.as_str())
-        else {
+        let Some(_conflict_locations) = conflicts_by_id.get(&order.document.order_id) else {
             unique_orders.push(order);
             continue;
         };
@@ -2525,7 +2603,7 @@ fn quarantine_duplicate_order_ids(
         let Some(order_id) = &order.order_id else {
             continue;
         };
-        let Some(conflict_locations) = conflicts_by_id.get(order_id.as_str()) else {
+        let Some(conflict_locations) = conflicts_by_id.get(order_id) else {
             continue;
         };
         let group = diagnostic_groups
@@ -3048,26 +3126,7 @@ fn order_paths(root: &Path, order_directory: &Path) -> OrderPaths {
 }
 
 fn sort_healthy_orders(orders: &mut [HealthyOrder]) {
-    orders.sort_by(|left, right| {
-        right
-            .document
-            .date_ordered
-            .as_str()
-            .cmp(left.document.date_ordered.as_str())
-            .then_with(|| {
-                left.document
-                    .title
-                    .as_str()
-                    .as_bytes()
-                    .cmp(right.document.title.as_str().as_bytes())
-            })
-            .then_with(|| {
-                left.document
-                    .order_id
-                    .as_str()
-                    .cmp(right.document.order_id.as_str())
-            })
-    });
+    orders.sort_by(|left, right| left.document.listing_order(&right.document));
 }
 
 fn required_artifact<F: FileSystem>(

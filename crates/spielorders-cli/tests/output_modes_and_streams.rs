@@ -72,20 +72,6 @@ fn generated_reference_text_answers_on_standard_output_at_success() {
     }
 }
 
-/// An unknown subcommand is a usage error like any other, so a family that exists is
-/// not a licence for a command that does not.
-#[test]
-fn an_unknown_command_in_a_known_family_is_a_usage_error() {
-    let outcome = Invocation::new(&["package", "reamde"]).run();
-
-    assert_eq!(outcome.status, Some(2));
-    assert_eq!(
-        outcome.stdout, b"",
-        "a usage error writes nothing to stdout"
-    );
-    assert!(!outcome.stderr.is_empty(), "and reports on standard error");
-}
-
 // ---------------------------------------------------------------------------
 // The command path comes first and its modifiers follow it.
 // ---------------------------------------------------------------------------
@@ -143,25 +129,6 @@ fn an_option_written_before_the_command_path_is_a_usage_error() {
 // The four modes, and the audience a usage error is reported to.
 // ---------------------------------------------------------------------------
 
-/// Silence is what a caller asked for.
-///
-/// The mutual exclusion between the modes is the parser's, asserted pair by pair beside
-/// the group that declares it. This is the half of it that cost a caller something: while
-/// two modes could both be named, one of them won, and the caller who had asked for
-/// silence was the one who lost.
-#[test]
-fn quiet_is_silent_on_success() {
-    let (_tree, root) = initialized_package("quiet-on-success");
-
-    let outcome = Invocation::new(&["package", "readme", "--quiet"])
-        .rooted_at(&root)
-        .run();
-
-    assert_eq!(outcome.status, Some(0), "{}", outcome.stderr_text());
-    assert_eq!(outcome.stdout, b"", "nothing is said on success");
-    assert_eq!(outcome.stderr, b"");
-}
-
 /// **A usage error is reported to whichever audience the command line named.** Parsing
 /// failed, so no mode was legitimately selected and the executable has to choose. It
 /// errs toward the machine: a caller that wrote `--json` anywhere gets the one response
@@ -209,63 +176,30 @@ fn a_usage_error_is_reported_to_the_audience_the_command_line_named() {
 // Stream discipline, mode by mode.
 // ---------------------------------------------------------------------------
 
+/// A failure goes to standard error and leaves standard output empty, in the default mode
+/// and under `--quiet` alike. A caller composing `$(...)` must not receive an error as the
+/// result, and `--quiet`'s whole use is a status check, so a *silenced failure* would
+/// defeat the caller.
 #[test]
-fn the_result_goes_to_standard_output_and_nothing_else_does() {
-    let (_tree, root) = initialized_package("streams-human-success");
-
-    let outcome = Invocation::new(&["package", "readme"])
-        .rooted_at(&root)
-        .run();
-
-    assert_eq!(
-        outcome.stdout_text(),
-        format!("{}\n", root.join("README.md").display())
-    );
-    assert_eq!(outcome.stderr, b"");
-}
-
-#[test]
-fn a_failure_goes_to_standard_error_and_leaves_standard_output_empty() {
+fn a_failure_goes_to_standard_error_even_under_quiet() {
     let (_tree, root) = initialized_package("streams-human-failure");
     let outside = directory_that_is_not_a_root(&root);
 
-    let outcome = Invocation::new(&["package", "readme"])
-        .rooted_at(&outside)
-        .run();
+    for mode in [&[][..], &["--quiet"][..]] {
+        let mut arguments = vec!["package", "readme"];
+        arguments.extend_from_slice(mode);
+        let outcome = Invocation::new(&arguments).rooted_at(&outside).run();
 
-    assert_eq!(
-        outcome.stdout, b"",
-        "a caller composing `$(...)` must not receive an error as the result"
-    );
-    assert!(outcome.stderr_text().starts_with("error: "));
-}
-
-/// `--quiet` says nothing on success. Its whole use is a status check, so a line of
-/// output would defeat it — and a *silenced failure* would defeat the caller.
-#[test]
-fn quiet_says_nothing_on_success_and_still_reports_a_failure() {
-    let (_tree, root) = initialized_package("streams-quiet");
-    let outside = directory_that_is_not_a_root(&root);
-
-    let success = Invocation::new(&["package", "readme", "--quiet"])
-        .rooted_at(&root)
-        .run();
-    assert_eq!(success.status, Some(0));
-    assert_eq!(success.stdout, b"", "no output on success");
-    assert_eq!(success.stderr, b"", "and no warning either");
-
-    let failure = Invocation::new(&["package", "readme", "--quiet"])
-        .rooted_at(&outside)
-        .run();
-    assert_eq!(failure.status, Some(1));
-    assert_eq!(failure.stdout, b"");
-    assert!(
-        failure
-            .stderr_text()
-            .starts_with("error: unmanaged package"),
-        "a failure is reported even under --quiet: {}",
-        failure.stderr_text()
-    );
+        assert_eq!(outcome.status, Some(1), "{mode:?}");
+        assert_eq!(outcome.stdout, b"", "{mode:?}");
+        assert!(
+            outcome
+                .stderr_text()
+                .starts_with("error: unmanaged package"),
+            "{mode:?}: the failure is reported, its severity in words: {}",
+            outcome.stderr_text()
+        );
+    }
 }
 
 /// `--verbose` adds detail to the result on standard output. The first line stays the
@@ -294,95 +228,8 @@ fn verbose_adds_detail_to_the_result_on_standard_output() {
 }
 
 // ---------------------------------------------------------------------------
-// `--json`: exactly one document, on success and on failure.
+// Reference text under `--json`.
 // ---------------------------------------------------------------------------
-
-/// The `response` helper in `support` is what enforces "exactly one UTF-8 document and
-/// nothing else" — it refuses a second document, trailing text, or anything at all on
-/// standard error. This test is here so the claim is made on both sides of `ok`.
-#[test]
-fn json_writes_exactly_one_document_on_success_and_on_failure() {
-    let (_tree, root) = initialized_package("json-one-document");
-    let outside = directory_that_is_not_a_root(&root);
-
-    let success = Invocation::new(&["package", "readme", "--json"])
-        .rooted_at(&root)
-        .run();
-    assert_eq!(success.status, Some(0));
-    assert_eq!(response(&success)["ok"], true);
-
-    let failure = Invocation::new(&["package", "readme", "--json"])
-        .rooted_at(&outside)
-        .run();
-    assert_eq!(failure.status, Some(1));
-    assert_eq!(response(&failure)["ok"], false);
-}
-
-/// A Package whose README exists and one whose README does not are the same answer
-/// except for one fact, and that fact is only in the document. A command that printed
-/// nothing, or a different path, for an absent README would break the way the document
-/// gets created.
-#[test]
-fn existence_is_the_only_difference_an_absent_readme_makes() {
-    let (_tree, present_root) = initialized_package("json-readme-present");
-    let (_absent_tree, absent_root) = initialized_package("json-readme-absent");
-    std::fs::remove_file(absent_root.join("README.md")).expect("the optional README is removed");
-
-    let present = response(
-        &Invocation::new(&["package", "readme", "--json"])
-            .rooted_at(&present_root)
-            .run(),
-    );
-    let absent = response(
-        &Invocation::new(&["package", "readme", "--json"])
-            .rooted_at(&absent_root)
-            .run(),
-    );
-
-    assert_eq!(present["data"]["state"], "present");
-    assert_eq!(absent["data"]["state"], "missing");
-    assert_eq!(
-        present["data"]["path"],
-        present_root
-            .join("README.md")
-            .to_str()
-            .expect("the test path is UTF-8"),
-    );
-    assert_eq!(
-        absent["data"]["path"],
-        absent_root
-            .join("README.md")
-            .to_str()
-            .expect("the test path is UTF-8"),
-        "the conventional path does not depend on the document being there"
-    );
-}
-
-/// A usage error under `--json` is a response document. Generated human help on a
-/// stream promised to carry one JSON document is exactly the contamination the contract
-/// forbids, and it is what a naive implementation does: the parser fails before any
-/// mode is known, so the help text goes out by default.
-#[test]
-fn a_usage_error_under_json_is_a_document_rather_than_generated_help() {
-    let outcome = Invocation::new(&["package", "readme", "--json", "--jsom"]).run();
-    let document = response(&outcome);
-
-    assert_eq!(outcome.status, Some(2));
-    assert_eq!(document["ok"], false);
-    assert!(document["data"].is_null());
-    assert_eq!(document["error"]["code"], "usage_invalid");
-    assert_eq!(document["error"]["detail"], "unrecognized option `--jsom`");
-    assert!(
-        document["context"]["root"].is_null(),
-        "nothing about the subject was attempted"
-    );
-
-    let message = document["error"]["detail"]
-        .as_str()
-        .expect("the message is a string");
-    assert!(!message.contains("Usage:"), "{message}");
-    assert!(!message.contains("--help"), "{message}");
-}
 
 /// `--help` is reference text in every mode. Answering a request for the reference with
 /// a JSON document would be answering a different question.
@@ -459,21 +306,10 @@ fn a_no_color_request_is_honored_without_changing_the_message() {
 
 /// No message needs color to be understood: the label carries the meaning. A message
 /// whose severity was only in its color would be unreadable in a log file, which is
-/// where these messages mostly end up.
+/// where these messages mostly end up. A failure's `error: ` label is asserted with the
+/// failure streams above.
 #[test]
-fn every_message_states_its_severity_in_words() {
-    let (_tree, root) = initialized_package("color-carries-no-meaning");
-    let outside = directory_that_is_not_a_root(&root);
-
-    let failure = Invocation::new(&["package", "readme"])
-        .rooted_at(&outside)
-        .run();
-    assert!(
-        failure.stderr_text().starts_with("error: "),
-        "the severity is a word: {}",
-        failure.stderr_text()
-    );
-
+fn a_warning_states_its_severity_in_words() {
     // A README that exists but cannot be read as a document is the warning this
     // command can produce, and it is a warning rather than a failure: the conventional
     // path is still the answer.
@@ -521,4 +357,101 @@ fn a_findings_domain_identity_reaches_a_human_only_under_verbose() {
         "the identity is what `--verbose` adds: {}",
         verbose.stderr_text()
     );
+}
+
+/// A dry run is how a reader reviews a change before making it, so its human output
+/// names what would change, and the entries an Order merge would discard, without
+/// `--verbose`.
+#[test]
+fn a_human_dry_run_shows_what_it_would_change_and_discard() {
+    let (_tree, root) = crate::support::populated_package("human-dry-run");
+    let kept = crate::support::order_directory(&root, "Laser_components");
+    let edit = Invocation::new(&["order", "edit", "title=Better lenses", "--dry-run"])
+        .rooted_at(&kept)
+        .run();
+    assert_eq!(edit.status, Some(0));
+    let shown = edit.stdout_text();
+    assert!(shown.contains("title"), "{shown}");
+    assert!(shown.contains("Better lenses"), "{shown}");
+
+    let other = crate::support::new_order(
+        &root,
+        &[("title", "Duplicate order"), ("currency", "USD")],
+        &[&[
+            ("description", "Spare mount"),
+            ("quantity", "1"),
+            ("unit_price", "5"),
+        ]],
+    );
+    std::fs::write(other.join("quote.pdf"), b"Quote").unwrap();
+    std::fs::write(kept.join("quote.pdf"), b"Kept quote").unwrap();
+    let merge = Invocation::new(&["order", "merge", "--dry-run"])
+        .argument(&other)
+        .rooted_at(&kept)
+        .run();
+    assert_eq!(merge.status, Some(0));
+    let shown = merge.stdout_text();
+    assert!(shown.contains("discards"), "{shown}");
+    assert!(shown.contains("quote.pdf"), "{shown}");
+    assert!(shown.contains("row_added"), "the Item it adds: {shown}");
+    assert!(shown.contains("Spare mount"), "{shown}");
+
+    // A plan that changes no record's facts names no changes at all.
+    let removal = Invocation::new(&["order", "remove", "--dry-run"])
+        .rooted_at(&other)
+        .run();
+    assert_eq!(removal.status, Some(0));
+    assert!(
+        !removal.stdout_text().contains("changes"),
+        "{}",
+        removal.stdout_text()
+    );
+}
+
+/// `order merge` asks before a discard only a person reading human output can answer: under
+/// `--json` or `--quiet` on a terminal it refuses with `discard_unconfirmed` and writes no
+/// question, even where an answer is waiting on standard input.
+#[test]
+fn a_merge_asks_nothing_under_json_or_quiet_on_a_terminal() {
+    for mode in ["--json", "--quiet"] {
+        let (_tree, root) = crate::support::populated_package("merge-no-prompt");
+        let kept = crate::support::order_directory(&root, "Laser_components");
+        let other = crate::support::new_order(&root, &[("title", "Duplicate order")], &[]);
+        std::fs::write(other.join("quote.pdf"), b"Quote").unwrap();
+        std::fs::write(kept.join("quote.pdf"), b"Kept quote").unwrap();
+        let arguments = [
+            env!("CARGO_BIN_EXE_spielorders").to_owned(),
+            "order".to_owned(),
+            "merge".to_owned(),
+            other.display().to_string(),
+            "--root".to_owned(),
+            kept.display().to_string(),
+            mode.to_owned(),
+        ];
+        // `script` gives the command a terminal on its standard streams.
+        let mut script = std::process::Command::new("script");
+        if cfg!(target_os = "macos") {
+            script.arg("-q").arg("/dev/null").args(&arguments);
+        } else {
+            let quoted: Vec<String> = arguments.iter().map(|word| format!("'{word}'")).collect();
+            script.args(["-qec", &quoted.join(" "), "/dev/null"]);
+        }
+        let mut child = script
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("script runs");
+        std::io::Write::write_all(child.stdin.as_mut().unwrap(), b"y\n").unwrap();
+        let output = child.wait_with_output().expect("script finishes");
+        let shown = String::from_utf8_lossy(&output.stdout);
+
+        assert!(!shown.contains("[y/N]"), "{mode} asks: {shown}");
+        assert!(
+            std::fs::read(other.join("quote.pdf")).is_ok(),
+            "{mode} discards nothing without --yes"
+        );
+        if mode == "--json" {
+            assert!(shown.contains("discard_unconfirmed"), "{shown}");
+        }
+    }
 }

@@ -1,9 +1,23 @@
 import AppKit
 import SwiftUI
 
+extension NSColor {
+    /// A problem's text: a red deep enough to read on a light background, the system red on a
+    /// dark one.
+    static let problemText = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            ? .systemRed : NSColor(srgbRed: 0.77, green: 0.11, blue: 0.11, alpha: 1)
+    }
+}
+
+extension ShapeStyle where Self == Color {
+    /// A problem's text; see `NSColor.problemText`.
+    static var problemText: Color { Color(nsColor: .problemText) }
+}
+
 /// How much a mark asks of the owner: a problem to correct, a warning to read, or a
 /// consequence to notice.
-enum NoticeLevel {
+enum NoticeLevel: CaseIterable {
     case problem, warning, note
 
     var symbol: String {
@@ -23,7 +37,13 @@ enum NoticeLevel {
         }
     }
 
-    var image: NSImage {
+    /// The symbol in its colors, made once for each level: a form shows it beside every field,
+    /// and a view drawn again with the same image keeps its layout.
+    @MainActor var image: NSImage { Self.images[self] ?? drawn }
+
+    @MainActor private static let images = Dictionary(uniqueKeysWithValues: allCases.map { ($0, $0.drawn) })
+
+    private var drawn: NSImage {
         let palette = NSImage.SymbolConfiguration(paletteColors: colors)
         let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) ?? NSImage()
         return image.withSymbolConfiguration(palette) ?? image
@@ -61,7 +81,12 @@ struct ProblemBadge: View {
         Button {
             presented = true
         } label: {
+            // Padding enlarges the click target; the symbol's foot stays on the text's baseline.
             Image(nsImage: level.image)
+                .padding(3)
+                .contentShape(Rectangle())
+                .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 3 }
+                .alignmentGuide(.lastTextBaseline) { $0[.bottom] - 3 }
         }
         .buttonStyle(.borderless)
         .help(lines.isEmpty ? title : lines.joined(separator: "\n"))

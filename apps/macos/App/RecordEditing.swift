@@ -140,6 +140,7 @@ extension DesktopModel {
         if deferNavigation({ [self] in selectVendor(id, focus: focus) }) { return }
         guard !busy, folder != nil,
               confirmDiscard(retry: { [self] in selectVendor(id, focus: focus) }) else { return }
+        multipleVendorSelection = []
         guard let row = vendorRow(id) else {
             discardEditors()
             selectedVendorID = nil
@@ -260,7 +261,7 @@ extension DesktopModel {
                 vendorDetails = nil
             }
             if !Task.isCancelled {
-                warn(destination, "The selection couldn’t be read. Reload the Package.", error: error)
+                warn(destination, "The selection couldn’t be read. Reload the Package, then try again.", error: error)
             }
         }
     }
@@ -347,6 +348,7 @@ extension DesktopModel {
         } else {
             vendorEditor = editor
             destination = .vendors
+            multipleVendorSelection = []
             selectedVendorID = opened.draft.recordID
             vendorContext = opened.vendor
             vendorDetails = opened.vendorDetails
@@ -419,6 +421,7 @@ extension DesktopModel {
         let editor = RecordEditor(draft)
         editor.window = dialogs.window
         editor.onChange = { [weak self] change in self?.register(change) }
+        editor.onInput = { [weak self] in self?.endRedo() }
         editor.onFinish = { [weak self, weak editor] in
             guard let self, let editor else { return }
             if !editor.dirty {
@@ -470,7 +473,7 @@ extension DesktopModel {
         guard !busy, let editor = recordEditor, !editor.isNew else { return }
         busy = true
         Task {
-            let discard = await confirm("Discard unsaved changes?", "The changes that could not be saved will be lost.",
+            let discard = await confirm("Discard unsaved changes?", "The changes that couldn’t be saved will be lost.",
                                         identifier: "editor.revert", approve: "Revert", destructive: true)
             busy = false
             // Revert reads the Order again, README included; README text is saved first.
@@ -517,14 +520,20 @@ extension DesktopModel {
                 readme.afterSave = finish
             } else if selectionRead != nil {
                 selectionRead?.afterRead = finish
+            } else {
+                // Other work, such as a lookup that disabled the field, saves it once it ends.
+                waiting.whenFree { [weak self, weak editor] in
+                    guard let self, let editor, [orderEditor, vendorEditor].contains(where: { $0 === editor }) else { return }
+                    commitRecord(editor)
+                }
             }
             return
         }
         guard canBrowseRecords, folder != nil else {
             if editor.dirty || editor.isNew {
                 let record = editor.kind == .order ? "Order" : "Vendor"
-                editor.requireReopen("This \(record) has changes that can’t be written until the Package is reloaded. "
-                    + "Choose File → Reload Package; it asks before discarding them.")
+                editor.requireReopen("This \(record) has changes that can’t be saved until the Package is reloaded. "
+                    + "Reload the Package to keep editing; it asks before discarding them.")
             }
             return
         }
@@ -534,11 +543,11 @@ extension DesktopModel {
         save(editor) { [self] saved in
             editor.saved(saved.draft)
             if saved.requiresReopen {
-                requireReload(Notice("The change was saved, but the Package must be reloaded before continuing.",
+                requireReload(Notice("The change was saved. Reload the Package to keep editing.",
                                      details: saved.warnings.joined(separator: "\n\n")))
                 if editor.dirty {
                     editor.requireReopen("The submitted change was saved. Later input is kept here. "
-                        + "Choose File → Reload Package before continuing; it asks before discarding that input.")
+                        + "Reload the Package to keep editing; it asks before discarding that input.")
                 }
             }
             guard creating || !saved.requiresReopen else { return }
@@ -599,11 +608,11 @@ extension DesktopModel {
         if deferNavigation({ [self] in addValue(text, at: field, in: editor) }) { return }
         guard !busy else { return }
         let kind = ValueChooser.kind(of: field)
-        let owner = field == SPIELORDERS_ORDER_FIELD_ORDER_GROUP ? groupOwner(editor) : ""
+        let reach = field == SPIELORDERS_ORDER_FIELD_ORDER_GROUP
+            ? groupReach(editor) : "It becomes one of the Package’s \(kind)s, offered to every Order."
         busy = true
         Task {
-            let added = await confirm("Add “\(text)” as a new \(kind)?",
-                                      "It becomes one of the Package’s \(kind)s\(owner), offered to every Order.",
+            let added = await confirm("Add “\(text)” as a new \(kind)?", reach,
                                       identifier: "order.editor.addValue", approve: "Add \(kind)")
             busy = false
             guard added, orderEditor === editor else { return }
@@ -612,17 +621,18 @@ extension DesktopModel {
         }
     }
 
-    /// Whose Order Groups a group added to `editor`'s Order joins, as a clause.
-    private func groupOwner(_ editor: RecordEditor) -> String {
+    /// Which Orders are offered an Order Group added to `editor`'s Order, as a sentence.
+    private func groupReach(_ editor: RecordEditor) -> String {
         let project = editor.field(SPIELORDERS_ORDER_FIELD_PROJECT)
-        return project.isEmpty ? " for Orders with no Project" : " in “\(project)”"
+        return project.isEmpty ? "It becomes an Order Group for Orders with no Project."
+            : "It becomes an Order Group in “\(project)”, offered to that Project’s Orders."
     }
 
     func cancelVendorSheet() {
         guard !busy, let sheet = vendorSheet else { return }
         busy = true
         Task {
-            let discard = sheet.dirty ? await confirm("Discard this new Vendor?", "The Vendor has not been saved.",
+            let discard = sheet.dirty ? await confirm("Discard this new Vendor?", "It hasn’t been created yet. Choose Create to keep it.",
                                                        identifier: "vendor.sheet.discard", destructive: true) : true
             busy = false
             guard discard, vendorSheet === sheet else { return }
@@ -686,8 +696,10 @@ extension DesktopModel {
                     noteClearedGroup(group, project: project, in: editor)
                 }
             } catch let refusal as SaveRefusal {
-                let explanation = refusal.stale
+                let explanation = refusal.recordChanged
                     ? "It changed on disk. Your input is kept; Revert shows the current version."
+                    : refusal.stale
+                    ? "Something it uses changed on disk. Your input is kept; Retry saves it."
                     : "Your input is kept. Correct the marked problems, then Retry."
                 editor.refuse(refusal, failure: Notice(explanation, details: refusal.localizedDescription))
                 if editor === vendorEditor, !editor.isNew, refusal.problems.contains(where: \.nameTaken) {
@@ -699,7 +711,7 @@ extension DesktopModel {
             } catch {
                 let failure = Notice("Your input is kept. Retry, or reload the Package.",
                                      details: error.localizedDescription)
-                editor.refuse(.unavailable("The change couldn’t be written."), failure: failure)
+                editor.refuse(.unavailable("The change couldn’t be saved."), failure: failure)
             }
         }
     }
@@ -730,12 +742,12 @@ extension DesktopModel {
                                          cancellation: LibraryCancellation()).rows
             let vendorQuery = destination == .vendors ? search : RecordQuery()
             let listedVendors = try await searchVendors(session, vendorQuery,
-                                                        includeHidden: includeHiddenVendors, sortField: vendorSortField,
+                                                        sortField: vendorSortField,
                                                         descending: vendorSortDescending,
                                                         cancellation: LibraryCancellation())
             vendors = listedVendors.rows
             vendorCount = vendorQuery.text.isEmpty ? vendors.count
-                : try await countVendors(session, includeHidden: includeHiddenVendors, cancellation: LibraryCancellation())
+                : try await countVendors(session, cancellation: LibraryCancellation())
             orderContext = all.rows.first { $0.id == orderID }
             selectedOrderID = orderContext?.id
             // Details are replaced once read, so the pane beside a form being typed in holds still.
@@ -765,8 +777,8 @@ extension DesktopModel {
             } else {
                 vendorDetails = nil
             }
-            showWarnings(orders: await session.findings + all.notices,
-                         vendors: listedVendors.notices + allVendors.notices)
+            showWarnings(orders: Notice.list(await session.findings + all.notices),
+                         vendors: Notice.list(listedVendors.notices + allVendors.notices))
             await openSelection(session, cancellation: LibraryCancellation())
         } catch {
             requireReload(Notice("The change was saved, but the lists couldn’t be read again.",

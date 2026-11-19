@@ -290,6 +290,19 @@ fn real_observation_is_no_follow_and_reports_comparable_evidence_or_uncertainty(
     }
 }
 
+#[cfg(target_vendor = "apple")]
+#[test]
+fn a_mounted_directory_uses_its_own_volumes_change_evidence() {
+    // macOS mounts devfs here: the entry belongs to a different volume from its
+    // APFS parent, and devfs supplies no comparable status-change evidence.
+    let observed = PlatformFileSystem
+        .observe_file_change(Path::new("/dev"))
+        .unwrap();
+
+    assert_eq!(observed.kind, Some(FileSystemEntryKind::Directory));
+    assert_eq!(observed.evidence, FileChangeEvidence::Uncertain);
+}
+
 #[test]
 fn managed_bytes_survive_a_write_a_read_and_a_durable_replacement() {
     let tree = Tree::new("managed-bytes");
@@ -527,8 +540,10 @@ fn the_calendar_answers_with_this_machines_own_local_date() {
     assert!(today.year >= 2026, "{today:?} is not an epoch default");
 }
 
+/// An entry's name is the volume's own spelling of the final component, found without
+/// following a link, and an absent entry has none.
 #[test]
-fn resolved_names() {
+fn an_entry_name_is_the_volumes_own_spelling_without_following_a_link() {
     let tree = Tree::new("entry-names");
     let parent = tree.path().join("Folder");
     fs::create_dir(&parent).unwrap();
@@ -552,14 +567,6 @@ fn resolved_names() {
             assert_eq!(PlatformFileSystem.entry_name(&alias).unwrap(), None);
         }
     }
-    assert_eq!(
-        fs::read_link(parent.join("Link")).unwrap(),
-        Path::new("Original")
-    );
-    assert_eq!(
-        fs::read_link(parent.join("Dangling")).unwrap(),
-        Path::new("missing")
-    );
     assert_eq!(
         PlatformFileSystem
             .entry_name(&parent.join("absent"))

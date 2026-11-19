@@ -25,7 +25,7 @@ the named change. `agent provision` writes the current guidance, replacing earli
 `agent defaults` reports the installed default resource locations without opening a Package.
 
 For many record changes, write one command line per line as a JSON array of strings and
-run `spielorders apply FILE --root <Package>` once: every line is planned against the
+run `spielorders apply FILE --root <Package>` once, or pipe the lines to `apply -`: every line is planned against the
 Package as the lines before it leave it, one refused line refuses the whole batch and
 names it, and otherwise everything is written together. It accepts `order edit`, the
 `order item` and `vendor contact` changes, `add-vendor`, and `vendor edit`; review it with

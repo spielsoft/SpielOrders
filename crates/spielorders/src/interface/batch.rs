@@ -2,6 +2,7 @@
 //! changes so far leave it: a draft taken from a batch starts from that state, adding it
 //! plans it there, and the batch's plan commits every record its changes touched together.
 
+use crate::drafting::Origin;
 use crate::interface::{
     PathBytes, SPIELORDERS_DRAFT_KIND_ORDER, SPIELORDERS_DRAFT_KIND_VENDOR,
     SPIELORDERS_RESULT_BAD_ARGUMENT, SPIELORDERS_RESULT_INTERNAL, SPIELORDERS_VENDOR_FIELD_NAME,
@@ -9,7 +10,6 @@ use crate::interface::{
     SpielordersDraft, SpielordersEntries, SpielordersPackage, SpielordersPlan, SpielordersResult,
     Text,
     call::{Session, deliver, fallible, quietly, settle},
-    draft::Origin,
     entries::{Entry, Subject},
     records::{contact_facts, item_facts, order_facts, vendor_facts},
 };
@@ -18,7 +18,14 @@ use crate::{Answer, Failure, batch::Batch, drafting::new_vendor_name, ports::Eff
 /// Record changes planned one after another against one load of a Package.
 #[repr(C)]
 pub struct SpielordersBatch {
-    data: Box<Batch>,
+    data: Box<SpielordersBatchData>,
+}
+
+/// What a Batch handle holds, behind the handle.
+pub(crate) struct SpielordersBatchData {
+    batch: Batch,
+    /// What each addition changes, as its own plan would report it.
+    changes: Vec<crate::interface::plan::PlannedChange>,
 }
 
 /// A new, empty batch over `package` as it was opened.
@@ -28,17 +35,21 @@ pub extern "C" fn spielorders_package_batch(
     batch: &mut Option<Box<SpielordersBatch>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(batch, None);
     fallible(outcome, |entries| {
         let result = package.healthy(entries).map(|opened| SpielordersBatch {
-            data: Box::new(Batch::new(opened.contents.clone())),
+            data: Box::new(SpielordersBatchData {
+                batch: Batch::new(opened.contents.clone()),
+                changes: Vec::new(),
+            }),
         });
         deliver(result, batch)
     })
 }
 
 /// A draft of the Order at `directory` as `batch` holds it, saved by adding it to the
-/// batch. Refuses SPIELORDERS_FAILURE_PRECONDITIONS_CHANGED for a directory that holds no
-/// healthy Order of the Package.
+/// batch. A directory that holds no healthy Order of the Package refuses as reading it
+/// would, or SPIELORDERS_FAILURE_ORDER_NOT_FOUND where it holds another Package's Order.
 #[unsafe(no_mangle)]
 pub extern "C" fn spielorders_batch_order_draft(
     batch: &SpielordersBatch,
@@ -46,8 +57,9 @@ pub extern "C" fn spielorders_batch_order_draft(
     draft: &mut Option<Box<SpielordersDraft>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(draft, None);
     fallible(outcome, |entries| {
-        let package = batch.data.package();
+        let package = batch.data.batch.package();
         let directory = directory.as_path();
         let find = |directory: &std::path::Path| {
             package
@@ -79,16 +91,26 @@ pub extern "C" fn spielorders_batch_order_draft(
                     .collect(),
             )),
             None => {
-                Entry::failures(
-                    &Failure::PreconditionsChanged {
-                        location: crate::readme::located_in_package(
-                            &package.context.root.absolute_path,
-                            directory.to_path_buf(),
+                // What reading the directory alone refuses with, and otherwise that it
+                // holds an Order this batch's Package does not.
+                let session = Session::uncancellable();
+                let root = &package.context.root.absolute_path;
+                let failure = match crate::read_order(
+                    &crate::OrderRef::Directory(directory.to_path_buf()),
+                    &session,
+                )
+                .result
+                {
+                    Err(failure) => failure,
+                    Ok(read) => Failure::OrderNotFound {
+                        directory: crate::operations::FailedPath::inside(
+                            root,
+                            read.order.paths.directory.absolute_path.clone(),
                         ),
+                        root: Some(root.clone()),
                     },
-                    Subject::Order,
-                    entries,
-                );
+                };
+                Entry::failures(&failure, Subject::Order, entries);
                 Err(crate::interface::SPIELORDERS_RESULT_REFUSED)
             }
         };
@@ -106,8 +128,9 @@ pub extern "C" fn spielorders_batch_vendor_draft(
     draft: &mut Option<Box<SpielordersDraft>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(draft, None);
     fallible(outcome, |entries| {
-        let package = batch.data.package();
+        let package = batch.data.batch.package();
         let result = (|| {
             let text = text.to_str().ok_or(SPIELORDERS_RESULT_BAD_ARGUMENT)?;
             let vendor = match selector {
@@ -127,7 +150,7 @@ pub extern "C" fn spielorders_batch_vendor_draft(
                     },
                     _ => Failure::UnknownVendor {
                         name: text.to_owned(),
-                        scope: crate::vendors::vendor_aggregate(package),
+                        scope: crate::vendors::vendors_location(package),
                     },
                 };
                 Entry::failures(&failure, Subject::Vendor, entries);
@@ -154,8 +177,9 @@ pub extern "C" fn spielorders_batch_new_vendor_draft(
     batch: &SpielordersBatch,
     draft: &mut Option<Box<SpielordersDraft>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(draft, None);
     fallible(None, |_| {
-        let package = batch.data.package();
+        let package = batch.data.batch.package();
         deliver(
             Ok(SpielordersDraft::new(
                 SPIELORDERS_DRAFT_KIND_VENDOR,
@@ -197,7 +221,7 @@ pub extern "C" fn spielorders_batch_add(
                     return SPIELORDERS_RESULT_BAD_ARGUMENT;
                 };
                 let added = Answer::of(|| {
-                    batch.data.add(
+                    batch.data.batch.add(
                         &change,
                         &|| session.today(),
                         &|| session.new_uuid(),
@@ -206,13 +230,17 @@ pub extern "C" fn spielorders_batch_add(
                 });
                 // Adding is an atomic in-memory commit. Once it succeeds, a later
                 // cancellation must not report that the accepted change was omitted.
-                if added.result.is_ok() {
+                if let Ok(plan) = &added.result {
+                    let addition = batch.data.batch.len() - 1;
+                    batch.data.changes.extend(
+                        crate::interface::plan::draft_changes(data, plan)
+                            .into_iter()
+                            .map(|change| change.of_addition(addition)),
+                    );
                     crate::interface::SPIELORDERS_RESULT_OK
                 } else {
-                    settle(added, &session, data.subject(), entries).map_or_else(
-                        |result| result,
-                        |()| crate::interface::SPIELORDERS_RESULT_OK,
-                    )
+                    settle(added, &session, data.subject(), entries)
+                        .map_or_else(|result| result, |_| crate::interface::SPIELORDERS_RESULT_OK)
                 }
             },
         )
@@ -222,7 +250,7 @@ pub extern "C" fn spielorders_batch_add(
 /// How many changes `batch` holds.
 #[unsafe(no_mangle)]
 pub extern "C" fn spielorders_batch_count(batch: &SpielordersBatch) -> i64 {
-    quietly(-1, || i64::try_from(batch.data.len()).unwrap_or(-1))
+    quietly(-1, || i64::try_from(batch.data.batch.len()).unwrap_or(-1))
 }
 
 /// Plans committing every change `batch` holds as one guarded write of the records they
@@ -235,16 +263,26 @@ pub extern "C" fn spielorders_batch_plan(
     plan: &mut Option<Box<SpielordersPlan>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(plan, None);
     fallible(outcome, |entries| {
         let session = Session::new(token);
-        let root = batch.data.package().context.root.absolute_path.clone();
+        let root = batch
+            .data
+            .batch
+            .package()
+            .context
+            .root
+            .absolute_path
+            .clone();
         let result = settle(
-            crate::change::plan_batch(&batch.data),
+            crate::change::plan_batch(&batch.data.batch),
             &session,
             Subject::Other,
             entries,
         )
-        .map(|value| SpielordersPlan::of(value, root, Subject::Other, |_| Vec::new()));
+        .map(|value| {
+            SpielordersPlan::of(value, root, Subject::Other, |_| batch.data.changes.clone())
+        });
         deliver(result, plan)
     })
 }

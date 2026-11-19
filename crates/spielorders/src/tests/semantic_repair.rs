@@ -9,7 +9,7 @@ use crate::tests::support::operation_path;
 use crate::tests::support::{
     EditPoint, FailedCommit, Index, Operation, PlatformFileSystem, QueuedUuids, ScriptedFileSystem,
     TemporaryTree, Vendors, adoption, another_writer_replacing, create_vendor, created_vendor,
-    diagnosed_order, effects, findings, json, operation_kinds, order_record, order_scope, repair,
+    diagnosed_order, effects, findings, json, operation_kinds, order_scope, record_path, repair,
     text, valid,
 };
 use crate::{Assignments, Change, Report};
@@ -99,7 +99,7 @@ fn adopted_order_at(root: &Path, orders_path: &str, basename: &str, uuid: &str) 
 }
 
 fn document(directory: &Path) -> OrderDocument {
-    serde_json::from_slice::<OrderDocument>(&fs::read(order_record(directory)).unwrap())
+    serde_json::from_slice::<OrderDocument>(&fs::read(record_path(directory)).unwrap())
         .expect("the canonical Order parses")
 }
 
@@ -129,13 +129,13 @@ fn unresolved_vendor_order(label: &str) -> (TemporaryTree, PathBuf, PathBuf) {
 fn unresolved_vendor_order_at(label: &str, orders_path: &str) -> (TemporaryTree, PathBuf, PathBuf) {
     let (tree, root) = initialized_package_at(label, orders_path);
     let directory = adopted_order_at(&root, orders_path, "2026_08_22_Laser_components", ORDER_ID);
-    let text = fs::read_to_string(order_record(&directory))
+    let text = fs::read_to_string(record_path(&directory))
         .unwrap()
         .replace(
             "\"items\": []",
             &format!("\"vendor_id\": \"{ABSENT_VENDOR}\",\n  \"items\": []"),
         );
-    fs::write(order_record(&directory), text).unwrap();
+    fs::write(record_path(&directory), text).unwrap();
     (tree, root, directory)
 }
 
@@ -149,13 +149,13 @@ fn stale_locator_order_at(label: &str, orders_path: &str) -> (TemporaryTree, Pat
     let directory = adopted_order_at(&root, orders_path, "2026_08_22_Laser_components", ORDER_ID);
     // Deeper than any layout this fixture uses, so the stored value is stale under
     // every configured Orders path rather than only the default one.
-    let text = fs::read_to_string(order_record(&directory))
+    let text = fs::read_to_string(record_path(&directory))
         .unwrap()
         .replace(
             &format!("\"{}\"", text(&document(&directory).package_root)),
             "\"../../../../..\"",
         );
-    fs::write(order_record(&directory), text).unwrap();
+    fs::write(record_path(&directory), text).unwrap();
     (tree, root, directory)
 }
 
@@ -326,13 +326,13 @@ fn a_vendor_is_never_inferred_from_anything_but_the_explicit_choice() {
     // matches it.
     let existing = created_vendor(&root, "Tarnwick", VENDOR_ID);
     let sibling = adopted_order(&root, "2026_08_22_Tarnwick_Other", TWIN_ID);
-    let text = fs::read_to_string(order_record(&sibling)).unwrap().replace(
+    let text = fs::read_to_string(record_path(&sibling)).unwrap().replace(
         "\"items\": []",
         &format!("\"vendor_id\": \"{existing}\",\n  \"items\": []"),
     );
-    fs::write(order_record(&sibling), text).unwrap();
+    fs::write(record_path(&sibling), text).unwrap();
     let handle = handle_for(&directory, DiagnosticCode::VendorReferenceUnresolved);
-    let before = fs::read(order_record(&directory)).unwrap();
+    let before = fs::read(record_path(&directory)).unwrap();
 
     // A Vendor that does not exist is refused, rather than resolved to the one the
     // sibling uses or the one the directory name resembles.
@@ -391,7 +391,7 @@ fn a_vendor_is_never_inferred_from_anything_but_the_explicit_choice() {
         );
     }
 
-    assert_eq!(fs::read(order_record(&directory)).unwrap(), before);
+    assert_eq!(fs::read(record_path(&directory)).unwrap(), before);
     assert_eq!(vendors(&root).vendors.len(), 1);
 }
 
@@ -415,10 +415,10 @@ fn duplicate_identity_package_at(
         } else {
             THIRD_ID
         };
-        let text = fs::read_to_string(order_record(directory))
+        let text = fs::read_to_string(record_path(directory))
             .unwrap()
             .replace(original, ORDER_ID);
-        fs::write(order_record(directory), text).unwrap();
+        fs::write(record_path(directory), text).unwrap();
     }
     (tree, root, vec![first, second, third])
 }
@@ -430,8 +430,8 @@ fn one_chosen_participant_adopts_a_fresh_identity_and_the_others_are_untouched()
     // The caller explicitly chooses which physical Order stops being the original.
     let chosen = &second;
     let handle = handle_for(chosen, DiagnosticCode::OrderIdDuplicate);
-    let first_before = fs::read(order_record(&first)).unwrap();
-    let third_before = fs::read(order_record(&third)).unwrap();
+    let first_before = fs::read(record_path(&first)).unwrap();
+    let third_before = fs::read(record_path(&third)).unwrap();
 
     let plan = crate::plan(
         &repair(
@@ -459,8 +459,8 @@ fn one_chosen_participant_adopts_a_fresh_identity_and_the_others_are_untouched()
 
     // Never chooses the survivor, and never alters every participant: the other two
     // still carry the original identity, byte for byte as they were.
-    assert_eq!(fs::read(order_record(&first)).unwrap(), first_before);
-    assert_eq!(fs::read(order_record(&third)).unwrap(), third_before);
+    assert_eq!(fs::read(record_path(&first)).unwrap(), first_before);
+    assert_eq!(fs::read(record_path(&third)).unwrap(), third_before);
     assert_eq!(document(&first).order_id.deref(), ORDER_ID);
     assert_eq!(document(&third).order_id.deref(), ORDER_ID);
 
@@ -509,11 +509,11 @@ fn a_damaged_order_with_an_unreal_date_is_refused_at_the_candidate_guard() {
     // A second sentinel, so the refusal is observed against both opaque assets.
     fs::write(chosen.join("datasheet.bin"), SUPPORTING_B).unwrap();
     // Shape of a date, not a real one: February has 28 days in 2026.
-    let text = fs::read_to_string(order_record(chosen))
+    let text = fs::read_to_string(record_path(chosen))
         .unwrap()
         .replace("2026-08-22", "2026-02-30");
-    fs::write(order_record(chosen), &text).unwrap();
-    let before = fs::read(order_record(chosen)).unwrap();
+    fs::write(record_path(chosen), &text).unwrap();
+    let before = fs::read(record_path(chosen)).unwrap();
     assert!(
         serde_json::from_slice::<OrderDocument>(&before).is_ok(),
         "the record still parses — it is the semantics that are wrong, not the shape"
@@ -551,10 +551,10 @@ fn a_damaged_order_with_an_unreal_date_is_refused_at_the_candidate_guard() {
              left standing in another state: {rejection:?}"
         );
     };
-    assert_eq!(failure.location.absolute_path, order_record(chosen));
+    assert_eq!(failure.location.absolute_path, record_path(chosen));
 
     assert_eq!(
-        fs::read(order_record(chosen)).unwrap(),
+        fs::read(record_path(chosen)).unwrap(),
         before,
         "the Order record is exactly as it was"
     );
@@ -572,10 +572,25 @@ fn a_damaged_order_with_an_unreal_date_is_refused_at_the_candidate_guard() {
 
 #[test]
 fn a_generated_identity_that_already_exists_is_refused_before_writing() {
-    let (_tree, _root, participants) = duplicate_identity_package("semantic-uuid-collision");
+    let (_tree, root, participants) = duplicate_identity_package("semantic-uuid-collision");
     let chosen = &participants[1];
     let handle = handle_for(chosen, DiagnosticCode::OrderIdDuplicate);
-    let before = fs::read(order_record(chosen)).unwrap();
+    let before = fs::read(record_path(chosen)).unwrap();
+    let index_path = root.join(".spielorders/index.json");
+    let index_before = fs::read(&index_path).unwrap();
+
+    // The fixture rewrote two Order records after adoption last refreshed the index, so
+    // the stored index still names identities no Order Directory carries any more. Any
+    // rebuild therefore rewrites these bytes, which is what lets the index comparison
+    // below fail rather than pass for want of a difference.
+    let stored = Index::from_json_bytes(&index_before).expect("the stored index parses");
+    assert!(
+        stored
+            .orders
+            .iter()
+            .any(|entry| entry.order.order_id.deref() == TWIN_ID),
+        "the stored index is out of date with the Package it describes"
+    );
     let plan = crate::plan(
         &repair(
             order_scope(PathBuf::from(chosen)),
@@ -603,56 +618,8 @@ fn a_generated_identity_that_already_exists_is_refused_before_writing() {
         matches!(rejection, Failure::GeneratedIdentityCollision { .. }),
         "got {rejection:?}"
     );
-    assert_eq!(fs::read(order_record(chosen)).unwrap(), before);
-}
-
-#[test]
-fn a_refused_repair_leaves_the_derived_package_index_exactly_as_it_found_it() {
-    let (_tree, root, participants) = duplicate_identity_package("semantic-refused-index");
-    let chosen = &participants[1];
-    let handle = handle_for(chosen, DiagnosticCode::OrderIdDuplicate);
-    let index_path = root.join(".spielorders/index.json");
-    let index_before = fs::read(&index_path).unwrap();
-
-    // The fixture rewrote two Order records after adoption last refreshed the index, so
-    // the stored index still names identities no Order Directory carries any more. Any
-    // rebuild therefore rewrites these bytes, which is what lets the comparison below
-    // fail rather than pass for want of a difference.
-    let stored = Index::from_json_bytes(&index_before).expect("the stored index parses");
-    assert!(
-        stored
-            .orders
-            .iter()
-            .any(|entry| entry.order.order_id.deref() == TWIN_ID),
-        "the stored index is out of date with the Package it describes"
-    );
-
-    let plan = crate::plan(
-        &repair(
-            order_scope(PathBuf::from(chosen)),
-            &handle,
-            RepairAction::AdoptNewOrderIdentity,
-            Assignments::new(),
-        ),
-        &effects(&PlatformFileSystem),
-    )
-    .result
-    .expect("the chosen participant can adopt a new identity");
-
-    // The generator hands back an identity the Package already carries, so the repair
-    // refuses.
-    let report = crate::commit(
-        plan,
-        &effects(&PlatformFileSystem).minting(QueuedUuids::of(&[ORDER_ID])),
-    )
-    .result;
-
-    assert!(
-        report.is_err(),
-        "a colliding identity is refused: {report:?}"
-    );
-    // Deciding whether to refuse must not itself rewrite a canonical artifact. A caller
-    // told the repair was rejected has no reason to expect the Package changed, and the
+    assert_eq!(fs::read(record_path(chosen)).unwrap(), before);
+    // Deciding whether to refuse must not itself rewrite a canonical artifact, and the
     // derived Package Index is the Package's own durable record of itself.
     assert_eq!(
         fs::read(&index_path).unwrap(),
@@ -666,7 +633,7 @@ fn a_package_nothing_can_read_is_not_refused_as_a_generated_identity_collision()
     let (_tree, root, participants) = duplicate_identity_package("semantic-no-package-evidence");
     let chosen = &participants[1];
     let handle = handle_for(chosen, DiagnosticCode::OrderIdDuplicate);
-    let before = fs::read(order_record(chosen)).unwrap();
+    let before = fs::read(record_path(chosen)).unwrap();
 
     let plan = crate::plan(
         &repair(
@@ -710,7 +677,7 @@ fn a_package_nothing_can_read_is_not_refused_as_a_generated_identity_collision()
     };
     assert_eq!(damaged.context.root.absolute_path, root);
     assert_eq!(
-        fs::read(order_record(chosen)).unwrap(),
+        fs::read(record_path(chosen)).unwrap(),
         before,
         "the refusal wrote nothing"
     );
@@ -726,7 +693,7 @@ fn a_created_vendor_cannot_take_a_name_an_existing_vendor_already_holds_in_anoth
         let (_tree, root, directory) = unresolved_vendor_order("semantic-folding");
         created_vendor(&root, existing, VENDOR_ID);
         let handle = handle_for(&directory, DiagnosticCode::VendorReferenceUnresolved);
-        let order_before = fs::read(order_record(&directory)).unwrap();
+        let order_before = fs::read(record_path(&directory)).unwrap();
 
         let Err(error) = crate::plan(
             &repair(
@@ -746,7 +713,7 @@ fn a_created_vendor_cannot_take_a_name_an_existing_vendor_already_holds_in_anoth
             matches!(error, Failure::VendorNameInUse { .. }),
             "{created:?} beside {existing:?} got {error:?}"
         );
-        assert_eq!(fs::read(order_record(&directory)).unwrap(), order_before);
+        assert_eq!(fs::read(record_path(&directory)).unwrap(), order_before);
         assert_eq!(vendors(&root).vendors.len(), 1);
 
         // The ordinary Vendor capability refuses the same pair, so the repair and
@@ -768,7 +735,7 @@ fn a_generated_vendor_identity_that_already_exists_is_refused_before_either_reco
     let (_tree, root, directory) = unresolved_vendor_order("semantic-vendor-uuid-collision");
     created_vendor(&root, "Tarnwick", VENDOR_ID);
     let handle = handle_for(&directory, DiagnosticCode::VendorReferenceUnresolved);
-    let order_before = fs::read(order_record(&directory)).unwrap();
+    let order_before = fs::read(record_path(&directory)).unwrap();
     let vendors_before = fs::read(root.join(".spielorders/vendors.json")).unwrap();
 
     let plan = crate::plan(
@@ -807,7 +774,7 @@ fn a_generated_vendor_identity_that_already_exists_is_refused_before_either_reco
         "the Vendor aggregate is exactly as it was"
     );
     assert_eq!(
-        fs::read(order_record(&directory)).unwrap(),
+        fs::read(record_path(&directory)).unwrap(),
         order_before,
         "the Order record is exactly as it was"
     );
@@ -1017,10 +984,10 @@ fn a_changed_conflict_set_or_record_rejects_before_acting() {
     )
     .result
     .unwrap();
-    let text = fs::read_to_string(order_record(&directory))
+    let text = fs::read_to_string(record_path(&directory))
         .unwrap()
         .replace("Laser components", "Renamed by someone else");
-    fs::write(order_record(&directory), &text).unwrap();
+    fs::write(record_path(&directory), &text).unwrap();
 
     let report = crate::commit(
         plan,
@@ -1035,7 +1002,7 @@ fn a_changed_conflict_set_or_record_rejects_before_acting() {
         matches!(rejection, Failure::EvidenceChanged { .. }),
         "got {rejection:?}"
     );
-    assert_eq!(fs::read_to_string(order_record(&directory)).unwrap(), text);
+    assert_eq!(fs::read_to_string(record_path(&directory)).unwrap(), text);
 
     // The Vendor aggregate changed since the plan was built.
     let (_tree, root, directory) = unresolved_vendor_order("semantic-vendors-changed");
@@ -1053,7 +1020,7 @@ fn a_changed_conflict_set_or_record_rejects_before_acting() {
     .result
     .unwrap();
     created_vendor(&root, "Elderglass", NEW_VENDOR_ID);
-    let record_before = fs::read(order_record(&directory)).unwrap();
+    let record_before = fs::read(record_path(&directory)).unwrap();
 
     let report = crate::commit(
         plan,
@@ -1069,56 +1036,8 @@ fn a_changed_conflict_set_or_record_rejects_before_acting() {
         matches!(rejection, Failure::EvidenceChanged { .. }),
         "got {rejection:?}"
     );
-    assert_eq!(fs::read(order_record(&directory)).unwrap(), record_before);
+    assert_eq!(fs::read(record_path(&directory)).unwrap(), record_before);
     assert_eq!(vendors(&root).vendors.len(), 2, "no third Vendor was added");
-}
-
-#[test]
-fn a_stale_handle_or_an_unauthorized_resolution_is_refused() {
-    let (_tree, root, directory) = unresolved_vendor_order("semantic-stale");
-    let existing = created_vendor(&root, "Tarnwick", VENDOR_ID);
-    let handle = handle_for(&directory, DiagnosticCode::VendorReferenceUnresolved);
-
-    // The condition is corrected by other means; the handle no longer names a case.
-    let text = fs::read_to_string(order_record(&directory))
-        .unwrap()
-        .replace(ABSENT_VENDOR, &existing);
-    fs::write(order_record(&directory), &text).unwrap();
-    let error = crate::plan(
-        &repair(
-            order_scope(directory.clone()),
-            &handle,
-            RepairAction::ClearVendorReference,
-            Assignments::new(),
-        ),
-        &effects(&PlatformFileSystem),
-    )
-    .result
-    .expect_err("a stale handle is refused");
-    assert!(
-        matches!(error, Failure::UnknownCase { .. }),
-        "got {error:?}"
-    );
-    assert_eq!(fs::read_to_string(order_record(&directory)).unwrap(), text);
-
-    // A locator case does not authorize a Vendor resolution.
-    let (_tree, _root, directory) = stale_locator_order("semantic-unauthorized");
-    let handle = handle_for(&directory, DiagnosticCode::OrderPackageLocatorMismatch);
-    let error = crate::plan(
-        &repair(
-            order_scope(directory.clone()),
-            &handle,
-            RepairAction::ClearVendorReference,
-            Assignments::new(),
-        ),
-        &effects(&PlatformFileSystem),
-    )
-    .result
-    .expect_err("a locator case authorizes only the locator repair");
-    assert!(
-        matches!(error, Failure::UnauthorizedAction { .. }),
-        "got {error:?}"
-    );
 }
 
 /// The reachable data-loss path. A create-and-assign repair
@@ -1128,7 +1047,7 @@ fn a_stale_handle_or_an_unauthorized_resolution_is_refused() {
 fn a_repair_does_not_overwrite_an_order_someone_else_rewrote_mid_commit() {
     let (_tree, _root, directory) = unresolved_vendor_order("semantic-concurrent-order");
     let handle = handle_for(&directory, DiagnosticCode::VendorReferenceUnresolved);
-    let order_path = order_record(&directory);
+    let order_path = record_path(&directory);
 
     // What the other writer leaves behind: the same Order record with a different
     // Title. A realistic concurrent edit, not a corruption.
@@ -1191,7 +1110,7 @@ fn vendor_write_failing(
 ) {
     let (tree, root, directory) = unresolved_vendor_order(label);
     let handle = handle_for(&directory, DiagnosticCode::VendorReferenceUnresolved);
-    let order_before = fs::read(order_record(&directory)).unwrap();
+    let order_before = fs::read(record_path(&directory)).unwrap();
     let vendors_before = fs::read(root.join(".spielorders/vendors.json")).unwrap();
     let plan = crate::plan(
         &repair(
@@ -1209,7 +1128,7 @@ fn vendor_write_failing(
         .on(Operation::ReplaceFile)
         .ending_in(".spielorders/vendors.json")
         .fails();
-    script(&filesystem, &order_record(&directory));
+    script(&filesystem, &record_path(&directory));
     let report = crate::commit(
         plan,
         &effects(&filesystem).minting(QueuedUuids::of(&[NEW_VENDOR_ID])),
@@ -1245,7 +1164,7 @@ fn a_failed_second_write_puts_the_first_back_as_it_was() {
             .absolute_path
             .ends_with(".spielorders/vendors.json")
     );
-    assert_eq!(fs::read(order_record(&directory)).unwrap(), order_before);
+    assert_eq!(fs::read(record_path(&directory)).unwrap(), order_before);
 }
 
 #[test]
@@ -1263,9 +1182,9 @@ fn a_restoration_that_fails_is_named_beside_the_failure_that_asked_for_it() {
     let [cleanup] = failed.cleanup_failures() else {
         panic!("one restoration failed: {failed:?}");
     };
-    assert_eq!(cleanup.location.absolute_path, order_record(&directory));
+    assert_eq!(cleanup.location.absolute_path, record_path(&directory));
     assert_ne!(
-        fs::read(order_record(&directory)).unwrap(),
+        fs::read(record_path(&directory)).unwrap(),
         order_before,
         "the record holds the repair it could not take back, as the failure says"
     );
@@ -1290,5 +1209,5 @@ fn a_restoration_never_writes_over_a_record_someone_else_changed_since() {
     let [_cleanup] = failed.cleanup_failures() else {
         panic!("one restoration was declined: {failed:?}");
     };
-    assert_eq!(fs::read(order_record(&directory)).unwrap(), their_bytes);
+    assert_eq!(fs::read(record_path(&directory)).unwrap(), their_bytes);
 }

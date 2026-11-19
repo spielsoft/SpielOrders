@@ -15,17 +15,17 @@ use crate::{
         CurrentPackageCandidate, ReusableValueProjection, Touched, load_every_record,
         load_package_to_change,
     },
-    filesystem::{FileReplacement, replace_validated_files},
+    change::PlannedAct,
+    integrity::{Aggregate, Holder, Records, Substitution},
+    journal::{Expect, Journal, ManagedRecord, Subject},
     metadata::{
         NonBlankString, OrderDocument, StoredProject, StoredValues, Vendor, VendorId,
         VendorsDocument, Version1,
     },
-    mutation::{IndexRefresh, MutationReport, OperationKind, PlannedOperation},
-    package::PackageMetadata,
+    mutation::{CommitFailure, MutationReport, OperationKind},
     ports::FileSystem,
-    readme::located_in_package,
-    search::ReusableValueKind,
-    values::same_value,
+    readme::{Location, located_in_package},
+    values::{ReusableValueKind, ValueScope, same_value},
     vendor_reads::VendorRead,
 };
 use std::path::{Path, PathBuf};
@@ -50,12 +50,14 @@ pub(crate) enum ValueRequest {
         value: String,
     },
     /// Every Order using one of `values`, or the existing value `with` matches, uses
-    /// `with`'s spelling; the values are kept as that one value.
+    /// `with`'s spelling; the values are kept as that one value. Where `existing`, `with`
+    /// must name a value the Package keeps.
     Replace {
         kind: ReusableValueKind,
         project: Option<String>,
         values: Vec<String>,
         with: String,
+        existing: bool,
     },
     Delete {
         kind: ReusableValueKind,
@@ -94,10 +96,46 @@ pub struct ValueChangePlan {
     request: ValueRequest,
     vendors_path: PathBuf,
     rewrites: Rewrites,
-    pub(crate) operations: Vec<PlannedOperation>,
+    index: Location,
+    pub(crate) journal: Journal,
 }
 
 impl ValueChangePlan {
+    /// For a Vendor merge, the kept Vendor before the merge fills it and after; `None` for
+    /// any other change.
+    pub(crate) fn kept_vendor(&self) -> Option<[&Vendor; 2]> {
+        let ValueRequest::MergeVendors { keep, .. } = &self.request else {
+            return None;
+        };
+        fn find<'a>(document: &'a VendorsDocument, keep: &str) -> Option<&'a Vendor> {
+            document
+                .vendors
+                .iter()
+                .find(|vendor| vendor.vendor_id.as_str() == keep)
+        }
+        Some([
+            find(&self.rewrites.prior, keep)?,
+            find(&self.rewrites.candidate, keep)?,
+        ])
+    }
+
+    /// Each Vendor this change removes from the Package.
+    pub(crate) fn removed_vendors(&self) -> Vec<&Vendor> {
+        self.rewrites
+            .prior
+            .vendors
+            .iter()
+            .filter(|vendor| {
+                !self
+                    .rewrites
+                    .candidate
+                    .vendors
+                    .iter()
+                    .any(|kept| kept.vendor_id == vendor.vendor_id)
+            })
+            .collect()
+    }
+
     /// How many Order records committing this plan rewrites.
     pub fn order_count(&self) -> usize {
         self.rewrites.orders.len()
@@ -137,37 +175,72 @@ pub(crate) fn plan_value_change<F: FileSystem>(
 ) -> Answer<ValueChangePlan> {
     Answer::of(|| {
         let package = loaded(selected_root, request, filesystem)?;
-        let rewrites = rewrites(request, &package)?;
-        let mut operations = rewrites
-            .orders
-            .iter()
-            .map(|order| {
-                PlannedOperation::new(
-                    OperationKind::ReplaceOrderRecord,
-                    located_in_package(&package.context.root.absolute_path, order.path.clone()),
-                )
-            })
-            .collect::<Vec<_>>();
-        if rewrites.candidate != rewrites.prior {
-            operations.push(PlannedOperation::new(
-                OperationKind::ReplaceVendorRecord,
-                package.context.vendors.clone(),
-            ));
-        }
-        if !operations.is_empty() {
-            operations.push(PlannedOperation::new(
-                OperationKind::RefreshPackageIndex,
-                package.context.index.clone(),
-            ));
-        }
-        Ok(ValueChangePlan {
-            root: package.context.root.absolute_path.clone(),
+        let rewrites = rewrites(request, &package, &records(request, &package, filesystem)?)?;
+        let root = package.context.root.absolute_path.clone();
+        let mut plan = ValueChangePlan {
+            journal: Journal::new(&root),
+            root,
             request: request.clone(),
             vendors_path: package.context.vendors.absolute_path.clone(),
             rewrites,
-            operations,
-        })
+            index: package.context.index.clone(),
+        };
+        plan.journal = plan.value_journal(
+            plan.records()
+                .into_iter()
+                .map(|(record, candidate)| {
+                    let expect = record.expectation();
+                    (record, candidate, expect)
+                })
+                .collect(),
+        );
+        Ok(plan)
     })
+}
+
+impl ValueChangePlan {
+    /// Each record the change rewrites, as planned, with the bytes it becomes: every Order
+    /// record, then the Vendor record.
+    fn records(&self) -> Vec<(ManagedRecord, Vec<u8>)> {
+        let vendors = (self.rewrites.candidate != self.rewrites.prior).then(|| {
+            (
+                ManagedRecord::vendors(self.vendors_path.clone(), self.rewrites.prior.clone()),
+                self.rewrites.candidate.to_json_bytes().unwrap_or_default(),
+            )
+        });
+        self.rewrites
+            .orders
+            .iter()
+            .map(|order| {
+                (
+                    ManagedRecord::order(order.path.clone(), order.prior.clone()),
+                    order.candidate.to_json_bytes().unwrap_or_default(),
+                )
+            })
+            .chain(vendors)
+            .collect()
+    }
+
+    /// The commit replacing every record in `records` together, each expected to still
+    /// hold what its expectation names.
+    fn value_journal(&self, records: Vec<(ManagedRecord, Vec<u8>, Expect)>) -> Journal {
+        let mut journal = Journal::new(&self.root);
+        if records.is_empty() {
+            return journal;
+        }
+        for (record, candidate, expect) in records {
+            let path = record.path().to_path_buf();
+            let (kind, subject) = if path == self.vendors_path {
+                (OperationKind::ReplaceVendorRecord, Subject::Vendors)
+            } else {
+                let directory = directory_of(&path).to_path_buf();
+                (OperationKind::ReplaceOrderRecord, Subject::Order(directory))
+            };
+            journal.replace(path, candidate, expect, PlannedAct::Managed(kind), subject);
+        }
+        journal.refreshing(self.index.clone());
+        journal
+    }
 }
 
 pub(crate) fn commit_value_change<F: FileSystem>(
@@ -176,91 +249,42 @@ pub(crate) fn commit_value_change<F: FileSystem>(
 ) -> Answer<MutationReport<ValueChangeResult>> {
     Answer::of(|| {
         let current = loaded(&plan.root, &plan.request, filesystem)?;
+        let records = records(&plan.request, &current, filesystem)?;
         // The change planned again against the Package as it now stands must be the one
         // planned: the same records, holding the same facts, rewritten the same way.
-        if rewrites(&plan.request, &current).as_ref() != Ok(&plan.rewrites) {
+        if rewrites(&plan.request, &current, &records).as_ref() != Ok(&plan.rewrites) {
             return Err(Failure::PreconditionsChanged {
                 location: located_in_package(&plan.root, plan.root.clone()),
             });
         }
         let result = changed_result(&plan.request, &current, &plan.rewrites);
-        if plan.operations.is_empty() {
+        let planned = plan.records();
+        if planned.is_empty() {
             return Ok(MutationReport::Unchanged { result });
+        }
+        // Every candidate is a whole Order record before anything is written.
+        for order in &plan.rewrites.orders {
+            if order.candidate.validate().is_err() {
+                return Err(Failure::commit(
+                    CommitFailure::new(located_in_package(&plan.root, order.path.clone())),
+                    Vec::new(),
+                ));
+            }
         }
         // Each record is read once more and must still mean what was planned against; the
         // bytes read are what its replacement then expects, so a writer landing after
         // this read is refused rather than overwritten.
-        let changed = |path: &Path| Failure::PreconditionsChanged {
-            location: located_in_package(&plan.root, path.to_path_buf()),
-        };
-        let mut candidates = Vec::new();
-        for order in &plan.rewrites.orders {
-            let observed = filesystem
-                .read(&order.path)
-                .map_err(|_| changed(&order.path))?;
-            let holds_prior = OrderDocument::from_json_bytes(&observed)
-                .ok()
-                .and_then(|document| document.validate().ok())
-                .is_some_and(|document| document.order() == &order.prior);
-            if !holds_prior {
-                return Err(changed(&order.path));
-            }
-            let candidate = order
-                .candidate
-                .to_json_bytes()
-                .map_err(|_| Failure::InvalidFacts)?;
-            candidates.push((order.path.clone(), candidate, observed));
+        let mut records = Vec::new();
+        for (record, candidate) in planned {
+            let observed = record.confirm(&plan.root, filesystem)?;
+            records.push((record, candidate, Expect::Bytes(observed)));
         }
-        if plan.rewrites.candidate != plan.rewrites.prior {
-            let path = &plan.vendors_path;
-            let observed = filesystem.read(path).map_err(|_| changed(path))?;
-            let holds_prior = VendorsDocument::from_json_bytes(&observed)
-                .ok()
-                .and_then(|document| PackageMetadata::new(&[], &document).validate().ok())
-                .is_some_and(|projected| projected.vendors() == &plan.rewrites.prior);
-            if !holds_prior {
-                return Err(changed(path));
-            }
-            let candidate = plan
-                .rewrites
-                .candidate
-                .to_json_bytes()
-                .map_err(|_| Failure::InvalidAggregate)?;
-            candidates.push((path.clone(), candidate, observed));
-        }
-        let replacements = candidates
-            .iter()
-            .map(|(path, candidate, observed)| FileReplacement::observed(path, candidate, observed))
-            .collect::<Vec<_>>();
-        let vendors_path = plan.vendors_path.as_path();
-        if let Err(error) =
-            replace_validated_files(&replacements, filesystem, |destination, candidate| {
-                if destination == vendors_path {
-                    // Judged as a Package aggregate while planning, again just above.
-                    Ok(())
-                } else {
-                    OrderDocument::from_json_bytes(candidate)
-                        .ok()
-                        .and_then(|document| document.validate().ok())
-                        .map(|_| ())
-                        .ok_or(())
-                }
-            })
-        {
-            let destinations = replacements
-                .iter()
-                .map(FileReplacement::destination)
-                .collect::<Vec<_>>();
-            return Err(Failure::of_replacements(&plan.root, &destinations, error));
-        }
-        let touched = Touched::orders(
-            plan.rewrites
-                .orders
-                .iter()
-                .filter_map(|order| Some(order.path.parent()?.parent()?.to_path_buf())),
-        )
-        .with_vendors(plan.rewrites.candidate != plan.rewrites.prior);
-        Ok(IndexRefresh::after_commit(&plan.root, &touched, filesystem).report(result))
+        let committed = plan.value_journal(records).run(filesystem)?;
+        let refresh = committed.refresh(&plan.root, filesystem);
+        Ok(MutationReport::committed(
+            result,
+            committed.warnings(refresh),
+        ))
     })
 }
 
@@ -275,12 +299,11 @@ fn changed_result(
     let values = match request {
         ValueRequest::Add { kind, project, .. }
         | ValueRequest::Replace { kind, project, .. }
-        | ValueRequest::Delete { kind, project, .. } => Some(match kind {
-            ReusableValueKind::OrderingInstitution => projected.ordering_institutions,
-            ReusableValueKind::Orderer => projected.orderers,
-            ReusableValueKind::Project => projected.projects,
-            ReusableValueKind::OrderGroup => projected.order_groups_of(project.as_deref()).to_vec(),
-        }),
+        | ValueRequest::Delete { kind, project, .. } => Some(
+            ValueScope::new(*kind, project.as_deref())
+                .listed(&projected)
+                .to_vec(),
+        ),
         _ => None,
     };
     let survivor = match request {
@@ -331,10 +354,27 @@ fn rewritten_orders(
         .collect()
 }
 
+/// The records `request` must account for: a change to which Vendor Orders reference
+/// accounts for the removed Orders too, which undoing a removal restores as they were.
+fn records<'p, F: FileSystem>(
+    request: &ValueRequest,
+    package: &'p CurrentPackageCandidate,
+    filesystem: &F,
+) -> Result<Records<'p>, Failure> {
+    let records = Records::of(package);
+    match request {
+        ValueRequest::MergeVendors { .. } | ValueRequest::DeleteVendor { .. } => {
+            records.with_removed(&package.context, filesystem)
+        }
+        _ => Ok(records),
+    }
+}
+
 /// The records `request` rewrites in `package`, or why it is refused.
 fn rewrites(
     request: &ValueRequest,
     package: &CurrentPackageCandidate,
+    records: &Records,
 ) -> Result<Rewrites, Failure> {
     let prior = VendorsDocument {
         schema_version: Version1,
@@ -349,7 +389,7 @@ fn rewrites(
             project,
             value,
         } => {
-            let scope = Scope::of(*kind, project.as_deref(), package)?;
+            let scope = ValueScope::of(*kind, project.as_deref(), package)?;
             let value = nonblank(scope.field(), value)?;
             if scope.existing(package, &value).is_none() {
                 scope.keep(&mut candidate.values, &value);
@@ -360,15 +400,20 @@ fn rewrites(
             project,
             values,
             with,
+            existing,
         } => {
-            let scope = Scope::of(*kind, project.as_deref(), package)?;
+            let scope = ValueScope::of(*kind, project.as_deref(), package)?;
+            if *existing {
+                scope.known(package, with)?;
+            }
             let with = nonblank(scope.field(), with)?;
             let mut taken = values
                 .iter()
                 .map(|value| scope.known(package, value))
                 .collect::<Result<Vec<_>, _>>()?;
             taken.extend(scope.existing(package, &with));
-            scope.replace(
+            replace(
+                &scope,
                 package,
                 &taken,
                 Some(&with),
@@ -382,7 +427,7 @@ fn rewrites(
             value,
             in_use,
         } => {
-            let scope = Scope::of(*kind, project.as_deref(), package)?;
+            let scope = ValueScope::of(*kind, project.as_deref(), package)?;
             let value = scope.known(package, value)?;
             let with = match in_use {
                 InUse::Refuse => {
@@ -408,7 +453,8 @@ fn rewrites(
                 }
                 InUse::Clear => None,
             };
-            scope.replace(
+            replace(
+                &scope,
                 package,
                 &[value],
                 with.as_deref(),
@@ -437,7 +483,7 @@ fn rewrites(
                 .map(|position| package.vendors[*position].vendor_id.clone())
                 .collect::<Vec<_>>();
             for vendor in &merged_ids {
-                refuse_damaged_references(package, vendor)?;
+                refuse_fixed_references(records, vendor)?;
             }
             candidate.vendors = package
                 .vendors
@@ -451,12 +497,12 @@ fn rewrites(
                     }
                 })
                 .collect();
-            repoint(package, &merged_ids, Some(&kept_id), &mut orders);
+            repoint(records, &merged_ids, Some(&kept_id), &mut orders);
         }
         ValueRequest::DeleteVendor { vendor, in_use } => {
             let position = vendor_position(package, vendor)?;
             let deleted = package.vendors[position].vendor_id.clone();
-            refuse_damaged_references(package, &deleted)?;
+            refuse_fixed_references(records, &deleted)?;
             let replacement = match in_use {
                 InUse::Refuse => return Err(Failure::InvalidFacts),
                 InUse::Replace(replacement) => {
@@ -470,20 +516,29 @@ fn rewrites(
             };
             candidate.vendors.remove(position);
             repoint(
-                package,
+                records,
                 std::slice::from_ref(&deleted),
                 replacement.as_ref(),
                 &mut orders,
             );
         }
     }
-    crate::values::normalize(&mut candidate.values);
-    let documents = rewritten_orders(package, &orders);
-    let candidate = PackageMetadata::new(&documents, &candidate)
-        .validate()
-        .map_err(|_| Failure::InvalidAggregate)?
-        .vendors()
-        .clone();
+    let aggregate = Aggregate::judge(&candidate).map_err(|_| Failure::InvalidAggregate)?;
+    let substitution = Substitution {
+        orders: orders
+            .iter()
+            .map(|order| (directory_of(&order.path), &order.candidate))
+            .collect(),
+        vendors: Some(&aggregate),
+    };
+    if orders
+        .iter()
+        .any(|order| order.candidate.validate().is_err())
+        || records.broken_by(&substitution).is_some()
+    {
+        return Err(Failure::InvalidAggregate);
+    }
+    let candidate = aggregate.into_document();
     Ok(Rewrites {
         prior,
         candidate,
@@ -491,11 +546,22 @@ fn rewrites(
     })
 }
 
-fn refuse_damaged_references(
-    package: &CurrentPackageCandidate,
-    vendor: &VendorId,
-) -> Result<(), Failure> {
-    let orders = crate::vendors::damaged_references(package, vendor.as_str());
+/// The Order Directory of an Order record.
+fn directory_of(record: &Path) -> &Path {
+    record
+        .parent()
+        .and_then(Path::parent)
+        .expect("an Order record lies inside its Order Directory's metadata directory")
+}
+
+/// Refuses taking away a Vendor that an Order this change cannot rewrite still names.
+fn refuse_fixed_references(records: &Records, vendor: &VendorId) -> Result<(), Failure> {
+    let orders = records
+        .naming(std::slice::from_ref(vendor))
+        .into_iter()
+        .filter(|holder| matches!(holder, Holder::Fixed { .. }))
+        .map(|holder| holder.directory().clone())
+        .collect::<Vec<_>>();
     if orders.is_empty() {
         Ok(())
     } else {
@@ -545,25 +611,21 @@ fn vendor_position(package: &CurrentPackageCandidate, vendor_id: &str) -> Result
         })
 }
 
-/// Has every Order referencing one of `from` reference `to`, or none.
+/// Every Order referencing a Vendor in `from`, active or removed, rewritten to reference
+/// `to`, or none.
 fn repoint(
-    package: &CurrentPackageCandidate,
+    records: &Records,
     from: &[VendorId],
     to: Option<&VendorId>,
     orders: &mut Vec<OrderRewrite>,
 ) {
-    for order in &package.healthy_orders {
-        if order
-            .document
-            .vendor_id
-            .as_ref()
-            .is_some_and(|id| from.contains(id))
-        {
-            let mut candidate = order.document.clone();
+    for holder in records.naming(from) {
+        if let Holder::Rewritable { record, order, .. } = holder {
+            let mut candidate = order.clone();
             candidate.vendor_id = to.cloned();
             orders.push(OrderRewrite {
-                path: order.paths.order.absolute_path.clone(),
-                prior: order.document.clone(),
+                path: record.to_path_buf(),
+                prior: order.clone(),
                 candidate,
             });
         }
@@ -578,203 +640,84 @@ fn nonblank(field: &str, value: &str) -> Result<String, Failure> {
         })
 }
 
-/// Where one kind of value lives: a list of its own, or the Order Groups of one Project or
-/// of the Orders with no Project.
-#[derive(Clone, Debug)]
-enum Scope {
-    OrderingInstitution,
-    Orderer,
-    Project,
-    OrderGroup { project: Option<String> },
-}
-
-impl Scope {
-    fn of(
-        kind: ReusableValueKind,
-        project: Option<&str>,
-        package: &CurrentPackageCandidate,
-    ) -> Result<Self, Failure> {
-        Ok(match kind {
-            ReusableValueKind::OrderingInstitution => Self::OrderingInstitution,
-            ReusableValueKind::Orderer => Self::Orderer,
-            ReusableValueKind::Project => Self::Project,
-            ReusableValueKind::OrderGroup => Self::OrderGroup {
-                project: match project.map(str::trim).filter(|project| !project.is_empty()) {
-                    None => None,
-                    Some(project) => Some(Self::Project.known(package, project)?),
-                },
-            },
-        })
-    }
-
-    fn field(&self) -> &'static str {
-        match self {
-            Self::OrderingInstitution => "ordering_institution",
-            Self::Orderer => "orderer",
-            Self::Project => "project",
-            Self::OrderGroup { .. } => "order_group",
-        }
-    }
-
-    /// The Package's spelling of `value` in this scope, where it has one.
-    fn existing(&self, package: &CurrentPackageCandidate, value: &str) -> Option<String> {
-        let projections = &package.projections;
-        let values = match self {
-            Self::OrderingInstitution => &projections.ordering_institutions[..],
-            Self::Orderer => &projections.orderers[..],
-            Self::Project => &projections.projects[..],
-            Self::OrderGroup { project } => projections.order_groups_of(project.as_deref()),
-        };
-        values
-            .iter()
-            .find(|existing| same_value(&existing.value, value))
-            .map(|existing| existing.value.clone())
-    }
-
-    /// The Package's spelling of `value`, or the refusal naming it as unknown.
-    fn known(&self, package: &CurrentPackageCandidate, value: &str) -> Result<String, Failure> {
-        self.existing(package, value)
-            .ok_or_else(|| Failure::UnknownValue {
-                field: self.field().to_owned(),
-                value: value.trim().to_owned(),
-            })
-    }
-
-    /// The text of this scope's value on `order`, where the Order is in this scope.
-    fn value_of<'a>(&self, order: &'a OrderDocument) -> Option<&'a str> {
-        match self {
-            Self::OrderingInstitution => order.ordering_institution.as_deref(),
-            Self::Orderer => order.orderer.as_deref(),
-            Self::Project => order.project.as_deref(),
-            Self::OrderGroup { project } => {
-                let own = order
-                    .project
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|own| !own.is_empty());
-                let in_scope = match (own, project) {
-                    (None, None) => true,
-                    (Some(own), Some(project)) => same_value(own, project),
-                    _ => false,
-                };
-                in_scope.then_some(order.order_group.as_deref()).flatten()
-            }
-        }
-    }
-
-    fn set(&self, order: &mut OrderDocument, value: Option<&str>) {
-        let value = value.map(str::to_owned);
-        match self {
-            Self::OrderingInstitution => order.ordering_institution = value,
-            Self::Orderer => order.orderer = value,
-            Self::Project => order.project = value,
-            Self::OrderGroup { .. } => order.order_group = value,
-        }
-    }
-
-    /// The positions of the healthy Orders using one of `values`.
-    fn users(&self, package: &CurrentPackageCandidate, values: &[String]) -> Vec<usize> {
-        package
-            .healthy_orders
-            .iter()
-            .enumerate()
-            .filter(|(_, order)| {
-                self.value_of(&order.document)
-                    .is_some_and(|own| values.iter().any(|value| same_value(own, value)))
-            })
-            .map(|(position, _)| position)
-            .collect()
-    }
-
-    /// Keeps `value` in this scope.
-    fn keep(&self, values: &mut StoredValues, value: &str) {
-        let Some(value) = NonBlankString::trimmed(value) else {
-            return;
-        };
-        match self {
-            Self::OrderingInstitution => values.ordering_institutions.push(value),
-            Self::Orderer => values.orderers.push(value),
-            Self::Project => values.projects.push(StoredProject {
-                name: value,
-                order_groups: Vec::new(),
-            }),
-            Self::OrderGroup { project: None } => values.order_groups.push(value),
-            Self::OrderGroup {
-                project: Some(project),
-            } => match values
-                .projects
-                .iter_mut()
-                .find(|kept| same_value(kept.name.as_str(), project))
-            {
-                Some(kept) => kept.order_groups.push(value),
-                None => values.projects.push(StoredProject {
-                    name: NonBlankString::trimmed(project).expect("a known Project is nonblank"),
-                    order_groups: vec![value],
-                }),
-            },
-        }
-    }
-
-    /// Takes `taken` out of this scope, keeping `with` in their place, and has every Order
-    /// using one of them use `with`, or none. A Project's kept groups go with it.
-    fn replace(
-        &self,
-        package: &CurrentPackageCandidate,
-        taken: &[String],
-        with: Option<&str>,
-        values: &mut StoredValues,
-        orders: &mut Vec<OrderRewrite>,
-    ) {
-        let is_taken = |text: &str| taken.iter().any(|value| same_value(text, value));
-        let without = |list: &mut Vec<NonBlankString>| list.retain(|kept| !is_taken(kept.as_str()));
-        match self {
-            Self::OrderingInstitution => without(&mut values.ordering_institutions),
-            Self::Orderer => without(&mut values.orderers),
-            Self::OrderGroup { project: None } => without(&mut values.order_groups),
-            Self::OrderGroup {
-                project: Some(project),
-            } => {
-                for kept in &mut values.projects {
-                    if same_value(kept.name.as_str(), project) {
-                        without(&mut kept.order_groups);
-                    }
+/// Takes `taken` out of `scope`, keeping `with` in their place, and has every Order
+/// using one of them use `with`, or none. A Project's kept groups go with it.
+fn replace(
+    scope: &ValueScope,
+    package: &CurrentPackageCandidate,
+    taken: &[String],
+    with: Option<&str>,
+    values: &mut StoredValues,
+    orders: &mut Vec<OrderRewrite>,
+) {
+    let is_taken = |text: &str| taken.iter().any(|value| same_value(text, value));
+    // Where Projects merge, the Order Groups they now share, in the spelling each keeps.
+    let mut merged_groups = Vec::<NonBlankString>::new();
+    let without = |list: &mut Vec<NonBlankString>| list.retain(|kept| !is_taken(kept.as_str()));
+    match scope {
+        ValueScope::OrderingInstitution => without(&mut values.ordering_institutions),
+        ValueScope::Orderer => without(&mut values.orderers),
+        ValueScope::OrderGroup { project: None } => without(&mut values.order_groups),
+        ValueScope::OrderGroup {
+            project: Some(project),
+        } => {
+            for kept in &mut values.projects {
+                if same_value(kept.name.as_str(), project) {
+                    without(&mut kept.order_groups);
                 }
             }
-            Self::Project => {
-                let mut groups = Vec::new();
-                values.projects.retain(|kept| {
-                    let taken = is_taken(kept.name.as_str());
-                    if taken {
+        }
+        ValueScope::Project => {
+            // The kept Project's groups come first, then each other's in the order
+            // named, so a group two Projects spell differently keeps the kept
+            // Project's spelling.
+            let mut groups = Vec::new();
+            for value in with.into_iter().chain(taken.iter().map(String::as_str)) {
+                for kept in &values.projects {
+                    if same_value(kept.name.as_str(), value) {
                         groups.extend(kept.order_groups.iter().cloned());
                     }
-                    !taken
-                });
-                match with {
-                    Some(with) => values.projects.push(StoredProject {
+                }
+            }
+            values.projects.retain(|kept| !is_taken(kept.name.as_str()));
+            match with {
+                Some(with) => {
+                    merged_groups.clone_from(&groups);
+                    values.projects.push(StoredProject {
                         name: NonBlankString::trimmed(with).expect("a replacement is nonblank"),
                         order_groups: groups,
-                    }),
-                    None => values.order_groups.extend(groups),
+                    });
+                }
+                None => {
+                    values.order_groups.extend(groups);
+                    merged_groups.clone_from(&values.order_groups);
                 }
             }
         }
-        if let Some(with) = with
-            && !matches!(self, Self::Project)
+    }
+    if let Some(with) = with
+        && !matches!(scope, ValueScope::Project)
+    {
+        scope.keep(values, with);
+    }
+    for position in scope.users(package, taken) {
+        let order = &package.healthy_orders[position];
+        let mut candidate = order.document.clone();
+        scope.set(&mut candidate, with);
+        if let Some(group) = &mut candidate.order_group
+            && let Some(kept) = merged_groups
+                .iter()
+                .find(|kept| same_value(kept.as_str(), group))
         {
-            self.keep(values, with);
+            kept.as_str().clone_into(group);
         }
-        for position in self.users(package, taken) {
-            let order = &package.healthy_orders[position];
-            if self.value_of(&order.document) == with {
-                continue;
-            }
-            let mut candidate = order.document.clone();
-            self.set(&mut candidate, with);
-            orders.push(OrderRewrite {
-                path: order.paths.order.absolute_path.clone(),
-                prior: order.document.clone(),
-                candidate,
-            });
+        if candidate == order.document {
+            continue;
         }
+        orders.push(OrderRewrite {
+            path: order.paths.order.absolute_path.clone(),
+            prior: order.document.clone(),
+            candidate,
+        });
     }
 }

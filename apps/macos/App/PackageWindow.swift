@@ -10,7 +10,6 @@ struct PackageWindow: View {
     var body: some View {
         content
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .frame(minWidth: 1024, minHeight: 600)
     }
 
     @ViewBuilder private var content: some View {
@@ -19,7 +18,14 @@ struct PackageWindow: View {
                 .accessibilityIdentifier("package.starting")
         } else if model.root == nil {
             Welcome(model: model)
-        } else if model.diagnosticWorkspace {
+        } else {
+            package
+                .frame(minWidth: WorkspaceController.minimumWidth, minHeight: 600)
+        }
+    }
+
+    @ViewBuilder private var package: some View {
+        if model.diagnosticWorkspace {
             RecoveryWorkspace(model: model)
                 .padding(12)
         } else {
@@ -39,6 +45,7 @@ struct PackageWindow: View {
     }
 }
 
+/// What the window shows without a Package: its actions beside the recently opened Packages.
 private struct Welcome: View {
     @Bindable var model: DesktopModel
 
@@ -47,25 +54,50 @@ private struct Welcome: View {
             ProgressView(model.activity)
                 .accessibilityIdentifier("welcome.working")
         } else {
-            VStack(spacing: 24) {
-                ContentUnavailableView {
-                    Label("SpielOrders", systemImage: "folder")
-                } description: {
-                    Text("Open a Package or create a new one to manage Orders and Vendors.")
-                } actions: {
-                    Button("Open Package…", action: model.choosePackage)
-                        .accessibilityIdentifier("welcome.open")
-                    Button("New Package…", action: model.chooseInitialization)
-                        .accessibilityIdentifier("welcome.initialize")
-                    Button("Set Up Agent Guidance…", action: model.makeAgentReady)
-                        .disabled(model.busy)
-                        .accessibilityIdentifier("welcome.agentReady")
-                }
-                .fixedSize(horizontal: false, vertical: true)
-                if !model.recents.entries.isEmpty {
-                    RecentPackageList(model: model)
-                }
+            HStack(spacing: 0) {
+                actions
+                    .frame(width: 300)
+                    .padding(24)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Divider()
+                RecentPackageList(model: model)
+                    .frame(width: 280)
             }
+        }
+    }
+
+    private var actions: some View {
+        VStack(spacing: 16) {
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .frame(width: 96, height: 96)
+                .accessibilityHidden(true)
+            VStack(spacing: 4) {
+                Text("SpielOrders")
+                    .font(.title.weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
+                Text("Open a Package or create a new one to manage Orders and Vendors.")
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            VStack(spacing: 8) {
+                Button(action: model.choosePackage) {
+                    Text("Open Package…").frame(maxWidth: .infinity)
+                }
+                .accessibilityIdentifier("welcome.open")
+                Button(action: model.chooseInitialization) {
+                    Text("New Package…").frame(maxWidth: .infinity)
+                }
+                .accessibilityIdentifier("welcome.initialize")
+                Button(action: model.makeAgentReady) {
+                    Text("Set Up Agent Guidance…").frame(maxWidth: .infinity)
+                }
+                .disabled(model.busy)
+                .accessibilityIdentifier("welcome.agentReady")
+            }
+            .controlSize(.large)
+            .frame(width: 240)
+            .padding(.top, 8)
         }
     }
 }
@@ -75,20 +107,28 @@ private struct RecentPackageList: View {
     @Bindable var model: DesktopModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Recent Packages")
-                .font(.headline)
-                .foregroundStyle(.secondary)
-                .accessibilityAddTraits(.isHeader)
+        List {
             ForEach(model.recents.entries) { recent in
                 Button {
                     model.openRecent(recent)
                 } label: {
-                    Label(recent.name, systemImage: "shippingbox")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(.rect)
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(recent.name)
+                            Text(URL(fileURLWithPath: recent.id).deletingLastPathComponent().path)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .truncationMode(.middle)
+                        }
+                        .lineLimit(1)
+                    } icon: {
+                        Image(systemName: "shippingbox")
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
+                .padding(.vertical, 4)
                 .help(recent.id)
                 .contextMenu {
                     Button("Remove from List") { model.recents.remove(recent) }
@@ -96,9 +136,23 @@ private struct RecentPackageList: View {
                 .accessibilityIdentifier("welcome.recent")
             }
         }
-        .frame(width: 320, alignment: .leading)
+        .listStyle(.sidebar)
+        .overlay {
+            if model.recents.entries.isEmpty {
+                ContentUnavailableView("No Recent Packages", systemImage: "clock")
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            // The list's counterpart of File → Open Recent → Clear Menu.
+            Button("Clear Recent Packages", action: model.recents.clear)
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .disabled(model.recents.entries.isEmpty)
+                .padding(8)
+                .frame(maxWidth: .infinity)
+                .accessibilityIdentifier("welcome.recents.clear")
+        }
         .disabled(model.busy)
-        .accessibilityElement(children: .contain)
         .accessibilityLabel("Recent Packages")
         .accessibilityIdentifier("welcome.recents")
     }

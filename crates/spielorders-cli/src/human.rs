@@ -1,8 +1,9 @@
 //! The human output: one rendering of any answer, read off the value the document carries.
 //!
 //! Human output is never a parsing contract. What is chosen here is presentation:
-//! identities, managed-file operations, and a plan's changes appear only under
-//! `--verbose`, as the Rust CLI capability contract decides; money reads to two decimal
+//! identities and managed-file operations appear only under `--verbose`, as the Rust CLI
+//! capability contract decides, except the entries an Order merge discards, which a
+//! reader reviews before confirming them; a plan's changes always appear; money reads to two decimal
 //! places, a choice of this front end, which the Order record decision leaves to it; and a
 //! filesystem time reads in the local zone. Findings go to stderr, errors even under
 //! `--quiet`.
@@ -22,7 +23,7 @@ fn detail_only(key: &str) -> bool {
     key.ends_with("_id")
         || matches!(
             key,
-            "rank" | "position" | "committed" | "operations" | "changes" | "message" | "severity"
+            "rank" | "position" | "committed" | "operations" | "message" | "severity"
         )
 }
 
@@ -67,10 +68,11 @@ pub(crate) fn present(shown: &Shown<'_>, output: &Output) -> io::Result<()> {
                     rendering.lines.push(verdict.to_owned());
                     rendering.value(0, data);
                 }
-                Human::Repair(command) => {
-                    rendering.value(0, data);
-                    let root = shown.root.map_or(".".into(), |root| root.to_string_lossy());
-                    rendering.applications(command, &root, data);
+                Human::Repair => {
+                    let mut plain = data.clone();
+                    crate::response::without_repair_commands(&mut plain);
+                    rendering.value(0, &plain);
+                    rendering.applications(data);
                 }
                 Human::Member(path) => {
                     if let Some(member) = at(data, path) {
@@ -95,8 +97,14 @@ pub(crate) fn present(shown: &Shown<'_>, output: &Output) -> io::Result<()> {
             }
         }
         Answer::Failed { error, findings } => {
-            let code = error["code"].as_str().unwrap_or("failed");
-            output.error(&code.replace('_', " "))?;
+            let code = error["code"].as_str().unwrap_or("failed").replace('_', " ");
+            // The library's message where it says more than the code, such as what to do.
+            let said = error["detail"]["message"].as_str().unwrap_or_default();
+            let more = said.get(code.len()..).filter(|more| {
+                more.starts_with(": ") && said[..code.len()].eq_ignore_ascii_case(&code)
+            });
+            let headline = format!("{code}{}", more.unwrap_or_default());
+            output.error(&headline)?;
             rendering.value(1, &for_the_reader(&error["detail"]));
             for line in &rendering.lines {
                 output.error_detail(line)?;
@@ -206,12 +214,21 @@ impl Rendering {
             return;
         }
         // A collection's member reads with its position as the line that opens it.
+        if key == "operations" && !self.verbose {
+            self.discards(indent, value);
+            return;
+        }
         let shown = if key == "position" {
             self.failure
         } else {
             self.verbose || !detail_only(key)
         };
         if !shown || value.is_null() {
+            return;
+        }
+        // A plan that changes no record's facts says nothing about changes, rather than
+        // "none" beside the operations it does perform.
+        if key == "changes" && value.as_array().is_some_and(Vec::is_empty) && !self.verbose {
             return;
         }
         let label = key.replace('_', " ");
@@ -272,26 +289,34 @@ impl Rendering {
 
     /// The exact command line that applies each action a diagnosed case offers, with
     /// every value the action requires left for the reader to fill.
-    fn applications(&mut self, command: &str, root: &str, data: &Value) {
-        for case in data["cases"].as_array().into_iter().flatten() {
-            let handle = case["handle"].as_str().unwrap_or_default();
+    fn applications(&mut self, data: &Value) {
+        let remaining = data["remaining"]["cases"].as_array().into_iter().flatten();
+        for case in data["cases"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .chain(remaining)
+        {
             for offered in case["actions"].as_array().into_iter().flatten() {
-                let Some(action) = offered["action"].as_str() else {
-                    continue;
-                };
-                let required: String = offered["required_values"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(Value::as_str)
-                    .map(|value| format!(" {value}="))
-                    .collect();
-                self.lines.push(format!(
-                    "to apply: {command} --root {} case={} action={action}{required}",
-                    shell_word(root),
-                    shell_word(handle),
-                ));
+                if let Some(command) = offered["command"].as_str() {
+                    self.lines.push(format!("to apply: {command}"));
+                }
             }
+        }
+    }
+
+    /// The directory entries among `operations` an Order merge discards, which a reader
+    /// reviews before confirming them.
+    fn discards(&mut self, indent: usize, operations: &Value) {
+        let discarded: Vec<Value> = operations
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|operation| operation["kind"] == "discard_merged_entry")
+            .map(|operation| operation["path"].clone())
+            .collect();
+        if !discarded.is_empty() {
+            self.member(indent, "discards", &Value::Array(discarded));
         }
     }
 
@@ -329,21 +354,6 @@ fn scalar_text(key: &str, value: &Value) -> Option<String> {
         }
         Value::String(text) => text.clone(),
     })
-}
-
-/// `value` as one shell word: as it is where a shell gives none of its characters a
-/// meaning, and single-quoted otherwise.
-fn shell_word(value: &str) -> String {
-    const UNRESERVED: &str = "@%+=:,./-_";
-    if !value.is_empty()
-        && value
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || UNRESERVED.contains(character))
-    {
-        value.to_owned()
-    } else {
-        format!("'{}'", value.replace('\'', r"'\''"))
-    }
 }
 
 /// A filesystem time in the local zone, to the second. A count no calendar can place

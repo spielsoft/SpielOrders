@@ -28,7 +28,8 @@
         "actions": [
           {
             "action": "promote_staging_candidate",
-            "required_values": []
+            "required_values": [],
+            "command": "spielorders order repair --root <PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace case=staging_artifact_present:Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/.order.json.spielorders-stage:<DIGEST> action=promote_staging_candidate"
           }
         ]
       }

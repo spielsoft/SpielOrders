@@ -28,7 +28,8 @@
         "actions": [
           {
             "action": "promote_staging_candidate",
-            "required_values": []
+            "required_values": [],
+            "command": "spielorders repair --root <PACKAGE_ROOT> case=staging_artifact_present:.spielorders/.vendors.json.spielorders-stage:<DIGEST> action=promote_staging_candidate"
           }
         ]
       }

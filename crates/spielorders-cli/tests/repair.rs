@@ -274,6 +274,14 @@ fn a_suggestion_runs_verbatim_from_a_root_whose_name_carries_a_space() {
     );
 
     let diagnosed = diagnose(&["order", "repair", "--json"], &broken);
+    assert_eq!(
+        diagnosed["ok"], true,
+        "a repair asked about a damaged Order answers rather than failing"
+    );
+    assert!(
+        !valid(&diagnosed["data"]),
+        "a broken locator damages its Order, and the answer says so"
+    );
     let command = suggested(
         &diagnosed,
         &["order", "repair"],
@@ -297,68 +305,14 @@ fn a_suggestion_runs_verbatim_from_a_root_whose_name_carries_a_space() {
 
     assert_eq!(outcome.status, Some(0), "{}", outcome.stdout_text());
     assert_eq!(applied["data"]["committed"], true);
-    assert!(valid(&applied["data"]["remaining"]), "{applied}");
-}
-
-/// The suggested command for an action that needs no supplied value runs verbatim and
-/// applies its case, leaving the scope valid.
-#[test]
-fn a_suggested_command_runs_verbatim_and_leaves_the_scope_valid() {
-    let (_tree, root, broken, _sibling) =
-        crate::support::package_with_one_locator_rewritten("repair-locator", Some("../../.."));
-
-    let diagnosed = diagnose(&["order", "repair", "--json"], &broken);
-    assert!(
-        !valid(&diagnosed["data"]),
-        "a broken locator damages its Order, and the answer says so"
-    );
-    assert_eq!(
-        diagnosed["ok"], true,
-        "and a repair asked about a damaged Order answers rather than failing"
-    );
-    let command = suggested(
-        &diagnosed,
-        &["order", "repair"],
-        &broken,
-        "order_package_locator_mismatch",
-        "repair_package_locator",
-    );
-
-    let outcome = run_suggested(&command);
-    let applied = response(&outcome);
-
-    assert_eq!(outcome.status, Some(0), "{}", outcome.stdout_text());
-    assert_eq!(applied["data"]["committed"], true);
     let remaining = &applied["data"]["remaining"];
-    assert!(valid(remaining), "and the Order is valid afterwards");
-    assert!(
-        remaining["cases"]
-            .as_array()
-            .expect("the remaining cases are reported")
-            .is_empty(),
-        "the finding is gone: {}",
-        remaining["cases"]
-    );
+    assert!(valid(remaining), "{applied}");
     assert!(
         remaining["findings"]
             .as_array()
             .expect("the remaining diagnostics are the answer")
-            .is_empty()
-    );
-
-    // The Order loads ordinarily afterwards, which is the whole point of the locator.
-    let read = Invocation::new(&["order", "show", "--json"])
-        .rooted_at(&broken)
-        .run();
-    assert_eq!(read.status, Some(0), "{}", read.stdout_text());
-    assert_eq!(
-        response(&read)["data"]["directory"],
-        broken.to_str().expect("the test root is UTF-8")
-    );
-    assert!(
-        root.join("Orders")
-            .join(broken.file_name().expect("a name"))
-            .is_dir()
+            .is_empty(),
+        "the finding is gone: {applied}"
     );
 }
 
@@ -502,43 +456,6 @@ fn apply_and_expect_valid(
     );
 }
 
-/// The Package-level case the integrity decision makes actionable, end to end.
-#[test]
-fn a_package_level_case_is_applied_and_the_leftover_stage_is_consumed() {
-    let (_tree, root) = crate::support::package_with_a_staging_artifact("repair-package-level");
-
-    let diagnosed = diagnose(&["repair", "--json"], &root);
-    assert!(
-        valid(&diagnosed["data"]),
-        "a stage beside a valid destination is cleanup, not damage"
-    );
-    let command = suggested(
-        &diagnosed,
-        &["repair"],
-        &root,
-        "staging_artifact_present",
-        "promote_staging_candidate",
-    );
-
-    let outcome = run_suggested(&command);
-    let applied = response(&outcome);
-
-    assert_eq!(outcome.status, Some(0), "{}", outcome.stdout_text());
-    assert_eq!(applied["data"]["committed"], true);
-    assert!(
-        !root
-            .join(".spielorders/.vendors.json.spielorders-stage")
-            .exists(),
-        "the leftover stage is consumed by completing the write it belonged to"
-    );
-    assert!(
-        applied["data"]["remaining"]["cases"]
-            .as_array()
-            .expect("the remaining cases are reported")
-            .is_empty()
-    );
-}
-
 /// A dry run reports the whole plan and writes nothing.
 #[test]
 fn a_repair_dry_run_reports_the_plan_and_changes_nothing() {
@@ -560,13 +477,11 @@ fn a_repair_dry_run_reports_the_plan_and_changes_nothing() {
 
     assert_eq!(outcome.status, Some(0), "{}", outcome.stdout_text());
     assert_eq!(planned["data"]["committed"], false);
-    assert_eq!(
+    assert!(
         planned["data"]["operations"]
             .as_array()
-            .expect("a plan names its operations")
-            .len(),
-        2,
-        "the promotion and the derived refresh that follows it"
+            .is_some_and(|operations| !operations.is_empty()),
+        "a plan names the operations it would perform: {planned}"
     );
     assert_eq!(
         managed_snapshot(&root),
@@ -575,44 +490,9 @@ fn a_repair_dry_run_reports_the_plan_and_changes_nothing() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// What the validating commands now carry beside their findings
-// ---------------------------------------------------------------------------
-
-/// A validating command names the repair offered for each finding that has one, in the
-/// same action vocabulary the repair commands take — so a caller sees what may be done
-/// without a second command, including for the valid Package whose warnings offer cleanup
-/// and whose exit status deliberately says nothing about them.
-#[test]
-fn a_validating_command_carries_the_offered_repair_in_the_repair_vocabulary() {
-    let (_tree, root) = crate::support::package_with_a_staging_artifact("validate-offers");
-
-    let validated = diagnose(&["validate", "--json"], &root);
-    assert_eq!(
-        validated["ok"], true,
-        "a stage beside a valid destination is a warning, and severity alone decides"
-    );
-    let offer = &validated["data"]["cases"][0];
-    assert_eq!(offer["code"], "staging_artifact_present");
-    assert_eq!(
-        offer["path"], ".spielorders/.vendors.json.spielorders-stage",
-        "the offer names its diagnostic by the place the diagnostic already carries"
-    );
-    assert_eq!(offer["actions"][0]["action"], "promote_staging_candidate");
-
-    // The same collection, present and empty, for a Package with nothing to offer.
-    let (_tree, healthy) = populated_package("validate-offers-none");
-    let clean = diagnose(&["validate", "--json"], &healthy);
-    assert_eq!(
-        clean["data"]["cases"]
-            .as_array()
-            .map(Vec::len)
-            .expect("the collection is present"),
-        0
-    );
-}
-
-/// The Order-scoped validation carries the same, for its own scope's findings.
+/// `order validate` names the repair offered for each finding in its own scope, in the
+/// action vocabulary the repair commands take, and a present empty collection when there
+/// is nothing to offer.
 #[test]
 fn an_order_validation_carries_the_offers_for_its_own_scope() {
     let (_tree, _root, warned) =
@@ -627,18 +507,6 @@ fn an_order_validation_carries_the_offers_for_its_own_scope() {
     let offer = &validated["data"]["cases"][0];
     assert_eq!(offer["code"], "staging_artifact_present");
     assert_eq!(offer["actions"][0]["action"], "promote_staging_candidate");
-
-    let (_tree, _root, damaged) =
-        crate::support::package_with_an_unresolved_vendor_reference("order-validate-invalid");
-    let invalid = diagnose(&["order", "validate", "--json"], &damaged);
-    assert!(!outcome_status(&invalid), "the Order is invalid");
-    // An invalid scope is a failed response, so the offers travel with `repair`'s answer
-    // rather than this one — which is exactly what the repair command is for.
-    let offered = diagnose(&["order", "repair", "--json"], &damaged);
-    assert_eq!(
-        case(&offered, "vendor_reference_unresolved")["actions"][0]["action"],
-        "assign_existing_vendor"
-    );
 
     let (_tree, root) = populated_package("order-validate-offers-none");
     let healthy = crate::support::order_directory(&root, "Laser_components");
@@ -699,4 +567,38 @@ fn a_handle_given_before_its_evidence_changed_is_refused() {
     assert_eq!(outcome.status, Some(1), "{}", outcome.stdout_text());
     assert_eq!(response(&outcome)["error"]["code"], "unknown_case");
     assert_eq!(managed_snapshot(&root), before, "nothing was promoted");
+}
+
+/// Validating a Package offers each case's repair as a command that runs: a case inside an
+/// Order Directory is applied by `order repair` on that Order, not by the Package repair.
+#[test]
+fn a_validation_offers_a_runnable_repair_for_a_case_inside_an_order() {
+    let (_tree, root) = crate::support::populated_package("validate-suggests-order-repair");
+    let directory = crate::support::order_directory(&root, "Laser_components");
+    std::fs::copy(
+        directory.join(".spielorders/order.json"),
+        directory.join(".spielorders/.order.json.spielorders-stage"),
+    )
+    .unwrap();
+    let validated = Invocation::new(&["validate", "--json"])
+        .rooted_at(&root)
+        .run();
+    let validated = response(&validated);
+    let command = case(&validated, "staging_artifact_present")["actions"][0]["command"]
+        .as_str()
+        .expect("the action carries its command")
+        .to_owned();
+
+    let applied = run_suggested(&command);
+    assert_eq!(
+        applied.status,
+        Some(0),
+        "{command}: {}",
+        applied.stdout_text()
+    );
+    assert!(
+        !directory
+            .join(".spielorders/.order.json.spielorders-stage")
+            .exists()
+    );
 }

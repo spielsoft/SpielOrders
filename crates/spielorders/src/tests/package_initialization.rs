@@ -248,10 +248,8 @@ fn incomplete_staging_cleanup_is_explicit_in_the_rejection() {
     let Err(rejection) = report else {
         panic!("the injected read failure rejects initialization")
     };
-    let failed = rejection;
-    let (_failure, cleanup_failures) = (failed.failure(), failed.cleanup_failures());
-    assert_reported_beside(&failed);
-    assert_eq!(cleanup_failures.len(), 2);
+    assert_reported_beside(&rejection);
+    assert_eq!(rejection.cleanup_failures().len(), 2);
     assert!(
         tree.path()
             .join(".spielorders/.config.toml.spielorders-stage")
@@ -276,10 +274,8 @@ fn precommit_observation_failure_is_not_reported_as_an_ordinary_state_change() {
     let Err(rejection) = report else {
         panic!("the injected observation failure rejects initialization")
     };
-    let failed = rejection;
-    let (_failure, cleanup_failures) = (failed.failure(), failed.cleanup_failures());
-    assert_reported_beside(&failed);
-    assert!(cleanup_failures.is_empty());
+    assert_reported_beside(&rejection);
+    assert!(rejection.cleanup_failures().is_empty());
     assert!(!tree.path().join(".spielorders").exists());
     assert!(!tree.path().join("Orders").exists());
 }
@@ -444,12 +440,11 @@ fn configured_readme_and_staging_collisions_reject_during_planning() {
 fn rollback_reports_rather_than_removes_artifacts_whose_creation_it_cannot_prove() {
     let tree = TemporaryTree::new("initialization-uncertain-evidence");
     let root = fs::canonicalize(tree.path()).unwrap();
-    let filesystem =
-        offering_no_change_evidence(injected(InjectedBoundary::WriteVersionStage, None));
+    let filesystem = offering_no_change_evidence(ScriptedFileSystem::new());
 
     let plan = crate::plan(&initialize(tree.path()), &effects(&filesystem))
         .result
-        .expect("the fault is armed only for commit effects");
+        .expect("planning needs no ownership proof for a new entry");
 
     let report = crate::commit(plan, &effects(&filesystem)).result;
 
@@ -461,7 +456,7 @@ fn rollback_reports_rather_than_removes_artifacts_whose_creation_it_cannot_prove
     assert_reported_beside(&failed);
     assert_eq!(
         failure.location.absolute_path,
-        root.join(".spielorders/.version.json.spielorders-stage")
+        root.join(".spielorders/.config.toml.spielorders-stage")
             .as_path()
     );
 
@@ -474,6 +469,10 @@ fn rollback_reports_rather_than_removes_artifacts_whose_creation_it_cannot_prove
         );
     }
     assert!(root.join(".spielorders/config.toml").is_file());
+    assert!(
+        root.join(".spielorders/.config.toml.spielorders-stage")
+            .is_file()
+    );
     assert!(root.join("Orders").is_dir());
     assert!(!root.join("README.md").exists());
 }
@@ -574,10 +573,8 @@ fn failure_after_one_canonical_creation_restores_the_absent_state_and_existing_r
     let Err(rejection) = report else {
         panic!("the later staged-file failure rejects initialization")
     };
-    let failed = rejection;
-    let (_failure, cleanup_failures) = (failed.failure(), failed.cleanup_failures());
-    assert_reported_beside(&failed);
-    assert!(cleanup_failures.is_empty());
+    assert_reported_beside(&rejection);
+    assert!(rejection.cleanup_failures().is_empty());
     assert_eq!(
         fs::read(tree.path().join("README.md")).unwrap(),
         b"user README\r\n\xff"
@@ -615,11 +612,14 @@ fn every_cleanup_removal_failure_is_reported_beside_the_initiating_failure() {
             .result
             .expect("the cleanup fault is armed only after commit begins");
 
-        let Err(rejection) = crate::commit(plan, &effects(&filesystem)).result else {
+        let Err(failed) = crate::commit(plan, &effects(&filesystem)).result else {
             panic!("{cleanup:?} follows an injected commit rejection")
         };
-        let failed = rejection;
-        let _cleanup_failures = failed.cleanup_failures();
+        assert_reported_beside(&failed);
+        assert!(
+            !failed.cleanup_failures().is_empty(),
+            "{primary:?} then {cleanup:?}: what cleanup left is named"
+        );
     }
 }
 
@@ -655,7 +655,7 @@ fn rollback_never_deletes_unowned_staging_or_replaced_canonical_bytes() {
     let Err(failed) = crate::commit(stage_plan, &effects(&stage_filesystem)).result else {
         panic!("the injected staging collision rejects")
     };
-    let _cleanup_failures = failed.cleanup_failures();
+    assert_reported_beside(&failed);
     let stage = stage_tree
         .path()
         .join(".spielorders/.config.toml.spielorders-stage");
@@ -675,7 +675,7 @@ fn rollback_never_deletes_unowned_staging_or_replaced_canonical_bytes() {
     let Err(failed) = crate::commit(canonical_plan, &effects(&canonical_filesystem)).result else {
         panic!("the later injected staging failure rejects")
     };
-    let _cleanup_failures = failed.cleanup_failures();
+    assert_reported_beside(&failed);
     let config = canonical_tree.path().join(".spielorders/config.toml");
     assert_eq!(fs::read(&config).unwrap(), b"concurrent canonical bytes");
 }
@@ -748,8 +748,7 @@ fn concurrent_destination_appearance_is_never_overwritten_or_owned_by_rollback()
     let Err(rejection) = crate::commit(plan, &effects(&filesystem)).result else {
         panic!("an atomically detected destination collision rejects initialization")
     };
-    let failed = rejection;
-    let (_failure, _cleanup_failures) = (failed.failure(), failed.cleanup_failures());
+    assert_reported_beside(&rejection);
     assert_eq!(
         fs::read(tree.path().join(".spielorders/config.toml")).unwrap(),
         b"concurrent destination evidence"

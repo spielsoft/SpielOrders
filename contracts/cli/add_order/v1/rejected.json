@@ -12,13 +12,11 @@
     "detail": [
       {
         "field": "colour",
-        "value": "red",
         "reason": "unknown_field"
       },
       {
         "field": "items",
-        "value": "none",
-        "reason": "unknown_field"
+        "reason": "ordered_collection"
       }
     ]
   }

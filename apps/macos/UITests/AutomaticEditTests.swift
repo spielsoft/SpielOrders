@@ -113,6 +113,50 @@ import XCTest
         XCTAssertEqual(XCTWaiter.wait(for: [shown], timeout: 10), .completed)
     }
 
+    func testUndoInField() throws {
+        let root = try makePackage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try addOrder(in: root, title: "Original optics")
+        let metadata = try record(root)
+        let original = try Data(contentsOf: metadata)
+        let app = launch(root)
+        let title = app.textFields["order.editor.title"]
+        // Undo while typing reverses the typing, and leaving the field then writes nothing.
+        replace(title, with: "Typed optics", in: app)
+        app.typeKey("z", modifierFlags: .command)
+        expectValue(title, "Original optics")
+        app.typeKey(.tab, modifierFlags: [])
+        let written = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? Data(contentsOf: metadata)) != original
+        }, object: nil)
+        written.isInverted = true
+        wait(for: [written], timeout: 2)
+        expectValue(title, "Original optics")
+
+        // Return saves while the field keeps focus; Undo then reverses the saved edit, and the
+        // field offers nothing more to undo.
+        replace(title, with: "Saved optics", in: app)
+        app.typeKey(.return, modifierFlags: [])
+        try awaitValue(metadata, "title", "Saved optics")
+        XCTAssertTrue(title.wait(for: \.isEnabled, toEqual: true, timeout: 10))
+        app.typeKey("z", modifierFlags: .command)
+        try awaitValue(metadata, "title", "Original optics")
+        expectValue(title, "Original optics")
+        XCTAssertTrue(title.wait(for: \.isEnabled, toEqual: true, timeout: 10))
+        app.menuBars.menuBarItems["Edit"].click()
+        let undo = app.menuBars.menuItems["edit.undo"]
+        let redo = app.menuBars.menuItems["edit.redo"]
+        XCTAssertFalse(undo.isEnabled)
+        XCTAssertTrue(redo.isEnabled)
+        XCTAssertEqual(redo.label, "Redo Edit Order")
+        app.typeKey(.escape, modifierFlags: [])
+        app.typeKey("z", modifierFlags: .command)
+        expectValue(title, "Original optics")
+        app.typeKey("z", modifierFlags: [.command, .shift])
+        try awaitValue(metadata, "title", "Saved optics")
+        expectValue(title, "Saved optics")
+    }
+
     // Decision source: Prototype the SpielOrders desktop experience, Order and Vendor editing.
     func testUndoAcrossSelection() throws {
         let root = try makePackage()
@@ -248,6 +292,38 @@ import XCTest
         }
     }
 
+    func testSavedDateHoldsForm() throws {
+        let root = try makePackage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try addOrder(in: root, title: "Steady optics", date: "2024-03-14", items: [("First lens", "1", "2")])
+        let metadata = try record(root)
+        let app = launch(root)
+        let title = app.textFields["order.editor.title"]
+        let date = element("order.editor.date_ordered", in: app)
+        let cell = element("order.editor.items.row.0.description", in: app)
+        XCTAssertTrue(cell.waitForExistence(timeout: 10))
+        XCTAssertFalse(element("order.editor.align", in: app).exists)
+        let shown = [title.frame, date.frame, cell.frame]
+        date.click()
+        app.typeKey(.upArrow, modifierFlags: [])
+        func awaitStep(from stored: String?) {
+            let stepped = XCTNSPredicateExpectation(predicate: NSPredicate { [self] _, _ in
+                (try? read(metadata)["date_ordered"] as? String) != stored
+            }, object: nil)
+            wait(for: [stepped], timeout: 10)
+        }
+        awaitStep(from: "2024-03-14")
+        // The saved date no longer matches the folder's name, and the save has settled once
+        // Align is offered; the form beneath holds still.
+        XCTAssertTrue(element("order.editor.align", in: app).waitForExistence(timeout: 10))
+        XCTAssertEqual([title.frame, date.frame, cell.frame], shown)
+        XCTAssertEqual(cell.value as? String, "First lens")
+        // The date field keeps the keyboard: the next step goes to it.
+        let stored = try read(metadata)["date_ordered"] as? String
+        app.typeKey(.upArrow, modifierFlags: [])
+        awaitStep(from: stored)
+    }
+
     func testRapidCells() throws {
         let root = try makePackage()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -310,12 +386,16 @@ import XCTest
         premature.isInverted = true
         wait(for: [premature], timeout: 2)
         XCTAssertEqual(try Data(contentsOf: metadata), original)
-        // Ending the field with a value the Package lacks writes nothing and marks the field.
+        // Ending the field on text that names no Orderer keeps nothing: the field returns to
+        // its value and nothing is written.
         app.typeKey(.tab, modifierFlags: [])
-        XCTAssertTrue(problem.waitForExistence(timeout: 10))
+        expectValue(orderer, "")
+        XCTAssertFalse(problem.exists)
         XCTAssertEqual(try Data(contentsOf: metadata), original)
-        problem.click()
-        app.buttons["order.editor.orderer.add"].click()
+        replace(orderer, with: "Unconfirmed Buyer", in: app)
+        let new = orderer.textFields["New Orderer “Unconfirmed Buyer”…"]
+        XCTAssertTrue(new.waitForExistence(timeout: 5))
+        new.click()
         app.sheets.buttons["order.editor.addValue.confirm"].click()
         try awaitValue(metadata, "orderer", "Unconfirmed Buyer")
         app.tables["orders.table"].click()
@@ -414,38 +494,6 @@ import XCTest
         XCTAssertEqual(try read(metadata)["date_ordered"] as? String, "2020-01-02")
     }
 
-    func testDateClearing() throws {
-        let root = try makePackage()
-        defer { try? FileManager.default.removeItem(at: root) }
-        try addOrder(in: root, date: "2020-01-02", status: "ordered")
-        let metadata = try record(root)
-        let app = launch(root)
-        element("order.editor.date_ordered.clear", in: app).click()
-        // The library requires a date, so the cleared field stays Not Saved and empty.
-        XCTAssertTrue(app.buttons["editor.notSaved"].waitForExistence(timeout: 10))
-        XCTAssertTrue(element("order.editor.date_ordered.choose", in: app).exists)
-        XCTAssertEqual(try read(metadata)["date_ordered"] as? String, "2020-01-02")
-    }
-
-    func testNativeFocus() throws {
-        let root = try makePackage()
-        defer { try? FileManager.default.removeItem(at: root) }
-        try addOrder(in: root, title: "Original optics")
-        let metadata = try record(root)
-        let app = launch(root)
-        let title = app.textFields["order.editor.title"]
-        replace(title, with: "Focus result", in: app)
-        let orderer = app.comboBoxes["order.editor.orderer"]
-        orderer.click()
-        try awaitValue(metadata, "title", "Focus result")
-        XCTAssertTrue(orderer.wait(for: \.isEnabled, toEqual: true, timeout: 10))
-        // Type through the actual first responder, not an element helper that refocuses it.
-        app.typeKey("a", modifierFlags: .command)
-        app.typeText("Expected orderer")
-        XCTAssertEqual(orderer.value as? String, "Expected orderer")
-        XCTAssertEqual(title.value as? String, "Focus result")
-    }
-
     func testFailureUndo() throws {
         let root = try makePackage()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -536,6 +584,10 @@ import XCTest
         let summary = element("vendor.editor.summary", in: app)
         XCTAssertTrue(summary.waitForExistence(timeout: 10))
         XCTAssertEqual(summary.value as? String, "No Orders · Hidden")
+        // The Vendors table still lists the hidden Vendor, marked.
+        let mark = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier ENDSWITH '.hidden' AND value == 'Hidden'")).firstMatch
+        XCTAssertTrue(mark.waitForExistence(timeout: 10))
         XCTAssertTrue(name.waitForExistence(timeout: 10))
         replace(app.textFields["vendor.editor.phone"], with: "555-0100", in: app)
         name.click()

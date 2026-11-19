@@ -2,9 +2,11 @@ import AppKit
 import SpielOrdersKit
 import SwiftUI
 
-/// Date Ordered in the Order form: a native date field whose calendar opens from any of its
-/// parts. An Order without a date, or with one the calendar cannot show, keeps its text as
-/// stored until a date is chosen. The library validates whatever the field writes.
+/// Date Ordered in the Order form: a native date field that takes a typed date or opens its
+/// calendar from any of its parts. Every Order requires a date, so the field has no way to
+/// empty it. An Order without a date, or with one the calendar cannot show, keeps its text as
+/// stored until Enter Date starts the field from today. The library validates whatever the
+/// field writes.
 struct DateOrderedField: View {
     @Binding var text: String
     let identifier: String
@@ -13,26 +15,21 @@ struct DateOrderedField: View {
 
     var body: some View {
         if let date = DateOrdered.date(from: text) {
-            HStack(spacing: 4) {
-                DatePickerField(date: date, label: "Date Ordered", identifier: identifier) {
-                    text = DateOrdered.text(for: $0)
-                }
-                .fixedSize()
-                clear
+            DatePickerField(date: date, label: "Date Ordered", identifier: identifier) {
+                text = DateOrdered.text(for: $0)
             }
+            .fixedSize()
         } else {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     stored
-                    ChooseDateButton(identifier: "\(identifier).choose") {
-                        text = DateOrdered.text(for: $0)
-                    }
-                    if !text.isEmpty {
-                        clear
-                    }
+                    Button("Enter Date") { text = DateOrdered.text(for: Date()) }
+                        .controlSize(.small)
+                        .help("Start Date Ordered from today, then type or choose the date")
+                        .accessibilityIdentifier("\(identifier).enter")
                 }
                 if !text.isEmpty {
-                    Text("The calendar can’t show this date. Choose a date to replace it.")
+                    Text("The calendar can’t show this date. Enter a date to replace it.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -45,45 +42,9 @@ struct DateOrderedField: View {
     private var stored: some View {
         let placeholder = problem ?? "No Date"
         return Text(text.isEmpty ? placeholder : text)
-            .foregroundStyle(text.isEmpty ? (problem == nil ? .secondary : Color.red) : .primary)
+            .foregroundStyle(text.isEmpty ? (problem == nil ? .secondary : Color.problemText) : .primary)
             .textSelection(.enabled)
-            .accessibleValue("Date Ordered", value: text, identifier: identifier)
-    }
-
-    private var clear: some View {
-        Button("Clear Date Ordered", systemImage: "xmark.circle.fill") { text = "" }
-            .labelStyle(.iconOnly)
-            .buttonStyle(.borderless)
-            .foregroundStyle(.secondary)
-            .help("Clear Date Ordered")
-            .accessibilityIdentifier("\(identifier).clear")
-    }
-}
-
-/// Chooses a date from a calendar in a popover, for a field that holds no date it can show.
-private struct ChooseDateButton: View {
-    let identifier: String
-    let choose: (Date) -> Void
-    @State private var presented = false
-    @State private var date = Date()
-
-    var body: some View {
-        Button("Choose Date…", systemImage: "calendar") {
-            date = Date()
-            presented = true
-        }
-        .controlSize(.small)
-        .accessibilityIdentifier(identifier)
-        .popover(isPresented: $presented, arrowEdge: .bottom) {
-            DatePicker("Date Ordered", selection: $date, displayedComponents: .date)
-                .datePickerStyle(.graphical)
-                .labelsHidden()
-                .padding(8)
-                .onChange(of: date) { _, chosen in
-                    presented = false
-                    choose(chosen)
-                }
-        }
+            .accessibleValue("Date Ordered", value: text.isEmpty ? placeholder : text, identifier: identifier)
     }
 }
 

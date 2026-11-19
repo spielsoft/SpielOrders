@@ -13,7 +13,7 @@ use crate::readme::DiagnosticCode;
 use crate::tests::support::{
     Operation, PlatformFileSystem, QueuedUuids, ScriptedFileSystem, TemporaryTree, adopted_order,
     adoption, effects, failed_path, initialization, initialized_package, json, order_at,
-    order_record,
+    record_path,
 };
 use crate::{Assignments, Report};
 use std::path::PathBuf;
@@ -107,7 +107,7 @@ fn one_orders_diagnostics_exclude_every_other_orders() {
     std::fs::remove_file(&readme).expect("the plain README is removed");
     std::fs::create_dir(&readme).expect("a directory takes its place");
     // The sibling's record is not readable at all: an error about a different Order.
-    std::fs::write(order_record(&sibling), b"{ not json").expect("the sibling is damaged");
+    std::fs::write(record_path(&sibling), b"{ not json").expect("the sibling is damaged");
 
     let read = order_at(&subject, &PlatformFileSystem)
         .result
@@ -133,7 +133,7 @@ fn one_orders_diagnostics_exclude_every_other_orders() {
 fn an_unobservable_record_is_an_operational_failure_rather_than_a_verdict() {
     let (_tree, root) = initialized_package("core-order-read-unobservable");
     let directory = adopted_order(&root, "Legacy_laser_purchase", FIRST_ORDER_ID);
-    let record = order_record(&directory);
+    let record = record_path(&directory);
 
     let failure = order_at(
         &directory,

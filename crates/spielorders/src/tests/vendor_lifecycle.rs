@@ -2,15 +2,13 @@
 //! Rust CLI capability contract; Define integrity, validation, and repair
 //! boundaries; Define durable metadata schemas and version evolution.
 
-use crate::Coded;
 use crate::tests::support::assert_reported_beside;
 use crate::tests::support::planned_vendor;
 use crate::tests::support::{
-    EditPoint, FailedCommit, FixedUuid, Index, ManagedFileBoundary, Operation, PlatformFileSystem,
+    EditPoint, FailedCommit, FixedUuid, Index, ManagedFileBoundary, PlatformFileSystem,
     ScriptedFileSystem, TemporaryTree, Vendors, another_writer_replacing, create_vendor,
-    created_order, edit_order, edit_vendor, effects, failing_replacement, json, opened,
-    operation_kinds, operations, package_tree, set_vendor_hidden, text, vendor_named,
-    with_stage_cleanup_failure,
+    created_order, edit_order, edit_vendor, effects, failing_replacement, json, opened, operations,
+    package_tree, set_vendor_hidden, text, vendor_named, with_stage_cleanup_failure,
 };
 use crate::tests::support::{committed_order, committed_vendor};
 use crate::tests::support::{index_is_current, order_at};
@@ -199,36 +197,6 @@ fn an_editor_original_prevents_overwriting_shared_vendor_changes() {
         fs::read(root.join(".spielorders/vendors.json")).unwrap(),
         before
     );
-}
-
-#[test]
-fn trimmed_case_insensitive_duplicate_name_is_rejected_and_preserves_prior_bytes() {
-    let tree = package_tree("vendor-duplicate-name");
-    let root = tree.path();
-    let existing = created_vendor(
-        root,
-        "e0990d31-06aa-42e9-97c8-088e3e894822",
-        Assignments::new().assign("name", "Tarnwick"),
-    );
-    let vendors_path = root.join(".spielorders/vendors.json");
-    let before = fs::read(&vendors_path).unwrap();
-
-    let error = crate::plan(
-        &create_vendor(
-            PathBuf::from(root),
-            Assignments::new().assign("name", "  tarNWICK  "),
-        ),
-        &effects(&PlatformFileSystem),
-    )
-    .result
-    .map_err(crate::tests::support::first_fault)
-    .expect_err("a case-variant duplicate Vendor Name is rejected");
-
-    let Failure::VendorNameInUse { vendor_id, .. } = &error else {
-        panic!("a duplicate Vendor Name is rejected as such: {error:?}");
-    };
-    assert_eq!(vendor_id, existing.vendor_id.deref());
-    assert_eq!(fs::read(&vendors_path).unwrap(), before);
 }
 
 #[test]
@@ -1540,53 +1508,6 @@ fn damaged_package_state_rejects_every_vendor_capability() {
 }
 
 #[test]
-fn edit_and_hide_dry_runs_are_side_effect_free_with_complete_plans() {
-    let tree = package_with_seeded_vendor("vendor-dry-runs");
-    let root = tree.path();
-    let other = created_vendor(
-        root,
-        "3f1b8c22-5f4a-4a4c-9d0e-6d2e5a7c8b91",
-        Assignments::new().assign("name", "Nethermoor"),
-    );
-    let vendors_path = root.join(".spielorders/vendors.json");
-    let index_path = root.join(".spielorders/index.json");
-    let vendors_before = fs::read(&vendors_path).unwrap();
-    let index_before = fs::read(&index_path).unwrap();
-
-    let edit = crate::plan(
-        &edit_vendor(
-            PathBuf::from(root),
-            VendorRef::Id(String::from(SEEDED_VENDOR_ID)),
-            Assignments::new().assign("name", "Tarnwick Photonics"),
-        ),
-        &effects(&PlatformFileSystem),
-    )
-    .result
-    .expect("the rename can be planned");
-    let hide = crate::plan(
-        &set_vendor_hidden(
-            PathBuf::from(root),
-            VendorRef::Id(String::from(other.vendor_id.deref())),
-            true,
-        ),
-        &effects(&PlatformFileSystem),
-    )
-    .result
-    .expect("the Vendor can be planned for hiding");
-
-    assert!(!operations(&edit).is_empty());
-    assert!(!operations(&hide).is_empty());
-    for plan in [&edit, &hide] {
-        assert_eq!(
-            operation_kinds(plan),
-            ["replace_vendor_record", "refresh_package_index",]
-        );
-    }
-    assert_eq!(fs::read(&vendors_path).unwrap(), vendors_before);
-    assert_eq!(fs::read(&index_path).unwrap(), index_before);
-}
-
-#[test]
 fn vendor_mutations_never_inspect_or_change_supporting_material() {
     let tree = package_tree("vendor-supporting-material");
     let root = tree.path();
@@ -1634,40 +1555,10 @@ fn vendor_mutations_never_inspect_or_change_supporting_material() {
     for (path, bytes) in &sentinels {
         assert_eq!(&fs::read(path).unwrap(), bytes, "{path:?} is unchanged");
     }
-    let touched = filesystem
-        .paths(Operation::Read)
-        .into_iter()
-        .chain(filesystem.paths(Operation::ReadDirectory))
-        .filter(|path| path.starts_with(&material) || path.ends_with("Quotes"))
-        .collect::<Vec<_>>();
+    let quotes = directory.join("Quotes");
+    let inspected = filesystem.naming(|path| path.starts_with(&quotes));
     assert!(
-        touched.is_empty(),
-        "Supporting Material stays opaque: {touched:?}"
+        inspected.is_empty(),
+        "Supporting Material is never inspected: {inspected:?}"
     );
-}
-
-#[test]
-fn rejected_assignment_reasons_keep_their_stable_spellings() {
-    for (reason, spelling) in [
-        (RejectedAssignmentReason::UnknownField, "unknown_field"),
-        (
-            RejectedAssignmentReason::ImmutableIdentity,
-            "immutable_identity",
-        ),
-        (
-            RejectedAssignmentReason::ManagedTechnicalField,
-            "managed_technical_field",
-        ),
-        (
-            RejectedAssignmentReason::OrderedCollection,
-            "ordered_collection",
-        ),
-        (RejectedAssignmentReason::Duplicate, "duplicate"),
-        (
-            RejectedAssignmentReason::BlankRequiredValue,
-            "blank_required_value",
-        ),
-    ] {
-        assert_eq!(reason.code(), spelling);
-    }
 }

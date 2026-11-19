@@ -14,7 +14,7 @@ struct OrderEditorView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            RecordHeading(title: heading, summary: summary, prefix: prefix) {
+            RecordHeading(title: heading, summary: "", prefix: prefix) {
                 RecordStateBadge(model: model, editor: editor, notices: notices)
             }
             if !editor.isNew, let order = model.currentOrder {
@@ -25,7 +25,7 @@ struct OrderEditorView: View {
             OrderItems(total: total, prefix: prefix) {
                 DraftRowsTable(model: model, editor: editor, columns: RowColumn.orderItems,
                                label: "Order Items", identifier: "\(prefix).items", placeholder: "No Items",
-                               currency: currency)
+                               currency: currency, rowLimit: nil)
                     .disabled(!model.canType(editor))
             } actions: {
                 RowButtons(model: model, editor: editor, noun: "Item", prefix: "\(prefix).items")
@@ -67,15 +67,9 @@ struct OrderEditorView: View {
     }
 
     /// The library's notices about the Order as it was read.
-    private var notices: [String] {
+    private var notices: [Notice] {
         guard case let .healthy(details) = model.inspection else { return [] }
-        return details.notices
-    }
-
-    private var summary: String {
-        OrderSummaryLine.of(status: editor.field(SPIELORDERS_ORDER_FIELD_STATUS),
-                            date: editor.field(SPIELORDERS_ORDER_FIELD_DATE_ORDERED),
-                            vendor: editor.field(SPIELORDERS_ORDER_FIELD_VENDOR))
+        return details.notices.map(Notice.init)
     }
 
     private var currency: String {
@@ -152,7 +146,11 @@ struct OrderEditorView: View {
                          add: { text in model.addValue(text, at: field, in: editor) },
                          focused: { editor.trackFocus(field, row: -1) },
                          focusSerial: serial(field), problem: FieldProblem.blank(editor, field))
-                .frame(minWidth: 200, maxWidth: .infinity)
+                // SwiftUI reads no baseline from the AppKit box, whose text is centered in it.
+                .alignmentGuide(.firstTextBaseline) { box in
+                    (box.height + NSFont.systemFont(ofSize: NSFont.systemFontSize).capHeight) / 2
+                }
+                .frame(minWidth: 160, maxWidth: .infinity)
         }
     }
 
@@ -220,11 +218,6 @@ struct VendorEditorView: View {
         editor.isNew ? "New Vendor" : editor.field(SPIELORDERS_VENDOR_FIELD_NAME)
     }
 
-    /// The library's notices about the Vendor as it was read; a new Vendor in the sheet has none.
-    private var notices: [String] {
-        inSheet ? [] : model.vendorDetails?.notices ?? []
-    }
-
     /// What the library read about the Vendor being edited in the window.
     private var details: VendorDetails? {
         inSheet || editor.isNew ? nil : model.vendorDetails
@@ -238,7 +231,7 @@ struct VendorEditorView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             RecordHeading(title: heading, summary: details.map(VendorSummaryLine.of) ?? "", prefix: prefix) {
-                RecordStateBadge(model: model, editor: editor, notices: notices)
+                RecordStateBadge(model: model, editor: editor)
                 if let details, let id = editor.draft.recordID {
                     VendorVisibility(model: model, id: id, hidden: details.hidden)
                 }
@@ -259,23 +252,25 @@ struct VendorEditorView: View {
                 }
             }
             .frame(maxWidth: 700, alignment: .leading).disabled(!model.canType(editor))
-            Text("Contacts").font(.headline).accessibilityAddTraits(.isHeader)
-            DraftRowsTable(model: model, editor: editor, columns: [
-                .init(field: SPIELORDERS_CONTACT_FIELD_NAME, width: 180, flexible: true),
-                .init(field: SPIELORDERS_CONTACT_FIELD_ROLE, width: 140),
-                .init(field: SPIELORDERS_CONTACT_FIELD_PHONE, width: 140),
-                .init(field: SPIELORDERS_CONTACT_FIELD_EMAIL, width: 200, flexible: true),
-            ], label: "Vendor Contacts", identifier: "\(prefix).contacts", placeholder: "No Contacts")
-            .disabled(!model.canType(editor))
-            RowButtons(model: model, editor: editor, noun: "Contact", prefix: "\(prefix).contacts")
+            DetailSection("Contacts") {
+                DraftRowsTable(model: model, editor: editor, columns: [
+                    .init(field: SPIELORDERS_CONTACT_FIELD_NAME, width: 180, flexible: true),
+                    .init(field: SPIELORDERS_CONTACT_FIELD_ROLE, width: 160),
+                    .init(field: SPIELORDERS_CONTACT_FIELD_PHONE, width: 160),
+                    .init(field: SPIELORDERS_CONTACT_FIELD_EMAIL, width: 200, flexible: true),
+                ], label: "Vendor Contacts", identifier: "\(prefix).contacts", placeholder: "No Contacts")
+                .disabled(!model.canType(editor))
+                RowButtons(model: model, editor: editor, noun: "Contact", prefix: "\(prefix).contacts")
+            }
             if inSheet {
                 HStack {
                     Spacer()
                     Button("Cancel") { model.cancelVendorSheet() }
                         .keyboardShortcut(.cancelAction)
                         .accessibilityIdentifier("\(prefix).cancel")
+                    // Return stays with the Contacts table, as in a new record's form.
                     Button("Create") { model.saveVendorSheet() }
-                        .keyboardShortcut(.defaultAction)
+                        .help("Create Vendor (⌘Return)")
                         .buttonStyle(.borderedProminent)
                         .disabled(model.busy)
                         .accessibilityIdentifier("\(prefix).create")
@@ -312,6 +307,13 @@ struct VendorEditorView: View {
                            content: TextField("", text: text, prompt: FieldProblem.prompt(editor, field),
                                               axis: lines > 1 ? .vertical : .horizontal)
                                .lineLimit(lines...max(lines, lines * 2))
+                               .onKeyPress(.return, phases: .down) { press in
+                                   // Return starts a new line in a field of several lines, as
+                                   // in a text view, instead of pressing the default button.
+                                   guard lines > 1, press.modifiers.isEmpty else { return .ignored }
+                                   let selector = #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:))
+                                   return NSApp.sendAction(selector, to: nil, from: nil) ? .handled : .ignored
+                               }
                                .labelsHidden()
                                .focused($focus, equals: field)
                                .accessibilityLabel(RecordFieldLabel.of(field))
@@ -336,10 +338,12 @@ private struct VendorVisibility: View {
     let hidden: Bool
 
     var body: some View {
-        Button(hidden ? "Show Vendor" : "Hide Vendor", systemImage: hidden ? "eye" : "eye.slash") {
+        // The symbol shows the Vendor's state; the label and help name what a click does.
+        Button {
             model.setVendorHidden(!hidden, vendor: id)
+        } label: {
+            IconLabel(hidden ? "Show Vendor" : "Hide Vendor", systemImage: hidden ? "eye.slash" : "eye")
         }
-        .labelStyle(.iconOnly)
         .buttonStyle(.borderless)
         .disabled(model.busy || !model.canBrowseRecords)
         .help(hidden ? "Show Vendor: offer it for new use again" : "Hide Vendor: stop offering it for new use")
@@ -350,13 +354,19 @@ private struct VendorVisibility: View {
 /// The Vendor heading's summary: how many Orders use the Vendor, and whether it is hidden.
 enum VendorSummaryLine {
     static func of(_ details: VendorDetails) -> String {
-        let count = details.orders.count
-        let orders = switch count {
+        let orders = OrderCount.text(details.orders.count)
+        return details.hidden ? orders + " · Hidden" : orders
+    }
+}
+
+/// How many Orders use a record, as its heading's summary says it.
+enum OrderCount {
+    static func text(_ count: Int) -> String {
+        switch count {
         case 0: "No Orders"
         case 1: "1 Order"
         default: "\(count) Orders"
         }
-        return details.hidden ? orders + " · Hidden" : orders
     }
 }
 
@@ -367,7 +377,7 @@ extension VendorDetails {
     }
 }
 
-/// A record's name above its form, with its state beside it and a one-line summary beneath.
+/// A record's name above its form, with its state beside it and any one-line summary beneath.
 struct RecordHeading<Badge: View>: View {
     let title: String
     let summary: String
@@ -393,8 +403,10 @@ struct RecordHeading<Badge: View>: View {
     }
 }
 
-/// Cancel and Create for a new record. An existing record saves as each field ends, so it
-/// has neither; its heading offers recovery when a save is refused.
+/// Cancel and Create for a new record, trailing as in a sheet. An existing record saves as each
+/// field ends, so it has neither; its heading offers recovery when a save is refused. Neither
+/// takes Esc or Return: the window offers those to its buttons before a table sees them, so the
+/// Items or Orders table would lose Return. File → Create (⌘Return) creates from anywhere.
 struct RecordActions: View {
     @Bindable var model: DesktopModel
     let editor: RecordEditor
@@ -402,14 +414,15 @@ struct RecordActions: View {
     var body: some View {
         if editor.isNew {
             HStack {
+                Spacer()
                 Button("Cancel", action: model.cancelRecord)
                     .disabled(model.busy && !model.committing)
                     .accessibilityIdentifier("editor.cancel")
-                Spacer()
                 Button("Create") {
                     NSApp.keyWindow?.makeFirstResponder(nil)
                     model.createRecord()
                 }
+                .help("Create \(editor.kind == .vendor ? "Vendor" : "Order") (⌘Return)")
                 .buttonStyle(.borderedProminent)
                 .disabled(!model.canCreateRecord)
                 .accessibilityIdentifier("editor.create")
@@ -419,7 +432,8 @@ struct RecordActions: View {
 }
 
 /// A control with the marks of its field: red with a problem symbol while the last refused
-/// save located problems there, and a note while a save's consequence there is unread.
+/// save located problems there, and a note while a save's consequence there is unread. The
+/// symbol's room is kept, so marking the field moves nothing.
 struct MarkedField<Content: View>: View {
     @Bindable var model: DesktopModel
     let editor: RecordEditor
@@ -433,21 +447,28 @@ struct MarkedField<Content: View>: View {
     var body: some View {
         let problems = editor.statements(at: field)
         HStack(spacing: 4) {
-            content.overlay {
+            // VoiceOver reads the problem on the field itself, not only on the badge after it.
+            content.accessibilityHint(problems.joined(separator: " ")).overlay {
                 if !problems.isEmpty {
                     RoundedRectangle(cornerRadius: 5)
                         .strokeBorder(.red, lineWidth: 1.5)
                         .allowsHitTesting(false)
                 }
             }
-            if !problems.isEmpty {
-                ProblemBadge(level: .problem, title: RecordFieldLabel.of(field), lines: problems,
-                             actions: fixes + model.repairs(for: editor), label: "\(RecordFieldLabel.of(field)) problem",
-                             identifier: "\(identifier).problem")
-            }
-            if let consequence = editor.consequences[field] {
-                ProblemBadge(level: .note, title: RecordFieldLabel.of(field), lines: [consequence],
-                             label: "\(RecordFieldLabel.of(field)) note", identifier: "\(identifier).note")
+            ZStack {
+                Image(nsImage: NoticeLevel.problem.image)
+                    .hidden()
+                HStack(spacing: 4) {
+                    if !problems.isEmpty {
+                        ProblemBadge(level: .problem, title: RecordFieldLabel.of(field), lines: problems,
+                                     actions: fixes + model.repairs(for: editor),
+                                     label: "\(RecordFieldLabel.of(field)) problem", identifier: "\(identifier).problem")
+                    }
+                    if let consequence = editor.consequences[field] {
+                        ProblemBadge(level: .note, title: RecordFieldLabel.of(field), lines: [consequence],
+                                     label: "\(RecordFieldLabel.of(field)) note", identifier: "\(identifier).note")
+                    }
+                }
             }
         }
     }
@@ -460,7 +481,7 @@ enum FieldProblem {
     }
 
     @MainActor static func prompt(_ editor: RecordEditor, _ field: Int32) -> Text? {
-        blank(editor, field).map { Text($0).foregroundStyle(.red) }
+        blank(editor, field).map { Text($0).foregroundStyle(.problemText) }
     }
 }
 
@@ -470,15 +491,18 @@ struct RowActions: View {
     let prefix: String
     var canRemove = true
     let add: () -> Void
-    let remove: () -> Void
+    /// Removes the selected rows; without it, the control only adds.
+    var remove: (() -> Void)?
 
     var body: some View {
         ControlGroup {
             Button("Add \(noun)", systemImage: "plus", action: add)
                 .accessibilityIdentifier("\(prefix).add")
-            Button("Remove \(noun)", systemImage: "minus", action: remove)
-                .disabled(!canRemove)
-                .accessibilityIdentifier("\(prefix).remove")
+            if let remove {
+                Button("Remove \(noun)", systemImage: "minus", action: remove)
+                    .disabled(!canRemove)
+                    .accessibilityIdentifier("\(prefix).remove")
+            }
         }
         .labelStyle(.iconOnly)
         .fixedSize()

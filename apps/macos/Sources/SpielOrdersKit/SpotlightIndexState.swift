@@ -10,7 +10,7 @@ enum SpotlightIndexState {
         if Task.isCancelled { return .unavailable(SPIELORDERS_PROVIDER_STATE_CANCELLED, "Search stopped.") }
         do {
             guard let volume = try directory.resourceValues(forKeys: [.volumeURLKey]).volume else {
-                return .unavailable(SPIELORDERS_PROVIDER_STATE_QUERY_REFUSED, "The volume could not be identified.")
+                return .unavailable(SPIELORDERS_PROVIDER_STATE_QUERY_REFUSED, "The volume couldn’t be identified.")
             }
             let process = Process()
             defer {
@@ -34,7 +34,7 @@ enum SpotlightIndexState {
             let descriptor = pipe.fileHandleForReading.fileDescriptor
             let flags = fcntl(descriptor, F_GETFL)
             guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0 else {
-                return .unavailable(SPIELORDERS_PROVIDER_STATE_QUERY_REFUSED, "The index-state pipe could not be opened.")
+                return .unavailable(SPIELORDERS_PROVIDER_STATE_QUERY_REFUSED, "Spotlight’s status couldn’t be read.")
             }
             try process.run()
             try pipe.fileHandleForWriting.close()
@@ -64,14 +64,14 @@ enum SpotlightIndexState {
                     let state = Task.isCancelled ? SPIELORDERS_PROVIDER_STATE_CANCELLED : SPIELORDERS_PROVIDER_STATE_QUERY_REFUSED
                     return .unavailable(
                         state,
-                        Task.isCancelled ? "Search stopped." : "The index-state report exceeded its output bound.")
+                        Task.isCancelled ? "Search stopped." : "Spotlight’s status couldn’t be read.")
                 }
                 do { try await Task.sleep(for: .milliseconds(10)) } catch { /* Stop the owned process on the next iteration. */ }
             }
             process.waitUntilExit()
             drain()
             guard !overflow else {
-                return .unavailable(SPIELORDERS_PROVIDER_STATE_QUERY_REFUSED, "The index-state report exceeded its output bound.")
+                return .unavailable(SPIELORDERS_PROVIDER_STATE_QUERY_REFUSED, "Spotlight’s status couldn’t be read.")
             }
             let report = String(decoding: bytes, as: UTF8.self)
             let state = report.split(separator: "\n").filter { $0.first?.isWhitespace == true }
@@ -80,7 +80,7 @@ enum SpotlightIndexState {
             if state.contains("enabled") { return .enabled }
             if state.contains("no index") { return .unavailable(SPIELORDERS_PROVIDER_STATE_VOLUME_NOT_INDEXED, report) }
             return .unavailable(SPIELORDERS_PROVIDER_STATE_QUERY_REFUSED,
-                                report.isEmpty ? "Index state was not reported (exit \(process.terminationStatus))." : report)
+                                report.isEmpty ? "Index state wasn’t reported (exit \(process.terminationStatus))." : report)
         } catch {
             return .unavailable(SPIELORDERS_PROVIDER_STATE_QUERY_REFUSED, error.localizedDescription)
         }

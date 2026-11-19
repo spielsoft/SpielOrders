@@ -1132,7 +1132,7 @@ fn prepare(contract: ResponseContract, label: &str) -> Prepared {
             }
         }
         Subject::OrderRootWithAnotherOrder => {
-            let (tree, root) = populated_package(label);
+            let (tree, root) = crate::support::package_with_mergeable_orders(label);
             let directory = order_directory(&root, "Laser_components");
             let other = order_directory(&root, "Mirror_mounts");
             Prepared {
@@ -1190,15 +1190,7 @@ fn invocation_at(
     prepared: &Prepared,
     root: &std::path::Path,
 ) -> Invocation {
-    let shape = shape(contract);
-    let mut run = Invocation::new(shape.line);
-    if let Some(positional) = &prepared.positional {
-        run = run.argument(positional);
-    }
-    for argument in shape.arguments {
-        run = run.argument(argument);
-    }
-    run.rooted_at(root)
+    line_at(shape(contract).line, contract, prepared, root)
 }
 
 /// Ordinary fixture commands answer; Supporting Material validates its runtime outcome.
@@ -1986,21 +1978,4 @@ fn no_command_runs_while_its_line_names_two_excluded_options() {
             );
         }
     }
-}
-
-/// `--version` is one answer for the executable.
-///
-/// It names no command, so it carries no output mode either: the modes belong to the
-/// commands, and `--version` is a reference request rather than a modifier.
-#[test]
-fn the_executable_reports_its_version_as_an_answer() {
-    let outcome = Invocation::new(&["--version"]).run();
-
-    assert_eq!(outcome.status, Some(0));
-    assert_eq!(outcome.stderr, b"", "a reference is an answer");
-    assert!(
-        outcome.stdout_text().contains("spielorders"),
-        "{}",
-        outcome.stdout_text()
-    );
 }

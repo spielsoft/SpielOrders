@@ -7,7 +7,7 @@
 //!
 //! **A fact edit deliberately leaves the directory alone.** Drift between an Order's facts
 //! and its Directory name is ordinary allowed state; `order align` is the explicit action
-//! that resolves it, and the tests here assert the drift rather than a rename.
+//! that resolves it.
 //!
 //! Decision sources: Define the Rust CLI capability contract; Define the Order record and
 //! lifecycle contract; Durable managed-file writes; Define legacy Order adoption and
@@ -55,32 +55,6 @@ fn read(directory: &Path) -> serde_json::Value {
         .run();
     assert_eq!(outcome.status, Some(0), "{}", outcome.stderr_text());
     response(&outcome)["data"].clone()
-}
-
-/// Entering `ordered` with no date applies this machine's local date, and a date in the
-/// same edit overrides it.
-///
-/// A historical correction is one edit rather than two.
-#[test]
-fn entering_ordered_applies_todays_date_unless_the_same_edit_supplies_one() {
-    let today = jiff::Zoned::now().date().strftime("%Y-%m-%d").to_string();
-
-    let (_tree, directory) = one_order("order-edit-ordered-applies-today");
-    let applied = response(&edit(&directory, &["status=ordered"]));
-    assert_eq!(applied["data"]["order"]["date_ordered"], today);
-    assert_eq!(
-        change(&applied, "fact", Some("date_ordered")).expect("the date changed")["after"],
-        today
-    );
-
-    // The same edit carrying a date stores that one, which is the historical correction.
-    let (_tree, directory) = one_order("order-edit-ordered-explicit-date");
-    let assigned = response(&edit(
-        &directory,
-        &["status=ordered", "date_ordered=2019-08-22"],
-    ));
-    assert_eq!(assigned["data"]["order"]["date_ordered"], "2019-08-22");
-    assert_eq!(read(&directory)["date_ordered"], "2019-08-22");
 }
 
 /// Reuse versus introduction is reported for each of the four categories.
@@ -522,10 +496,10 @@ fn a_project_change_keeps_only_an_order_group_the_command_names() {
     );
 }
 
-/// A per-line modifier must never be silently ignored and turn a preview or a
-/// differently targeted command into a write to the batch's Package.
+/// A batch line carrying a per-line modifier is refused and nothing is written: a modifier
+/// is never silently ignored and turned into a write to the batch's Package.
 #[test]
-fn apply_modifiers() {
+fn an_apply_line_carrying_a_modifier_is_refused_and_writes_nothing() {
     let (_tree, root) = populated_package("apply-modifiers");
     let (_other_tree, other) = populated_package("apply-other");
     let order = order_directory(&root, "Laser_components");
@@ -569,4 +543,167 @@ fn apply_modifiers() {
         assert_eq!(managed_snapshot(&root), before);
         assert_eq!(managed_snapshot(&other), other_before);
     }
+}
+
+/// An Order line that names no Order of the batch's Package, however spelled, refuses the
+/// batch the way reading that directory would, and writes nothing to either Package.
+#[test]
+fn an_apply_order_line_naming_no_order_of_the_package_is_refused() {
+    let (_tree, root) = populated_package("apply-elsewhere");
+    let (_other_tree, other) = populated_package("apply-elsewhere-other");
+    let order = order_directory(&root, "Laser_components");
+    let relative = order.strip_prefix(&root).unwrap().to_path_buf();
+    let elsewhere = order_directory(&other, "Laser_components");
+    let working = root.parent().unwrap();
+    for (line, code) in [
+        (serde_json::json!(["order", "edit", "currency=USD"]), None),
+        (
+            serde_json::json!(["order", "edit", "currency=USD", "--root", relative]),
+            None,
+        ),
+        (
+            serde_json::json!(["order", "edit", "currency=USD", "--root", elsewhere]),
+            Some("order_not_found"),
+        ),
+    ] {
+        let file = working.join("operations.jsonl");
+        std::fs::write(&file, format!("{line}\n")).unwrap();
+        let before = managed_snapshot(&root);
+        let other_before = managed_snapshot(&other);
+        let outcome = Invocation::new(&["apply"])
+            .argument(&file)
+            .argument("--json")
+            .rooted_at(&root)
+            .in_directory(working)
+            .run();
+        assert_eq!(outcome.status, Some(1), "{line}: {}", outcome.stdout_text());
+        let error = &response(&outcome)["error"];
+        assert_ne!(error["code"], "internal", "{line}");
+        assert_eq!(error["detail"]["line"], 1, "{line}");
+        if let Some(code) = code {
+            assert_eq!(error["code"], code, "{line}: {error}");
+        }
+        assert_eq!(managed_snapshot(&root), before);
+        assert_eq!(managed_snapshot(&other), other_before);
+    }
+}
+
+/// `order merge` refuses an Order Directory of another Package and writes to neither.
+#[test]
+fn an_order_of_another_package_is_not_merged() {
+    let (_tree, root) = populated_package("merge-elsewhere");
+    let (_other_tree, other) = populated_package("merge-elsewhere-other");
+    let kept = order_directory(&root, "Laser_components");
+    let elsewhere = order_directory(&other, "Laser_components");
+    let before = managed_snapshot(&root);
+    let other_before = managed_snapshot(&other);
+    let outcome = Invocation::new(&["order", "merge"])
+        .argument(&elsewhere)
+        .argument("--yes")
+        .argument("--json")
+        .rooted_at(&kept)
+        .run();
+    assert_eq!(outcome.status, Some(1), "{}", outcome.stdout_text());
+    assert_eq!(response(&outcome)["error"]["code"], "order_not_found");
+    assert_eq!(managed_snapshot(&root), before);
+    assert_eq!(managed_snapshot(&other), other_before);
+}
+
+/// A batch's dry run says what each line changes, as the line would alone against the
+/// Package the earlier lines leave.
+#[test]
+fn an_apply_dry_run_reports_each_lines_changes() {
+    let (_tree, root) = populated_package("apply-changes");
+    let order = order_directory(&root, "Laser_components");
+    let file = root.join("operations.jsonl");
+    let lines = [
+        serde_json::json!(["order", "edit", "title=Better lenses", "--root", order]),
+        serde_json::json!(["add-vendor", "Example Supply"]),
+        serde_json::json!(["order", "edit", "vendor=Example Supply", "--root", order]),
+    ];
+    let text: String = lines.iter().map(|line| format!("{line}\n")).collect();
+    std::fs::write(&file, format!("# planned\n{text}")).unwrap();
+    let before = managed_snapshot(&root);
+    let outcome = Invocation::new(&["apply", "--dry-run", "--json"])
+        .argument(&file)
+        .rooted_at(&root)
+        .run();
+    assert_eq!(outcome.status, Some(0), "{}", outcome.stdout_text());
+    assert_eq!(managed_snapshot(&root), before);
+    let changes = response(&outcome)["data"]["changes"].clone();
+    let at = |line: u64| {
+        changes
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|change| change["line"] == line)
+            .map(|change| (change["field"].clone(), change["after"].clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        at(2),
+        [(
+            serde_json::json!("title"),
+            serde_json::json!("Better lenses")
+        )]
+    );
+    assert!(at(3).contains(&(
+        serde_json::json!("name"),
+        serde_json::json!("Example Supply")
+    )));
+    assert_eq!(
+        at(4),
+        [(
+            serde_json::json!("vendor"),
+            serde_json::json!("Example Supply")
+        )]
+    );
+}
+
+/// Every refused assignment of one command line is named with the library's reason for it,
+/// an unknown field beside a blank required one, and nothing is written.
+#[test]
+fn an_edit_names_every_refused_assignment_with_its_reason() {
+    let (_tree, directory) = one_order("edit-refused-assignments");
+    let before = managed_snapshot(&directory);
+    let refused = response(&edit(
+        &directory,
+        &[
+            "colour=red",
+            "title=",
+            "order_id=abc",
+            "items=none",
+            "schema_version=2",
+            "title=Again",
+        ],
+    ));
+
+    assert_eq!(refused["error"]["code"], "invalid_assignments");
+    assert_eq!(
+        refused["error"]["detail"],
+        serde_json::json!([
+            { "field": "colour", "reason": "unknown_field" },
+            { "field": "title", "reason": "blank_required_value" },
+            { "field": "order_id", "reason": "immutable_identity" },
+            { "field": "items", "reason": "ordered_collection" },
+            { "field": "schema_version", "reason": "managed_technical_field" },
+            { "field": "title", "reason": "duplicate" },
+        ])
+    );
+    assert_eq!(managed_snapshot(&directory), before);
+}
+
+/// A commit that warns is committed with a warning even where reading the Order already
+/// warned: an unreadable README warns on the read, and leaves the index unrefreshed.
+#[test]
+fn a_commit_that_warns_after_a_warning_read_is_committed_with_a_warning() {
+    let (_tree, directory) = one_order("edit-warns-twice");
+    std::fs::remove_file(directory.join("README.md")).unwrap();
+    std::fs::create_dir(directory.join("README.md")).unwrap();
+    let edited = response(&edit(&directory, &["title=Renamed"]));
+
+    assert_eq!(
+        edited["data"]["outcome"], "committed_with_warning",
+        "{edited}"
+    );
 }

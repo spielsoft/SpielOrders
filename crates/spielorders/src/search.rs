@@ -17,6 +17,7 @@ use crate::{
     Answer,
     canonical::{DamagedOrder, HealthyOrder, Package, ReusableValueProjection},
     metadata::{Currency, Vendor, VendorId},
+    values::ReusableValueKind,
 };
 use icu_casemap::CaseMapper;
 use pulldown_cmark::{Event, Options, Parser, TagEnd};
@@ -167,15 +168,6 @@ pub enum OrderListEntry {
 pub enum VendorVisibility {
     Offered,
     All,
-}
-
-/// One of the four Reusable Free-Entry Value categories.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ReusableValueKind {
-    OrderingInstitution,
-    Orderer,
-    Project,
-    OrderGroup,
 }
 
 /// Every list a caller reads off an opened Package answers with that Package's findings

@@ -68,7 +68,7 @@ extension DesktopModel {
                 contents.stop()
                 multipleSelection = []
                 if committed.requiresReopen {
-                    requireReload(Notice("The Orders were merged, but the Package must be reloaded before continuing.",
+                    requireReload(Notice("The Orders were merged. Reload the Package to keep editing.",
                                          details: committed.warnings.joined(separator: "\n\n")))
                     clearOrders()
                     return
@@ -92,16 +92,7 @@ extension DesktopModel {
         let subject = count == 1 ? "1 merged Order" : "\(count) merged Orders"
         let explanation = "“\(kept.name)” has what they added, but \(subject) stayed in the Orders folder. "
             + "Remove \(count == 1 ? "it" : "them") with Remove Order."
-        alert("The Orders were merged, but not all were removed", explanation,
+        alert("Some Merged Orders Weren’t Removed", explanation,
               details: committed.warnings.joined(separator: "\n\n"), identifier: "order.merge.unremoved")
-    }
-}
-
-extension OrderRow {
-    /// How an Order is named where its Title is the natural name: the Title, or the
-    /// directory name of an Order without one.
-    var name: String {
-        let title = values[OrderColumn.title.field] ?? ""
-        return title.isEmpty ? directoryName : title
     }
 }

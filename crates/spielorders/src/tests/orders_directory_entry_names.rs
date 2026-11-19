@@ -22,7 +22,6 @@ use crate::tests::support::{
 };
 use crate::{Assignments, Package, Report};
 
-use crate::Coded;
 use crate::canonical::PackageIndexState;
 
 use crate::ports::{DirectoryEntry, FileSystemEntryKind};
@@ -79,11 +78,15 @@ fn diagnostics(package: &Package) -> Vec<&Diagnostic> {
         .collect()
 }
 
+/// The directory holds what would make it an Order, so an entry offered as an Order or
+/// diagnosed as a damaged one would show it was looked inside.
 #[test]
-fn opening_a_package_reports_a_directory_it_cannot_name_instead_of_failing() {
+fn opening_a_package_reports_a_directory_it_cannot_name_and_never_looks_inside() {
     let (_tree, root) = initialized_package("unnamable-directory");
     let unusable = root.join("Orders").join(UNUSABLE_DIRECTORY);
-    std::fs::create_dir(&unusable).expect("the odd directory is created");
+    std::fs::create_dir_all(unusable.join(".spielorders")).expect("the odd directory is created");
+    std::fs::write(unusable.join(".spielorders/order.json"), b"{}").expect("bait is written");
+    std::fs::write(unusable.join("README.md"), b"bait").expect("bait is written");
 
     let Ok(package) = opened(&root, &PlatformFileSystem).result else {
         panic!("a directory this application cannot name leaves the Package usable")
@@ -106,32 +109,6 @@ fn opening_a_package_reports_a_directory_it_cannot_name_instead_of_failing() {
 }
 
 #[test]
-fn a_directory_it_cannot_name_is_never_looked_inside() {
-    let (_tree, root) = initialized_package("unnamable-opaque");
-    let unusable = root.join("Orders").join(UNUSABLE_DIRECTORY);
-    std::fs::create_dir_all(unusable.join(".spielorders")).expect("the odd directory is created");
-    std::fs::write(unusable.join(".spielorders/order.json"), b"{}").expect("bait is written");
-    std::fs::write(unusable.join("README.md"), b"bait").expect("bait is written");
-
-    let filesystem = ScriptedFileSystem::new();
-    let Ok(package) = opened(&root, &filesystem).result else {
-        panic!("a directory this application cannot name leaves the Package usable")
-    };
-
-    assert_eq!(diagnostics(&package).len(), 1);
-    for path in filesystem
-        .paths(Operation::Read)
-        .into_iter()
-        .chain(filesystem.paths(Operation::ReadDirectory))
-    {
-        assert!(
-            !path.starts_with(&unusable),
-            "the refused directory was inspected at {path:?}"
-        );
-    }
-}
-
-#[test]
 fn an_entry_of_any_kind_whose_name_cannot_be_expressed_is_reported_by_kind() {
     let (_tree, root) = initialized_package("unnamable-file");
     let unusable = root.join("Orders").join(UNUSABLE_FILE);
@@ -149,7 +126,7 @@ fn an_entry_of_any_kind_whose_name_cannot_be_expressed_is_reported_by_kind() {
 }
 
 #[test]
-fn indexed_package_reports_unusable_name() {
+fn a_package_with_a_current_index_still_reports_an_entry_it_cannot_name() {
     let (_tree, root) = initialized_package("unnamable-index");
     adopted_order(
         &root,
@@ -323,14 +300,6 @@ fn a_drive_letter_shaped_name_is_an_ordinary_order_directory() {
             .package_relative_path
             .as_deref(),
         Some("Orders/C:notes")
-    );
-}
-
-#[test]
-fn the_unusable_entry_name_code_keeps_its_wire_spelling() {
-    assert_eq!(
-        DiagnosticCode::OrdersDirectoryEntryNameUnusable.code(),
-        "orders_directory_entry_name_unusable"
     );
 }
 

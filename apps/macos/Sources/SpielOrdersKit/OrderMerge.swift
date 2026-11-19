@@ -30,8 +30,10 @@ public final class OrderMerge: Sendable {
     /// Whether the kept Order's record gains facts or Items from the others.
     public let fillsKept: Bool
 
+    /// Throws `OrderMergeRefusal` for a plan that moves or discards an entry it can't place in
+    /// a later Order, which the owner could then neither see nor confirm.
     init(_ pointer: UnsafeMutablePointer<SpielordersPlan>, orders: [OrderRow],
-         source: LibraryHandle<SpielordersPackage>, notices: [LibraryEntry]) {
+         source: LibraryHandle<SpielordersPackage>, notices: [LibraryEntry]) throws {
         handle = LibraryHandle(pointer, free: spielorders_plan_free)
         self.source = source
         self.notices = notices
@@ -45,7 +47,13 @@ public final class OrderMerge: Sendable {
                     || kind == SPIELORDERS_OPERATION_DISCARD_MERGED_ENTRY else { continue }
             let path = bytes(spielorders_plan_operation_path(pointer, index))
             let isFolder = spielorders_plan_operation_directory(pointer, index) == 1
-            guard let entry = mergedEntry(path, isFolder: isFolder, among: orders.dropFirst()) else { continue }
+            guard let entry = mergedEntry(path, isFolder: isFolder, among: orders.dropFirst()) else {
+                let operation = String(cString: spielorders_constant_name(kind))
+                throw OrderMergeRefusal(
+                    summary: "The merge names a file or folder outside the Orders it merges, so it can’t be "
+                        + "reviewed. Nothing was merged.",
+                    details: operation + ": " + String(decoding: path, as: UTF8.self))
+            }
             if kind == SPIELORDERS_OPERATION_MOVE_MERGED_ENTRY {
                 moved.append(entry)
             } else {
@@ -70,8 +78,6 @@ private func mergedEntry(_ path: [UInt8], isFolder: Bool, among orders: ArraySli
 
 /// What committing an Order merge left behind.
 public struct CommittedOrderMerge: Sendable {
-    /// Where the kept Order's directory is now.
-    public let keptDirectory: URL?
     /// How many merged Orders gave up their entries but could not be moved to Removed Orders.
     public let unremoved: Int
     public let warnings: [String]
@@ -84,19 +90,13 @@ public struct CommittedOrderMerge: Sendable {
 public struct OrderMergeRefusal: Error, LocalizedError, Sendable {
     /// Why, in one sentence for the owner.
     public let summary: String
-    private let failure: LibraryFailure
+    private let details: String
 
-    public var errorDescription: String? { failure.errorDescription }
+    public var errorDescription: String? { details }
 
-    init(_ failure: LibraryFailure) {
-        self.failure = failure
-        let codes = Set(failure.entries.map(\.code))
-        let stale: Set = [SPIELORDERS_FAILURE_PRECONDITIONS_CHANGED, SPIELORDERS_FAILURE_PLAN_EVIDENCE_UNCONFIRMED]
-        summary = if !codes.isDisjoint(with: stale) {
-            "The Orders changed after the merge was shown. Nothing was merged; review the merge again."
-        } else {
-            failure.entries.first?.message ?? "The library refused the merge."
-        }
+    init(summary: String, details: String) {
+        self.summary = summary
+        self.details = details
     }
 }
 
@@ -106,7 +106,7 @@ extension PackageSession {
     public func planMergingOrders(_ orders: [OrderRow], cancellation: LibraryCancellation) throws -> OrderMerge {
         guard let package else { throw SessionAccessError.reopenRequired }
         guard let first = orders.first else {
-            throw OrderMergeRefusal(LibraryFailure(result: SPIELORDERS_RESULT_BAD_ARGUMENT, entries: []))
+            throw refusal(LibraryFailure(result: SPIELORDERS_RESULT_BAD_ARGUMENT, entries: []), merging: orders)
         }
         do {
             let (kept, read) = try readOrder(first, token: cancellation.token)
@@ -118,9 +118,9 @@ extension PackageSession {
             }
             let notices = try read + checked(result, outcome)
             guard let plan else { throw LibraryFailure(result: SPIELORDERS_RESULT_INTERNAL, entries: []) }
-            return OrderMerge(plan, orders: orders, source: package, notices: notices)
+            return try OrderMerge(plan, orders: orders, source: package, notices: notices)
         } catch let failure as LibraryFailure {
-            throw OrderMergeRefusal(failure)
+            throw refusal(failure, merging: orders)
         }
     }
 
@@ -136,16 +136,39 @@ extension PackageSession {
         do {
             warnings += try checked(result, outcome)
         } catch let failure as LibraryFailure {
-            throw OrderMergeRefusal(failure)
+            throw refusal(failure, merging: merge.orders)
         }
-        guard let report else { throw LibraryFailure(result: SPIELORDERS_RESULT_INTERNAL, entries: []) }
-        let path = spielorders_report_final_path(report)
-        let kept = path.pointee == 0 ? nil
-            : URL(fileURLWithFileSystemRepresentation: path, isDirectory: true, relativeTo: nil)
+        guard report != nil else { throw LibraryFailure(result: SPIELORDERS_RESULT_INTERNAL, entries: []) }
         let unremoved = warnings.filter { $0.code == SPIELORDERS_WARNING_ORDER_NOT_REMOVED }.count
-        warnings += refreshAfterCommit(merge.source)
-        return CommittedOrderMerge(keptDirectory: kept, unremoved: unremoved, warnings: warnings.map(\.presentation),
+        warnings += refreshAfterCommit(merge.source, report: report)
+        return CommittedOrderMerge(unremoved: unremoved, warnings: warnings.map(\.presentation),
                                    requiresReopen: package == nil)
+    }
+}
+
+extension PackageSession {
+    /// `failure` in one sentence for the owner, naming the Orders it concerns where it can.
+    private func refusal(_ failure: LibraryFailure, merging orders: [OrderRow]) -> OrderMergeRefusal {
+        let codes = Set(failure.entries.map(\.code))
+        // Only healthy listed Orders are merged, so one that is gone or damaged changed since.
+        let stale: Set = [SPIELORDERS_FAILURE_PRECONDITIONS_CHANGED, SPIELORDERS_FAILURE_PLAN_EVIDENCE_UNCONFIRMED,
+                          SPIELORDERS_FAILURE_NOT_AN_ORDER_DIRECTORY, SPIELORDERS_FAILURE_DAMAGED_RECORD,
+                          SPIELORDERS_FAILURE_ORDER_NOT_FOUND, SPIELORDERS_FAILURE_DAMAGED_ORDER,
+                          SPIELORDERS_FAILURE_LOCATOR_UNUSABLE,
+                          SPIELORDERS_FAILURE_LOCATOR_REACHES_NO_PACKAGE_HOLDING_THIS_ORDER]
+        let currency = failure.entries.first { $0.code == SPIELORDERS_FAILURE_CURRENCY_DIFFERS }
+        let location = currency.flatMap(located)
+        let priced = location.flatMap { location in
+            orders.dropFirst().first { location.starts(with: $0.directory.standardizedFileURL.pathComponents) }
+        }
+        let summary = if !codes.isDisjoint(with: stale) {
+            "The Orders changed after the merge was shown. Nothing was merged; review the merge again."
+        } else if let priced, let kept = orders.first {
+            "“\(priced.name)” prices its Items in another currency, so it can’t be merged into “\(kept.name)”."
+        } else {
+            failure.entries.first?.message ?? "The merge couldn’t be completed. Details has the reason."
+        }
+        return OrderMergeRefusal(summary: summary, details: failure.errorDescription ?? "")
     }
 }
 

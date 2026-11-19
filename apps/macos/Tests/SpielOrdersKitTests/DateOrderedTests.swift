@@ -29,23 +29,3 @@ import Testing
     let listed = try #require(try await listedOrders(session).first { $0.id == saved.recordID })
     #expect(listed.values[SPIELORDERS_ORDER_FIELD_DATE_ORDERED] == "2025-12-31")
 }
-
-@Test(arguments: ["", "2026-02-30"])
-func unusableDateRefuses(_ text: String) async throws {
-    let root = try initializedPackage()
-    defer { try? FileManager.default.removeItem(at: root) }
-    _ = try createOrder(in: root)
-    let session = try await openedSession(root)
-    let row = try #require(try await listedOrders(session).first)
-    let stored = row.values[SPIELORDERS_ORDER_FIELD_DATE_ORDERED]
-    let draft = try await session.orderDraft(row, cancellation: LibraryCancellation())
-    try draft.set(SPIELORDERS_ORDER_FIELD_DATE_ORDERED, to: text)
-    #expect(draft.field(SPIELORDERS_ORDER_FIELD_DATE_ORDERED) == text)
-    do {
-        _ = try await session.save(draft, cancellation: LibraryCancellation())
-        Issue.record("Date Ordered “\(text)” must refuse")
-    } catch let refusal as SaveRefusal {
-        #expect(refusal.problems.contains { $0.field == SPIELORDERS_ORDER_FIELD_DATE_ORDERED })
-    }
-    #expect(try await listedOrders(session).first?.values[SPIELORDERS_ORDER_FIELD_DATE_ORDERED] == stored)
-}

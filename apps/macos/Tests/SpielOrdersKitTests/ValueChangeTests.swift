@@ -196,7 +196,7 @@ private func commit(_ session: PackageSession, _ change: ValueChange) async thro
         _ = try await session.commit(stale)
         Issue.record("A plan made before another change must refuse")
     } catch let refusal as ValueRefusal {
-        #expect(refusal.summary == "The Package changed. Reload the Package and try again.")
+        #expect(refusal.summary == "The Package changed. Reload the Package, then try again.")
     }
     #expect(try await orderValues(elsewhere, SPIELORDERS_ORDER_FIELD_ORDERER) == ["Lenses": "Ada"])
 }
@@ -204,8 +204,9 @@ private func commit(_ session: PackageSession, _ change: ValueChange) async thro
 @Test func mergingVendorsKeepsOne() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
-    let kept = try createVendor(in: root, name: "Optics supplier")
+    // The Vendor named first in the merge is kept, whichever was created first.
     let other = try createVendor(in: root, name: "Optics Supplier Inc", contactEmail: "sales@example.invalid")
+    let kept = try createVendor(in: root, name: "Optics supplier")
     _ = try createOrder(in: root, title: "Lenses", vendor: "Optics supplier")
     _ = try createOrder(in: root, title: "Mirrors", vendor: "Optics Supplier Inc")
     let session = try await openedSession(root)
@@ -222,19 +223,6 @@ private func commit(_ session: PackageSession, _ change: ValueChange) async thro
     #expect(vendors.map(\.id) == [kept])
     let draft = try await session.vendorDraft(id: kept, cancellation: LibraryCancellation())
     #expect(draft.rowField(0, SPIELORDERS_CONTACT_FIELD_EMAIL) == "sales@example.invalid")
-}
-
-@Test func mergingVendorsKeepsTheFirstNamed() async throws {
-    let root = try initializedPackage()
-    defer { try? FileManager.default.removeItem(at: root) }
-    let later = try createVendor(in: root, name: "Optics supplier")
-    let first = try createVendor(in: root, name: "Optics Supplier Inc")
-    _ = try createOrder(in: root, title: "Lenses", vendor: "Optics supplier")
-    let session = try await openedSession(root)
-
-    try await commit(session, try await session.planMergingVendors([first, later], cancellation: LibraryCancellation()))
-
-    #expect(try await orderValues(session, SPIELORDERS_ORDER_FIELD_VENDOR) == ["Lenses": "Optics Supplier Inc"])
 }
 
 @Test func deletingVendorsReplacesOrClears() async throws {

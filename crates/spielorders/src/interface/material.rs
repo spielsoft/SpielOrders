@@ -47,7 +47,7 @@ pub struct SpielordersHits {
 struct SpielordersHitsData {
     provider: String,
     hits: Vec<ProviderHit>,
-    said: Vec<ProviderDiagnostic>,
+    diagnostics: Vec<ProviderDiagnostic>,
 }
 
 /// A new, empty set of hits from the provider named `provider`, such as "spotlight".
@@ -57,6 +57,7 @@ pub extern "C" fn spielorders_hits_new(
     provider: Text<'_>,
     hits: &mut Option<Box<SpielordersHits>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(hits, None);
     fallible(None, |_| {
         let result = provider
             .to_str()
@@ -64,7 +65,7 @@ pub extern "C" fn spielorders_hits_new(
                 data: Box::new(SpielordersHitsData {
                     provider: provider.to_owned(),
                     hits: Vec::new(),
-                    said: Vec::new(),
+                    diagnostics: Vec::new(),
                 }),
             })
             .ok_or(SPIELORDERS_RESULT_BAD_ARGUMENT);
@@ -125,7 +126,9 @@ pub extern "C" fn spielorders_hits_diagnostic(
 ) -> SpielordersResult {
     fallible(None, |_| match said.to_str() {
         Some(said) => {
-            hits.data.said.push(ProviderDiagnostic::reported(said));
+            hits.data
+                .diagnostics
+                .push(ProviderDiagnostic::reported(said));
             SPIELORDERS_RESULT_OK
         }
         None => SPIELORDERS_RESULT_BAD_ARGUMENT,
@@ -155,6 +158,7 @@ pub extern "C" fn spielorders_package_search_material(
     search: &mut Option<Box<SpielordersSearch>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(search, None);
     fallible(outcome, |entries| {
         let session = Session::new(token);
         let result = (|| {
@@ -188,11 +192,11 @@ fn answer(state: SpielordersConstant, hits: &SpielordersHitsData) -> ProviderAns
     let looked = |completeness| ProviderAnswer::Looked {
         completeness,
         hits: hits.hits.clone(),
-        diagnostics: hits.said.clone(),
+        diagnostics: hits.diagnostics.clone(),
     };
     let unavailable = |reason| ProviderAnswer::Unavailable {
         reason,
-        diagnostics: hits.said.clone(),
+        diagnostics: hits.diagnostics.clone(),
     };
     match state {
         SPIELORDERS_PROVIDER_STATE_TIMED_OUT => {
@@ -229,7 +233,7 @@ struct SpielordersSearchData {
     provider: CString,
     state: SpielordersConstant,
     files: Vec<File>,
-    said: Vec<CString>,
+    diagnostics: Vec<CString>,
 }
 
 struct File {
@@ -282,7 +286,7 @@ impl SpielordersSearch {
                     }
                 },
                 files,
-                said: snapshot
+                diagnostics: snapshot
                     .diagnostics
                     .iter()
                     .filter_map(|diagnostic| diagnostic.detail.as_deref())
@@ -375,7 +379,7 @@ pub extern "C" fn spielorders_search_rank(search: &SpielordersSearch, index: i64
 #[unsafe(no_mangle)]
 pub extern "C" fn spielorders_search_diagnostic_count(search: &SpielordersSearch) -> i64 {
     quietly(-1, || {
-        i64::try_from(search.data.said.len()).unwrap_or(i64::MAX)
+        i64::try_from(search.data.diagnostics.len()).unwrap_or(i64::MAX)
     })
 }
 
@@ -389,7 +393,7 @@ pub extern "C" fn spielorders_search_diagnostic(
     quietly(Text::new(EMPTY), || {
         usize::try_from(index)
             .ok()
-            .and_then(|index| search.data.said.get(index))
+            .and_then(|index| search.data.diagnostics.get(index))
             .map_or(Text::new(EMPTY), |said| Text::new(said))
     })
 }

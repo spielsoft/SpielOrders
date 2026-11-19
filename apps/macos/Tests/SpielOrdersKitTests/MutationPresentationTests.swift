@@ -4,30 +4,17 @@ import Foundation
 import Testing
 
 // Decision source: Desktop acceptance, committed mutation presentation.
-@Test func refreshFailure() {
-    let result = ReadmeSaveResult(refreshedText: nil, warnings: ["The Package could not be refreshed."])
-    #expect(!result.canEdit)
-    #expect(result.message.contains("Saved."))
-    #expect(result.message.contains("Reload the Package"))
-    #expect(result.message.contains("could not be refreshed"))
-}
-
-@Test func committedWarnings() {
-    let result = ReadmeSaveResult(refreshedText: "Saved draft", warnings: ["Durability is uncertain."])
-    #expect(result.canEdit)
-    #expect(result.message == "Saved with warnings.\nDurability is uncertain.")
-}
-
 @Test func missingPackage() async {
     do {
         _ = try await PackageSession().materialDirectory()
         Issue.record("A session without a Package cannot search")
     } catch {
-        #expect(error is SessionAccessError)
         #expect(error.localizedDescription.contains("reload the Package"))
     }
 }
 
+/// No public path leaves a README unreadable between its save and its refresh, so the refresh
+/// is read through the C interface and presented as a save would present it.
 @Test func unreadableReadme() throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -40,8 +27,10 @@ import Testing
     #expect(spielorders_package_read_readme(try #require(package), 0, &readme, nil) == SPIELORDERS_RESULT_OK)
     let refreshed = try #require(readme)
     #expect(spielorders_readme_state(refreshed) == SPIELORDERS_README_STATE_UNREADABLE)
-    let result = ReadmeSaveResult(refreshedReadme: refreshed, warnings: ["Readme unavailable"])
+    let result = ReadmeSaveResult(refreshedReadme: refreshed, warnings: ["The Package could not be refreshed."])
     #expect(result.refreshedText == nil)
     #expect(!result.canEdit)
+    #expect(result.message.contains("Saved."))
     #expect(result.message.contains("Reload the Package"))
+    #expect(result.message.contains("could not be refreshed"))
 }

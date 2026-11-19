@@ -4,16 +4,11 @@ use crate::{
     Answer, Assignments, Failure,
     answer::DraftFailure,
     canonical::{CurrentPackageCandidate, Touched, load_every_record, load_package_to_change},
-    change::Assignment,
-    filesystem::{DestinationExpectation, replace_validated_file_expecting},
-    metadata::{
-        OrderDocument, StoredValues, Vendor, VendorContact, VendorId, VendorsDocument, Version1,
-    },
-    mutation::{
-        IndexRefresh, MutationReport, Never, OperationKind, PlannedOperation, RejectedAssignment,
-        RejectedAssignmentReason,
-    },
-    package::PackageMetadata,
+    change::{Assignment, PlannedAct},
+    integrity::{Aggregate, Records, Substitution},
+    journal::{Journal, ManagedRecord, Subject},
+    metadata::{StoredValues, Vendor, VendorContact, VendorId, VendorsDocument, Version1},
+    mutation::{MutationReport, OperationKind, RejectedAssignment, RejectedAssignmentReason},
     ports::FileSystem,
     readme::{Location, RootedLocation, located_in_package, rooted_at},
 };
@@ -22,14 +17,72 @@ use std::path::{Path, PathBuf};
 
 const PLANNING_VENDOR_ID: &str = crate::mutation::PLANNING_IDENTITY;
 
-const ASSIGNABLE_FIELDS: [&str; 6] = [
-    "name",
-    "phone",
-    "email",
-    "website",
-    "address",
-    "purchasing_notes",
-];
+/// Every fact of a Vendor a caller may assign, in the order an editor lists them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum VendorField {
+    Name,
+    Phone,
+    Email,
+    Website,
+    Address,
+    PurchasingNotes,
+}
+
+impl VendorField {
+    pub(crate) const ALL: [Self; 6] = [
+        Self::Name,
+        Self::Phone,
+        Self::Email,
+        Self::Website,
+        Self::Address,
+        Self::PurchasingNotes,
+    ];
+
+    /// The name a caller assigns this field by.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Name => "name",
+            Self::Phone => "phone",
+            Self::Email => "email",
+            Self::Website => "website",
+            Self::Address => "address",
+            Self::PurchasingNotes => "purchasing_notes",
+        }
+    }
+
+    /// The field `name` assigns.
+    pub(crate) fn named(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|field| field.name() == name)
+    }
+}
+
+/// Every fact of a Vendor Contact a caller may assign, in the order an editor lists them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ContactField {
+    Name,
+    Role,
+    Phone,
+    Email,
+}
+
+impl ContactField {
+    pub(crate) const ALL: [Self; 4] = [Self::Name, Self::Role, Self::Phone, Self::Email];
+
+    /// The name a caller assigns this field by.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Name => "name",
+            Self::Role => "role",
+            Self::Phone => "phone",
+            Self::Email => "email",
+        }
+    }
+
+    /// The field `name` assigns.
+    pub(crate) fn named(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|field| field.name() == name)
+    }
+}
 
 /// One Vendor's planned shared facts. A created Vendor's identity is generated only at
 /// commit.
@@ -55,13 +108,13 @@ pub struct VendorMutationPlan {
     vendors_path: Location,
     kind: VendorMutationKind,
     pub(crate) subject: PlannedVendorFacts,
-    subject_vendor_id: String,
+    vendor_id: String,
     candidate_vendors: Vec<Vendor>,
     prior_vendors: Vec<Vendor>,
     /// The values the record kept when planned, which the commit writes back unchanged.
     prior_values: StoredValues,
     original_vendor: Option<Vendor>,
-    pub(crate) operations: Vec<PlannedOperation>,
+    pub(crate) journal: Journal,
 }
 
 impl VendorMutationPlan {
@@ -95,7 +148,7 @@ fn new_contact(
     facts.retain(|(_, value)| !value.trim().is_empty());
     if !facts.iter().any(|(field, _)| field == "name") {
         return Err(Failure::MissingRequiredName {
-            scope: vendor_aggregate(package),
+            scope: vendors_location(package),
         });
     }
     let mut object = serde_json::Map::new();
@@ -121,7 +174,7 @@ fn draft_contact(
             rejected @ Failure::InvalidAssignments(_) if !named => vec![
                 rejected,
                 Failure::MissingRequiredName {
-                    scope: vendor_aggregate(package),
+                    scope: vendors_location(package),
                 },
             ],
             failure => vec![failure],
@@ -167,7 +220,7 @@ pub(crate) fn vendor_creation_in(
             }
         }
         None if faults.is_empty() => faults.push(at_facts(Failure::MissingRequiredName {
-            scope: vendor_aggregate(package),
+            scope: vendors_location(package),
         })),
         None => {}
     }
@@ -191,7 +244,7 @@ pub(crate) fn vendor_creation_in(
     let mut vendors = package.vendors.to_vec();
     vendors.push(serde_json::from_value::<Vendor>(object).map_err(|_| Failure::InvalidAggregate)?);
 
-    plan_from_candidate_aggregate(
+    plan_candidate(
         package,
         VendorMutationKind::Create,
         vendors,
@@ -200,7 +253,7 @@ pub(crate) fn vendor_creation_in(
 }
 
 /// Plans an editor's whole draft of one Vendor: its facts and its complete Contact list.
-pub(crate) fn plan_vendor_save<F: FileSystem>(
+pub(crate) fn plan_vendor_edit<F: FileSystem>(
     selected_root: &Path,
     vendor_id: &str,
     assignments: &Assignments,
@@ -275,7 +328,7 @@ pub(crate) fn edited_vendor(
         Some(edited) if faults.is_empty() => {
             let mut vendors = package.vendors.to_vec();
             vendors[position] = edited;
-            plan_from_candidate_aggregate(
+            plan_candidate(
                 package,
                 VendorMutationKind::Edit,
                 vendors,
@@ -320,8 +373,8 @@ pub(crate) fn plan_vendor_unhide<F: FileSystem>(
     })
 }
 
-/// Removes one Vendor and its Contacts, refused while any readable Order reference names it so
-/// that no Order is left with an unresolved Vendor Reference.
+/// Removes one Vendor and its Contacts, refused while any Order, removed ones included, names
+/// it, so that no Order is left with an unresolved Vendor Reference.
 pub(crate) fn plan_vendor_delete<F: FileSystem>(
     selected_root: &Path,
     vendor_id: &str,
@@ -331,19 +384,7 @@ pub(crate) fn plan_vendor_delete<F: FileSystem>(
         // Which Orders reference the Vendor is what their records hold.
         let package = load_every_record(selected_root, filesystem)?;
         let position = vendor_position(vendor_id, &package.vendors)?;
-        let mut orders: Vec<_> = package
-            .healthy_orders
-            .iter()
-            .filter(|order| {
-                order
-                    .document
-                    .vendor_id
-                    .as_ref()
-                    .is_some_and(|id| id.as_str() == vendor_id)
-            })
-            .map(|order| order.paths.directory.clone())
-            .collect();
-        orders.extend(damaged_references(&package, vendor_id));
+        let orders = references(&package, &package.vendors[position].vendor_id, filesystem)?;
         if !orders.is_empty() {
             return Err(Failure::VendorReferenced {
                 vendor_id: vendor_id.to_owned(),
@@ -352,7 +393,7 @@ pub(crate) fn plan_vendor_delete<F: FileSystem>(
         }
         let mut vendors = package.vendors.to_vec();
         let subject = vendors.remove(position);
-        plan_from_candidate_aggregate_with(
+        plan_candidate_with(
             &package,
             VendorMutationKind::Delete,
             vendors,
@@ -362,23 +403,19 @@ pub(crate) fn plan_vendor_delete<F: FileSystem>(
     })
 }
 
-/// Supported damaged records still retain their readable Vendor references. A mutation
-/// cannot safely rewrite those records, but must not remove the Vendor they resolve.
-pub(crate) fn damaged_references(
+/// Every Order naming `vendor_id`: healthy, damaged, and removed; or the failure that kept
+/// the removed Orders from being read.
+fn references<F: FileSystem>(
     package: &CurrentPackageCandidate,
-    vendor_id: &str,
-) -> Vec<Location> {
-    package
-        .damaged_orders
+    vendor_id: &VendorId,
+    filesystem: &F,
+) -> Result<Vec<Location>, Failure> {
+    Ok(Records::of(package)
+        .with_removed(&package.context, filesystem)?
+        .naming(std::slice::from_ref(vendor_id))
         .iter()
-        .filter(|order| {
-            order
-                .vendor_id
-                .as_ref()
-                .is_some_and(|id| id.as_str() == vendor_id)
-        })
-        .map(|order| order.paths.directory.clone())
-        .collect()
+        .map(|holder| holder.directory().clone())
+        .collect())
 }
 
 fn plan_vendor_visibility<F: FileSystem>(
@@ -397,7 +434,7 @@ fn plan_vendor_visibility<F: FileSystem>(
     // Visible is spelled as absence, so unhiding restores exactly the record hiding
     // replaced and a redundant change compares equal rather than rewriting bytes.
     vendors[position].hidden = matches!(kind, VendorMutationKind::Hide).then_some(true);
-    plan_from_candidate_aggregate(&package, kind, vendors, vendor_id)
+    plan_candidate(&package, kind, vendors, vendor_id)
 }
 
 fn vendor_position(vendor_id: &str, vendors: &[Vendor]) -> Result<usize, Failure> {
@@ -409,22 +446,22 @@ fn vendor_position(vendor_id: &str, vendors: &[Vendor]) -> Result<usize, Failure
         })
 }
 
-fn plan_from_candidate_aggregate(
+fn plan_candidate(
     package: &CurrentPackageCandidate,
     kind: VendorMutationKind,
     vendors: Vec<Vendor>,
-    subject_vendor_id: &str,
+    vendor_id: &str,
 ) -> Result<VendorMutationPlan, Failure> {
-    plan_from_candidate_aggregate_with(package, kind, vendors, subject_vendor_id, None)
+    plan_candidate_with(package, kind, vendors, vendor_id, None)
 }
 
-/// As [`plan_from_candidate_aggregate`], with `removed` the subject a deletion takes out
+/// As [`plan_candidate`], with `removed` the subject a deletion takes out
 /// of the aggregate.
-fn plan_from_candidate_aggregate_with(
+fn plan_candidate_with(
     package: &CurrentPackageCandidate,
     kind: VendorMutationKind,
     vendors: Vec<Vendor>,
-    subject_vendor_id: &str,
+    vendor_id: &str,
     removed: Option<Vendor>,
 ) -> Result<VendorMutationPlan, Failure> {
     let vendors = validated_aggregate(package, vendors)?;
@@ -435,26 +472,23 @@ fn plan_from_candidate_aggregate_with(
         None => vendors
             .vendors
             .iter()
-            .find(|vendor| vendor.vendor_id.as_str() == subject_vendor_id)
+            .find(|vendor| vendor.vendor_id.as_str() == vendor_id)
             .cloned()
             .ok_or(Failure::InvalidAggregate)?,
     };
     // An unchanged aggregate is committed by performing nothing, so a dry run of it
     // must not announce managed operations its commit will never reach.
     let prior_vendors = package.vendors.to_vec();
-    let operations = if vendors.vendors == prior_vendors {
-        Vec::new()
+    let root = &package.context.root.absolute_path;
+    let journal = if vendors.vendors == prior_vendors {
+        Journal::new(root)
     } else {
-        vec![
-            PlannedOperation::new(
-                OperationKind::ReplaceVendorRecord,
-                package.context.vendors.clone(),
-            ),
-            PlannedOperation::new(
-                OperationKind::RefreshPackageIndex,
-                package.context.index.clone(),
-            ),
-        ]
+        vendors_journal(
+            root,
+            &prior_record(package, &prior_vendors, &package.values),
+            vendors.to_json_bytes().unwrap_or_default(),
+            package.context.index.clone(),
+        )
     };
 
     Ok(VendorMutationPlan {
@@ -464,33 +498,75 @@ fn plan_from_candidate_aggregate_with(
         subject: PlannedVendorFacts {
             document: subject_document,
         },
-        subject_vendor_id: subject_vendor_id.to_owned(),
+        vendor_id: vendor_id.to_owned(),
         candidate_vendors: vendors.vendors,
         prior_vendors,
         prior_values: package.values.clone(),
         original_vendor: None,
-        operations,
+        journal,
     })
+}
+
+/// The Vendor record of `package` as a plan holding `vendors` and `values` was made
+/// against.
+fn prior_record(
+    package: &CurrentPackageCandidate,
+    vendors: &[Vendor],
+    values: &StoredValues,
+) -> ManagedRecord {
+    ManagedRecord::vendors(
+        package.context.vendors.absolute_path.clone(),
+        VendorsDocument {
+            schema_version: Version1,
+            vendors: vendors.to_vec(),
+            values: values.clone(),
+        },
+    )
+}
+
+/// The commit replacing the Vendor record planned as `record` with `candidate`.
+///
+/// The aggregate revalidated before it is the one the commit is authorized to replace, so
+/// a writer landing between that revalidation and the rename is refused rather than
+/// overwritten. Its meaning is what is compared, not its bytes: an aggregate whose stored
+/// facts carry untrimmed text projects to the same Vendors, and refusing it would mean
+/// refusing to edit a file a person reformatted by hand.
+fn vendors_journal(
+    root: &Path,
+    record: &ManagedRecord,
+    candidate: Vec<u8>,
+    index: Location,
+) -> Journal {
+    let mut journal = Journal::new(root);
+    journal.replace(
+        record.path().to_path_buf(),
+        candidate,
+        record.expectation(),
+        PlannedAct::Managed(OperationKind::ReplaceVendorRecord),
+        Subject::Vendors,
+    );
+    journal.refreshing(index);
+    journal
 }
 
 fn validated_aggregate(
     package: &CurrentPackageCandidate,
     vendors: Vec<Vendor>,
 ) -> Result<VendorsDocument, Failure> {
-    let orders = package
-        .healthy_orders
-        .iter()
-        .map(|order| order.document.clone())
-        .collect::<Vec<OrderDocument>>();
     let candidate = VendorsDocument {
         schema_version: Version1,
         vendors,
         values: package.values.clone(),
     };
-    PackageMetadata::new(&orders, &candidate)
-        .validate()
-        .map(|validated| validated.vendors().clone())
-        .map_err(|_| Failure::InvalidAggregate)
+    let aggregate = Aggregate::judge(&candidate).map_err(|_| Failure::InvalidAggregate)?;
+    let substitution = Substitution {
+        vendors: Some(&aggregate),
+        ..Substitution::default()
+    };
+    match Records::of(package).broken_by(&substitution) {
+        Some(_) => Err(Failure::InvalidAggregate),
+        None => Ok(aggregate.into_document()),
+    }
 }
 
 /// Accepts one order-independent assignment set or reports every rejected field.
@@ -501,6 +577,37 @@ fn accepted_assignments(assignments: &Assignments) -> Result<Vec<(String, String
         Ok(accepted)
     } else {
         Err(Failure::InvalidAssignments(rejected))
+    }
+}
+
+/// Why a Vendor refuses `field=value` whatever else its set assigns.
+pub(crate) fn vendor_assignment_refusal(
+    field: &str,
+    value: &str,
+) -> Option<RejectedAssignmentReason> {
+    match field {
+        "vendor_id" => Some(RejectedAssignmentReason::ImmutableIdentity),
+        "schema_version" => Some(RejectedAssignmentReason::ManagedTechnicalField),
+        "contacts" => Some(RejectedAssignmentReason::OrderedCollection),
+        field if VendorField::named(field).is_none() => {
+            Some(RejectedAssignmentReason::UnknownField)
+        }
+        "name" if value.trim().is_empty() => Some(RejectedAssignmentReason::BlankRequiredValue),
+        _ => None,
+    }
+}
+
+/// Why a Vendor Contact refuses `field=value` whatever else its set assigns.
+pub(crate) fn contact_assignment_refusal(
+    field: &str,
+    value: &str,
+) -> Option<RejectedAssignmentReason> {
+    match field {
+        field if ContactField::named(field).is_none() => {
+            Some(RejectedAssignmentReason::UnknownField)
+        }
+        "name" if value.trim().is_empty() => Some(RejectedAssignmentReason::BlankRequiredValue),
+        _ => None,
     }
 }
 
@@ -516,20 +623,17 @@ fn adjudicated_assignments(
         confirmed,
     } in &assignments.entries
     {
-        let reason = match field.as_str() {
-            "vendor_id" => Some(RejectedAssignmentReason::ImmutableIdentity),
-            "schema_version" => Some(RejectedAssignmentReason::ManagedTechnicalField),
-            "contacts" => Some(RejectedAssignmentReason::OrderedCollection),
-            field if !ASSIGNABLE_FIELDS.contains(&field) => {
-                Some(RejectedAssignmentReason::UnknownField)
-            }
-            _ if accepted.iter().any(|(accepted, _)| accepted == field) => {
+        let reason = match vendor_assignment_refusal(field, value) {
+            Some(RejectedAssignmentReason::BlankRequiredValue) | None
+                if accepted.iter().any(|(accepted, _)| accepted == field) =>
+            {
                 Some(RejectedAssignmentReason::Duplicate)
             }
             // No Vendor or Contact fact is a Reusable Free-Entry Value.
-            _ if *confirmed => Some(RejectedAssignmentReason::NotAReusableValue),
-            "name" if value.trim().is_empty() => Some(RejectedAssignmentReason::BlankRequiredValue),
-            _ => None,
+            Some(RejectedAssignmentReason::BlankRequiredValue) | None if *confirmed => {
+                Some(RejectedAssignmentReason::NotAReusableValue)
+            }
+            reason => reason,
         };
         match reason {
             Some(reason) => rejected.push(RejectedAssignment::new(field.clone(), reason)),
@@ -550,17 +654,17 @@ fn accepted_contact_assignments(
         confirmed,
     } in &assignments.entries
     {
-        let reason = match field.as_str() {
-            field if !["name", "role", "phone", "email"].contains(&field) => {
-                Some(RejectedAssignmentReason::UnknownField)
-            }
-            _ if accepted.iter().any(|(accepted, _)| accepted == field) => {
+        let reason = match contact_assignment_refusal(field, value) {
+            Some(RejectedAssignmentReason::BlankRequiredValue) | None
+                if accepted.iter().any(|(accepted, _)| accepted == field) =>
+            {
                 Some(RejectedAssignmentReason::Duplicate)
             }
             // No Vendor or Contact fact is a Reusable Free-Entry Value.
-            _ if *confirmed => Some(RejectedAssignmentReason::NotAReusableValue),
-            "name" if value.trim().is_empty() => Some(RejectedAssignmentReason::BlankRequiredValue),
-            _ => None,
+            Some(RejectedAssignmentReason::BlankRequiredValue) | None if *confirmed => {
+                Some(RejectedAssignmentReason::NotAReusableValue)
+            }
+            reason => reason,
         };
         match reason {
             Some(reason) => rejected.push(RejectedAssignment::new(field.clone(), reason)),
@@ -609,13 +713,13 @@ fn reject_duplicate_name(
             Err(Failure::VendorNameInUse {
                 name: vendor.name.as_str().to_owned(),
                 vendor_id: vendor.vendor_id.as_str().to_owned(),
-                scope: vendor_aggregate(package),
+                scope: vendors_location(package),
             })
         })
 }
 
 /// The Vendor aggregate a Vendor refusal was judged against, under its Root.
-pub(crate) fn vendor_aggregate(package: &CurrentPackageCandidate) -> RootedLocation {
+pub(crate) fn vendors_location(package: &CurrentPackageCandidate) -> RootedLocation {
     let context = &package.context;
     rooted_at(
         &context.root.absolute_path,
@@ -636,160 +740,115 @@ pub(crate) fn commit_vendor_mutation<F: FileSystem>(
     new_uuid: &dyn Fn() -> String,
     filesystem: &F,
 ) -> Answer<VendorMutationReport> {
-    Answer::of(|| commit_vendor(plan, new_uuid, filesystem))
-}
+    Answer::of(|| {
+        let current = if plan.kind == VendorMutationKind::Delete {
+            load_every_record(&plan.root, filesystem)?
+        } else {
+            load_package_to_change(
+                &plan.root,
+                &Touched::default().with_vendors(true),
+                filesystem,
+            )?
+        };
+        if plan.kind == VendorMutationKind::Delete
+            && !references(&current, &plan.subject.document.vendor_id, filesystem)?.is_empty()
+        {
+            return Err(preconditions_changed(&plan, ChangedPrecondition::Package));
+        }
+        if current.vendors != plan.prior_vendors || current.values != plan.prior_values {
+            return Err(preconditions_changed(
+                &plan,
+                ChangedPrecondition::VendorRecord,
+            ));
+        }
+        if plan.original_vendor.as_ref().is_some_and(|original| {
+            original.vendor_id.as_str() != plan.vendor_id
+                || current
+                    .vendors
+                    .iter()
+                    .find(|vendor| vendor.vendor_id == original.vendor_id)
+                    != Some(original)
+        }) {
+            return Err(preconditions_changed(
+                &plan,
+                ChangedPrecondition::VendorRecord,
+            ));
+        }
 
-fn commit_vendor<F: FileSystem>(
-    plan: VendorMutationPlan,
-    new_uuid: &dyn Fn() -> String,
-    filesystem: &F,
-) -> Result<VendorMutationReport, Failure> {
-    let current = if plan.kind == VendorMutationKind::Delete {
-        load_every_record(&plan.root, filesystem)?
-    } else {
-        load_package_to_change(
-            &plan.root,
-            &Touched::default().with_vendors(true),
-            filesystem,
-        )?
-    };
-    if plan.kind == VendorMutationKind::Delete
-        && !damaged_references(&current, &plan.subject_vendor_id).is_empty()
-    {
-        return Err(preconditions_changed(&plan, ChangedPrecondition::Package));
-    }
-    if current.vendors != plan.prior_vendors || current.values != plan.prior_values {
-        return Err(preconditions_changed(
-            &plan,
-            ChangedPrecondition::VendorRecord,
-        ));
-    }
-    if plan.original_vendor.as_ref().is_some_and(|original| {
-        original.vendor_id.as_str() != plan.subject_vendor_id
-            || current
-                .vendors
-                .iter()
-                .find(|vendor| vendor.vendor_id == original.vendor_id)
-                != Some(original)
-    }) {
-        return Err(preconditions_changed(
-            &plan,
-            ChangedPrecondition::VendorRecord,
-        ));
-    }
-
-    let mut vendors = plan.candidate_vendors.clone();
-    let subject_vendor_id = match plan.kind {
-        VendorMutationKind::Create => {
-            let generated = new_uuid();
-            let Some(identity) = parsed_vendor_id(&generated) else {
-                return Err(Failure::InvalidGeneratedIdentity { generated });
-            };
-            if current
-                .vendors
-                .iter()
-                .any(|vendor| vendor.vendor_id == identity)
-            {
-                return Err(Failure::GeneratedVendorIdentityCollision {
-                    vendor_id: generated,
-                });
+        let mut vendors = plan.candidate_vendors.clone();
+        let subject_vendor_id = match plan.kind {
+            VendorMutationKind::Create => {
+                let generated = new_uuid();
+                let Some(identity) = parsed_vendor_id(&generated) else {
+                    return Err(Failure::InvalidGeneratedIdentity { generated });
+                };
+                if current
+                    .vendors
+                    .iter()
+                    .any(|vendor| vendor.vendor_id == identity)
+                {
+                    return Err(Failure::GeneratedVendorIdentityCollision {
+                        vendor_id: generated,
+                    });
+                }
+                let subject = vendors
+                    .iter_mut()
+                    .find(|vendor| vendor.vendor_id.as_str() == plan.vendor_id)
+                    .expect("the planned aggregate contains its own created Vendor");
+                subject.vendor_id = identity;
+                generated
             }
-            let subject = vendors
-                .iter_mut()
-                .find(|vendor| vendor.vendor_id.as_str() == plan.subject_vendor_id)
-                .expect("the planned aggregate contains its own created Vendor");
-            subject.vendor_id = identity;
-            generated
-        }
-        VendorMutationKind::Edit
-        | VendorMutationKind::Hide
-        | VendorMutationKind::Unhide
-        | VendorMutationKind::Delete => plan.subject_vendor_id.clone(),
-    };
-
-    let Ok(vendors) = validated_aggregate(&current, vendors) else {
-        return Err(preconditions_changed(&plan, ChangedPrecondition::Package));
-    };
-    let Ok(candidate) = vendors.to_json_bytes() else {
-        return Err(preconditions_changed(
-            &plan,
-            ChangedPrecondition::VendorRecord,
-        ));
-    };
-    // A deletion's subject is gone from the aggregate; its identity is the one planned.
-    let committed = match plan.kind {
-        VendorMutationKind::Delete => plan.subject.document.vendor_id.clone(),
-        _ => {
-            vendors
-                .vendors
-                .iter()
-                .find(|vendor| vendor.vendor_id.as_str() == subject_vendor_id)
-                .cloned()
-                .expect("the validated aggregate retains its own subject Vendor")
-                .vendor_id
-        }
-    };
-
-    if !plan.changes_canonical_vendors() {
-        let result = VendorMutationResult {
-            vendor_id: committed,
+            VendorMutationKind::Edit
+            | VendorMutationKind::Hide
+            | VendorMutationKind::Unhide
+            | VendorMutationKind::Delete => plan.vendor_id.clone(),
         };
-        return Ok(MutationReport::Unchanged { result });
-    }
-    // The aggregate revalidated above is the one this mutation is authorized to
-    // replace, so a writer landing between that revalidation and the rename is refused
-    // rather than overwritten. Meaning is what is compared, not bytes — which rule to
-    // carry where, and what comparing meaning gives up, are in
-    // `docs/architecture/durable-writes.md`.
-    let replacement = {
-        // Projected the way the load projects it, because that projection — not the
-        // raw parse — is what the revalidation above compared. An aggregate whose
-        // stored facts carry untrimmed text projects to the same Vendors, and refusing
-        // it would mean refusing to edit a file a person reformatted by hand. Equality
-        // with an aggregate that already validated is itself proof of validity, so no
-        // separate check is owed here.
-        //
-        // The empty Order slice is not a shortcut. It is precisely what the load
-        // passes — see the `normalized_vendors` binding in
-        // `inspect_canonical_package_with_breadth` — to build the projection that
-        // becomes `plan.prior_vendors`, so both sides of this comparison are projected
-        // by the same call. It is also the only sound argument: this predicate is asked
-        // whether one file still means what was read out of it, and the checks an
-        // Order slice would add — duplicate Order ids, unresolved Vendor references —
-        // are about state that does not live in `vendors.json` at all.
-        let still_holds_the_revalidated_aggregate = |current: &[u8]| {
-            VendorsDocument::from_json_bytes(current)
-                .ok()
-                .and_then(|document| PackageMetadata::new(&[], &document).validate().ok())
-                .is_some_and(|projected| {
-                    projected.vendors().vendors == plan.prior_vendors
-                        && projected.vendors().values == plan.prior_values
-                })
+
+        let Ok(vendors) = validated_aggregate(&current, vendors) else {
+            return Err(preconditions_changed(&plan, ChangedPrecondition::Package));
         };
-        replace_validated_file_expecting(
-            &plan.vendors_path.absolute_path,
-            &candidate,
-            DestinationExpectation::Equivalent(&still_holds_the_revalidated_aggregate),
-            filesystem,
-            |_| Ok::<(), Never>(()),
-        )
-    };
-    if let Err(error) = replacement {
-        return Err(Failure::of_replacement(
+        let Ok(candidate) = vendors.to_json_bytes() else {
+            return Err(preconditions_changed(
+                &plan,
+                ChangedPrecondition::VendorRecord,
+            ));
+        };
+        // A deletion's subject is gone from the aggregate; its identity is the one planned.
+        let committed_vendor = match plan.kind {
+            VendorMutationKind::Delete => plan.subject.document.vendor_id.clone(),
+            _ => {
+                vendors
+                    .vendors
+                    .iter()
+                    .find(|vendor| vendor.vendor_id.as_str() == subject_vendor_id)
+                    .cloned()
+                    .expect("the validated aggregate retains its own subject Vendor")
+                    .vendor_id
+            }
+        };
+
+        if !plan.changes_canonical_vendors() {
+            let result = VendorMutationResult {
+                vendor_id: committed_vendor,
+            };
+            return Ok(MutationReport::Unchanged { result });
+        }
+        let record = prior_record(&current, &plan.prior_vendors, &plan.prior_values);
+        let committed = vendors_journal(
             &plan.root,
-            &plan.vendors_path.absolute_path,
-            error,
-        ));
-    }
-
-    let refresh = IndexRefresh::after_commit(
-        &plan.root,
-        &Touched::default().with_vendors(true),
-        filesystem,
-    );
-    Ok(refresh.report(VendorMutationResult {
-        vendor_id: committed,
-    }))
+            &record,
+            candidate,
+            current.context.index.clone(),
+        )
+        .run(filesystem)?;
+        let refresh = committed.refresh(&plan.root, filesystem);
+        Ok(MutationReport::committed(
+            VendorMutationResult {
+                vendor_id: committed_vendor,
+            },
+            committed.warnings(refresh),
+        ))
+    })
 }
 
 /// Which observed precondition stopped a commit before its first write.

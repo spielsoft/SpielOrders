@@ -7,7 +7,7 @@
 use crate::Failure;
 use crate::tests::support::{
     PlatformFileSystem, QueuedUuids, ScriptedFileSystem, adoption, effects, minimal_package,
-    opened, order_record, package_tree_with,
+    opened, package_tree_with, record_path,
 };
 use crate::{Assignments, Report};
 
@@ -187,7 +187,7 @@ fn package_locator_must_match_the_explicit_root_and_active_nested_placement() {
         .result,
         Ok(Report::Committed { .. })
     ));
-    let record = std::fs::read_to_string(order_record(&directory)).unwrap();
+    let record = std::fs::read_to_string(record_path(&directory)).unwrap();
     assert!(
         record.contains("\"package_root\": \"../../..\""),
         "the nested locator reaches the explicit Package root: {record}"
@@ -195,7 +195,7 @@ fn package_locator_must_match_the_explicit_root_and_active_nested_placement() {
 
     for locator in ["../..", "../../../.."] {
         std::fs::write(
-            order_record(&directory),
+            record_path(&directory),
             record.replace("\"../../..\"", &format!("\"{locator}\"")),
         )
         .unwrap();

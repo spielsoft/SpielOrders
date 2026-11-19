@@ -113,14 +113,14 @@ public struct ValueRefusal: Error, LocalizedError, Sendable {
         } else if codes.contains(SPIELORDERS_FAILURE_BLANK_VALUE) {
             "A name is required."
         } else if codes.contains(SPIELORDERS_FAILURE_UNKNOWN_VALUE) {
-            "The Package no longer has this value. Reload the Package and try again."
+            "The Package no longer has this value. Reload the Package, then try again."
         } else if codes.contains(SPIELORDERS_FAILURE_UNKNOWN_VENDOR_ID) {
-            "The Package no longer has this Vendor. Reload the Package and try again."
+            "The Package no longer has this Vendor. Reload the Package, then try again."
         } else if !codes.isDisjoint(with: [SPIELORDERS_FAILURE_PRECONDITIONS_CHANGED,
                                            SPIELORDERS_FAILURE_PLAN_EVIDENCE_UNCONFIRMED]) {
-            "The Package changed. Reload the Package and try again."
+            "The Package changed. Reload the Package, then try again."
         } else {
-            failure.entries.first?.message ?? "The library refused the change."
+            failure.entries.first?.message ?? "The change couldn’t be completed. Details has the reason."
         }
     }
 }
@@ -261,7 +261,7 @@ extension PackageSession {
         let changed = spielorders_report_kind(report) == SPIELORDERS_REPORT_COMMITTED
         // An unchanged plan may have found values another writer added since this session's
         // snapshot. Its successful answer must update the choices the caller will list.
-        warnings += refreshAfterCommit(change.source)
+        warnings += refreshAfterCommit(change.source, report: report)
         return CommittedValueChange(changed: changed, warnings: warnings.map(\.presentation),
                                     requiresReopen: package == nil)
     }
@@ -285,7 +285,7 @@ extension PackageSession {
 }
 
 /// `scope`'s Project as the interface takes it: NULL for a field without Projects.
-private func withScope<T>(_ scope: ValueScope, _ body: (UnsafePointer<CChar>?) throws -> T) throws -> T {
+func withScope<T>(_ scope: ValueScope, _ body: (UnsafePointer<CChar>?) throws -> T) throws -> T {
     guard let project = scope.project else { return try body(nil) }
     return try withInterfaceText(project) { try body($0) }
 }

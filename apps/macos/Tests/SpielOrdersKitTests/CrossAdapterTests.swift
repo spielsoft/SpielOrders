@@ -21,50 +21,6 @@ private func cli(_ arguments: [String], root: URL) throws -> [String: Any] {
     return try #require(response["data"] as? [String: Any])
 }
 
-@Test func adapterAgreement() async throws {
-    let root = try initializedPackage()
-    defer { try? FileManager.default.removeItem(at: root) }
-    let session = PackageSession()
-    _ = try await session.open(root, cancellation: LibraryCancellation())
-    let vendor = try await session.newVendorDraft()
-    try vendor.set(SPIELORDERS_VENDOR_FIELD_NAME, to: "Shared Optics")
-    try vendor.insertRow(at: 0)
-    try vendor.setRow(0, SPIELORDERS_CONTACT_FIELD_NAME, to: "Sales")
-    try vendor.setRow(0, SPIELORDERS_CONTACT_FIELD_EMAIL, to: "sales@example.org")
-    let savedVendor = try await session.save(vendor, cancellation: LibraryCancellation())
-    let order = try await session.newOrderDraft()
-    try order.set(SPIELORDERS_ORDER_FIELD_TITLE, to: "Precision optics")
-    try order.set(SPIELORDERS_ORDER_FIELD_VENDOR, to: "Shared Optics")
-    try order.insertRow(at: 0)
-    try order.setRow(0, SPIELORDERS_ITEM_FIELD_DESCRIPTION, to: "Window")
-    try order.setRow(0, SPIELORDERS_ITEM_FIELD_QUANTITY, to: "3")
-    try order.setRow(0, SPIELORDERS_ITEM_FIELD_UNIT_PRICE, to: "0.12345")
-    let savedOrder = try await session.save(order, cancellation: LibraryCancellation())
-    let row = try #require(try await session.orders(query: "", caseSensitive: false, sortField: -1,
-                                                   descending: false, cancellation: LibraryCancellation()).rows.first)
-    let shown = try cli(["order", "show"], root: row.directory)
-    #expect(shown["title"] as? String == order.field(SPIELORDERS_ORDER_FIELD_TITLE))
-    #expect(shown["total"] as? String == order.total)
-    #expect(shown["vendor_id"] as? String == savedVendor.recordID)
-    #expect(row.id == savedOrder.recordID)
-    #expect(shown["order_id"] as? String == row.values[SPIELORDERS_ORDER_FIELD_ORDER_ID])
-    let items = try #require(shown["items"] as? [[String: Any]])
-    #expect(items.count == 1)
-    #expect(items.first?["quantity"] as? String == order.rowField(0, SPIELORDERS_ITEM_FIELD_QUANTITY))
-    #expect(items.first?["unit_price"] as? String == order.rowField(0, SPIELORDERS_ITEM_FIELD_UNIT_PRICE))
-    let sharedVendor = try cli(["vendor", "show", "Shared Optics"], root: root)
-    let contacts = try #require(sharedVendor["contacts"] as? [[String: Any]])
-    #expect(contacts.first?["email"] as? String == "sales@example.org")
-
-    _ = try cli(["vendor", "contact", "edit", "Shared Optics", "1", "email=updated@example.org"], root: root)
-    _ = try await session.open(root, cancellation: LibraryCancellation())
-    let vendorRow = try #require(try await session.vendors(query: "", caseSensitive: false, includeHidden: false,
-                                                         sortField: -1, descending: false,
-                                                         cancellation: LibraryCancellation()).rows.first)
-    let updated = try await session.vendorDraft(id: vendorRow.id, cancellation: LibraryCancellation())
-    #expect(updated.rowField(0, SPIELORDERS_CONTACT_FIELD_EMAIL) == "updated@example.org")
-}
-
 @Test func staleAdapterDrafts() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }

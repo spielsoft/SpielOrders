@@ -8,11 +8,14 @@
 //! Decision sources: Define the Rust CLI capability contract; Define lookup and search
 //! behavior; Effect and adapter boundaries.
 
+#[cfg(target_vendor = "apple")]
 use crate::library::{c_path, c_text};
+#[cfg(target_vendor = "apple")]
 use spielorders::{
-    PathBytes, SPIELORDERS_RESULT_OK, SpielordersConstant, SpielordersHits, Text,
-    spielorders_hits_add, spielorders_hits_diagnostic, spielorders_hits_new,
+    PathBytes, SPIELORDERS_RESULT_OK, Text, spielorders_hits_add, spielorders_hits_diagnostic,
+    spielorders_hits_new,
 };
+use spielorders::{SpielordersConstant, SpielordersHits};
 use std::{
     io,
     path::{Path, PathBuf},
@@ -23,10 +26,9 @@ use std::{
 /// its platform has none.
 #[cfg(target_vendor = "apple")]
 pub(crate) const PROVIDER: Option<&str> = Some("spotlight");
-#[cfg(not(target_vendor = "apple"))]
-pub(crate) const PROVIDER: Option<&str> = None;
 
 /// One file a provider reported, with the facts it stated about it.
+#[cfg(target_vendor = "apple")]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Hit {
     pub(crate) path: PathBuf,
@@ -36,11 +38,12 @@ pub(crate) struct Hit {
 
 /// What a provider answered: whether it could look, as a `SPIELORDERS_PROVIDER_STATE_*`,
 /// what it found, and what it said about the query in its own words.
+#[cfg(target_vendor = "apple")]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Found {
     pub(crate) state: SpielordersConstant,
     pub(crate) hits: Vec<Hit>,
-    pub(crate) said: Vec<String>,
+    pub(crate) diagnostics: Vec<String>,
 }
 
 /// What this build's provider found for `text` over `directory`, within `bound`, as the
@@ -53,17 +56,20 @@ pub(crate) fn search_supporting_material(
     bound: Duration,
 ) -> Option<(Box<SpielordersHits>, SpielordersConstant)> {
     #[cfg(target_vendor = "apple")]
-    let found = spotlight::answer(directory, text, bound);
+    {
+        let found = spotlight::answer(directory, text, bound);
+        library_hits(PROVIDER?, &found).map(|hits| (hits, found.state))
+    }
     #[cfg(not(target_vendor = "apple"))]
-    let found: Found = {
+    {
         let _ = (directory, text, bound);
-        return None;
-    };
-    hits(PROVIDER?, &found).map(|hits| (hits, found.state))
+        None
+    }
 }
 
 /// What `provider` found, gathered through the library's interface.
-pub(crate) fn hits(provider: &str, found: &Found) -> Option<Box<SpielordersHits>> {
+#[cfg(target_vendor = "apple")]
+pub(crate) fn library_hits(provider: &str, found: &Found) -> Option<Box<SpielordersHits>> {
     let provider = c_text(provider);
     let mut hits = None;
     if spielorders_hits_new(Text::new(&provider), &mut hits) != SPIELORDERS_RESULT_OK {
@@ -87,7 +93,7 @@ pub(crate) fn hits(provider: &str, found: &Found) -> Option<Box<SpielordersHits>
             Text::new(c""),
         );
     }
-    for said in &found.said {
+    for said in &found.diagnostics {
         let said = c_text(said.as_str());
         let _ = spielorders_hits_diagnostic(&mut hits, Text::new(&said));
     }
@@ -180,12 +186,12 @@ mod spotlight {
         let found = |state, hits| Found {
             state,
             hits,
-            said: Vec::new(),
+            diagnostics: Vec::new(),
         };
         let prevented = |state, said: Option<String>| Found {
             state,
             hits: Vec::new(),
-            said: said.into_iter().collect(),
+            diagnostics: said.into_iter().collect(),
         };
         let Some(directory) = directory else {
             return found(SPIELORDERS_PROVIDER_STATE_COMPLETE, Vec::new());
@@ -664,7 +670,7 @@ mod spotlight {
                 Found {
                     state: SPIELORDERS_PROVIDER_STATE_COMPLETE,
                     hits: Vec::new(),
-                    said: Vec::new(),
+                    diagnostics: Vec::new(),
                 }
             );
         }

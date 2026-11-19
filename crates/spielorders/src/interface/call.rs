@@ -168,6 +168,20 @@ impl Session {
         &*self.cancel
     }
 
+    /// The root of the Package this call can reuse as a current-index open, with nothing
+    /// written since. A rebuilt index omits damaged Orders, so a fresh open would call
+    /// that index stale rather than the current state the rebuild itself reported.
+    pub(crate) fn current_root(&self) -> Option<PathBuf> {
+        let remembered = self.remembered.lock().ok()?;
+        remembered
+            .as_ref()
+            .filter(|package| {
+                package.index.state == crate::canonical::PackageIndexState::Current
+                    && package.damaged_orders.is_empty()
+            })
+            .map(|package| package.context.root.absolute_path.clone())
+    }
+
     /// Whether any effect of this session wrote, renamed, or removed anything.
     pub(crate) fn wrote(&self) -> bool {
         self.wrote.load(Ordering::SeqCst)

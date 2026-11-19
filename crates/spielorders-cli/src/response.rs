@@ -28,8 +28,8 @@ pub(crate) enum Human {
     /// The whole answer of a validation that found the scope valid, under this verdict.
     Verdict(&'static str),
     /// The whole answer of a repair diagnosis, with the command line that applies each
-    /// offered action through this command.
-    Repair(&'static str),
+    /// offered action said once, after it.
+    Repair,
     /// The one member at this path, rendered as the answer.
     Member(&'static [&'static str]),
     /// The one text at this path, printed bare so another tool can take it.
@@ -80,6 +80,23 @@ pub(crate) fn present(shown: &Shown<'_>, output: &Output) -> Exit {
         Err(error) => {
             let _ = output.error(&format!("the result could not be written: {error}"));
             Exit::Failure
+        }
+    }
+}
+
+/// `data` with the command line each offered repair action carries taken out, in its own
+/// diagnosis and in the one remaining after a repair.
+pub(crate) fn without_repair_commands(data: &mut Value) {
+    if let Some(remaining) = data.get_mut("remaining") {
+        without_repair_commands(remaining);
+    }
+    let cases = data.get_mut("cases").and_then(Value::as_array_mut);
+    for case in cases.into_iter().flatten() {
+        let actions = case.get_mut("actions").and_then(Value::as_array_mut);
+        for offered in actions.into_iter().flatten() {
+            if let Some(members) = offered.as_object_mut() {
+                members.remove("command");
+            }
         }
     }
 }

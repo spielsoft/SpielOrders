@@ -1,10 +1,18 @@
-use crate::support::{Invocation, initialized_package, managed_snapshot, response};
+//! `spielorders agent provision` and `agent defaults`: installed agent guidance.
+//!
+//! Decision sources: Define the SpielOrders agent skill contract; Define the Rust CLI
+//! capability contract.
+
+use crate::support::{
+    Invocation, Outcome, initialized_package, managed_snapshot, material_answered, response,
+    supporting_material_provider,
+};
 use std::{fs, process::Command};
 
 #[test]
 fn agent_provision_responses_match_their_contracts() {
     use crate::support::{ResponseContract, assert_matches_golden, unmanaged_directory};
-    for cell in ["success", "invalid", "rejected"] {
+    for (cell, status) in [("success", 0), ("invalid", 1), ("rejected", 1)] {
         // Any directory is a destination; no Package needs to stand there.
         let (_tree, mut root) = unmanaged_directory("provision-response");
         if cell == "invalid" {
@@ -17,6 +25,12 @@ fn agent_provision_responses_match_their_contracts() {
         let outcome = Invocation::new(&["agent", "provision", "--json"])
             .rooted_at(&root)
             .run();
+        assert_eq!(
+            outcome.status,
+            Some(status),
+            "{cell}: {}",
+            outcome.stdout_text()
+        );
         assert_matches_golden(ResponseContract::AgentProvision, cell, &outcome, &root);
     }
 }
@@ -219,9 +233,9 @@ fn agent_provision_neither_requires_nor_reads_package_metadata() {
     assert_eq!(managed_snapshot(&root.join(".spielorders")), metadata);
 }
 
-/// Every shipped example is a command line that succeeds on a disposable Package
-/// holding what its reference assumes: a Vendor named in an edit, an Order with an Item
-/// to move, or an existing directory to adopt.
+/// Every shipped example runs on a disposable Package holding what its reference
+/// assumes. Supporting Material search reports the native provider's actual state;
+/// unlike a record command, it cannot promise success on every machine.
 #[test]
 fn guidance_examples_run_against_disposable_packages() {
     let references = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -274,16 +288,38 @@ fn guidance_examples_run_against_disposable_packages() {
             if !in_block {
                 continue;
             }
+            let material = line.starts_with("spielorders search supporting-material ");
+            // Read this provider-dependent answer in its machine shape so a documented
+            // refusal is checked precisely, not accepted as an arbitrary failed example.
+            let command = if material {
+                format!("{line} --json")
+            } else {
+                line.to_owned()
+            };
             let output = Command::new("/bin/sh")
                 .args([
                     "-c",
-                    &format!("spielorders() {{ \"$SPIELORDERS\" \"$@\"; }}; {line}"),
+                    &format!("spielorders() {{ \"$SPIELORDERS\" \"$@\"; }}; {command}"),
                 ])
                 .env("SPIELORDERS", env!("CARGO_BIN_EXE_spielorders"))
                 .env("package", &package)
                 .env("directory", &directory)
                 .output()
                 .unwrap();
+            if material {
+                let outcome = Outcome {
+                    status: output.status.code(),
+                    stdout: output.stdout,
+                    stderr: output.stderr,
+                };
+                material_answered(
+                    &outcome,
+                    &response(&outcome),
+                    supporting_material_provider(),
+                );
+                ran += 1;
+                continue;
+            }
             assert_eq!(
                 output.status.code(),
                 Some(0),

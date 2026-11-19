@@ -5,16 +5,16 @@
 use crate::{
     Answer, Failure,
     canonical::{CurrentPackageCandidate, Touched, load_package_to_change},
+    change::PlannedAct,
     evidence::EvidenceFingerprint,
-    filesystem::{DestinationExpectation, replace_validated_file_expecting, staging_path},
+    integrity::{Records, resolves},
+    journal::{Journal, ManagedRecord, Subject, planned_location},
     metadata::OrderDocument,
-    mutation::{
-        CleanupFailure, CommitFailure, IndexRefresh, MutationReport, Never, OperationKind,
-        PlannedOperation,
-    },
+    mutation::{CommitFailure, MutationReport, OperationKind},
     operations::{FailedOperation, FailedPath},
-    ports::{FileSystem, FileSystemEntryKind, RenameOutcome},
+    ports::{FileSystem, FileSystemEntryKind},
     readme::{Location, located_in_package, package_relative_path_text},
+    removal::relocated_record,
 };
 use std::path::{Path, PathBuf};
 
@@ -28,7 +28,7 @@ pub struct OrderRestorePlan {
     locator: Option<String>,
     document: OrderDocument,
     evidence: EvidenceFingerprint,
-    pub(crate) operations: Vec<PlannedOperation>,
+    pub(crate) journal: Journal,
 }
 
 impl OrderRestorePlan {
@@ -85,21 +85,13 @@ pub(crate) fn plan_order_restore<F: FileSystem>(
         let locator =
             (document.package_root.stored_text() != Some(projected.as_str())).then_some(projected);
 
-        let mut operations = Vec::new();
-        if locator.is_some() {
-            operations.push(PlannedOperation::new(
-                OperationKind::ReplaceOrderRecord,
-                located(&root, order_record(&source.absolute_path)),
-            ));
-        }
-        operations.push(PlannedOperation::new(
-            OperationKind::MoveOrderDirectory,
-            destination.clone(),
-        ));
-        operations.push(PlannedOperation::new(
-            OperationKind::RefreshPackageIndex,
+        let journal = restore_journal(
+            &root,
+            &source,
+            &destination,
+            relocation(&source, &document, locator.as_deref()),
             package.context.index.clone(),
-        ));
+        );
         let evidence = restore_evidence(&package, &source, &document);
         Ok(OrderRestorePlan {
             root,
@@ -108,9 +100,55 @@ pub(crate) fn plan_order_restore<F: FileSystem>(
             locator,
             document,
             evidence,
-            operations,
+            journal,
         })
     })
+}
+
+/// The record at `source` with the locator it needs in the Orders Directory, where that
+/// differs from the one it stores: the record planned against, and the bytes it becomes.
+/// The candidate is empty where the plan's own record no longer relocates, which is an
+/// internal bug rather than a state of the Package, and a commit refuses it.
+fn relocation(
+    source: &Location,
+    document: &OrderDocument,
+    locator: Option<&str>,
+) -> Option<(ManagedRecord, Vec<u8>)> {
+    let candidate = relocated_record(document, locator?).unwrap_or_default();
+    let record = ManagedRecord::order(record_path(&source.absolute_path), document.clone());
+    Some((record, candidate))
+}
+
+/// The commit restoring the removed Order at `source` to `destination`: its record
+/// rewritten with the locator it needs there while the directory is still outside active
+/// scope, so a failure leaves the Package as it was, and then the whole directory moved by
+/// one rename.
+fn restore_journal(
+    root: &Path,
+    source: &Location,
+    destination: &Location,
+    relocation: Option<(ManagedRecord, Vec<u8>)>,
+    index: Location,
+) -> Journal {
+    let managed = PlannedAct::Managed;
+    let mut journal = Journal::new(root);
+    if let Some((record, candidate)) = relocation {
+        journal.replace(
+            record.path().to_path_buf(),
+            candidate,
+            record.expectation(),
+            managed(OperationKind::ReplaceOrderRecord),
+            Subject::Other,
+        );
+    }
+    journal.move_entry(
+        source.absolute_path.clone(),
+        destination.absolute_path.clone(),
+        managed(OperationKind::MoveOrderDirectory),
+        Subject::Order(destination.absolute_path.clone()),
+    );
+    journal.refreshing(index);
+    journal
 }
 
 /// The removed Order at `removed`: a direct child of this Package's Removed Orders
@@ -164,16 +202,13 @@ fn removed_order<F: FileSystem>(
             field: None,
         })?;
     if let Some(vendor_id) = &document.vendor_id
-        && !package
-            .vendors
-            .iter()
-            .any(|vendor| vendor.vendor_id == *vendor_id)
+        && !resolves(&package.vendors, vendor_id)
     {
         return Err(Failure::UnresolvedVendor {
             vendor_id: vendor_id.to_string(),
         });
     }
-    if let Some(existing) = identity_in_use(package, &document) {
+    if let Some(existing) = Records::of(package).holder(&document.order_id, None) {
         return Err(Failure::OrderIdentityInUse {
             order_id: document.order_id.to_string(),
             location: existing.clone(),
@@ -189,34 +224,17 @@ fn read_record<F: FileSystem>(directory: &Path, filesystem: &F) -> Option<OrderD
         .symlink_metadata(&directory.join(".spielorders"))
         .ok()?
         != Some(FileSystemEntryKind::Directory)
-        || filesystem.symlink_metadata(&order_record(directory)).ok()?
+        || filesystem.symlink_metadata(&record_path(directory)).ok()?
             != Some(FileSystemEntryKind::File)
     {
         return None;
     }
-    let bytes = filesystem.read(&order_record(directory)).ok()?;
+    let bytes = filesystem.read(&record_path(directory)).ok()?;
     OrderDocument::from_json_bytes(&bytes)
         .ok()?
         .validate()
         .ok()
         .map(|validated| validated.order().clone())
-}
-
-fn identity_in_use<'a>(
-    package: &'a CurrentPackageCandidate,
-    document: &OrderDocument,
-) -> Option<&'a Location> {
-    package
-        .healthy_orders
-        .iter()
-        .map(|order| (&order.document.order_id, &order.paths.directory))
-        .chain(package.damaged_orders.iter().filter_map(|order| {
-            order
-                .order_id
-                .as_ref()
-                .map(|id| (id, &order.paths.directory))
-        }))
-        .find_map(|(id, directory)| (id == &document.order_id).then_some(directory))
 }
 
 fn restore_destination(package: &CurrentPackageCandidate, source: &Location) -> Location {
@@ -225,7 +243,7 @@ fn restore_destination(package: &CurrentPackageCandidate, source: &Location) -> 
         .orders_directory
         .as_ref()
         .expect("a resolved Package names its Orders Directory");
-    located(
+    planned_location(
         &package.context.root.absolute_path,
         orders.absolute_path.join(
             source
@@ -265,7 +283,10 @@ fn restore_evidence(
         )
         .observed(
             "identity_in_use",
-            identity_in_use(package, document).is_some().to_string(),
+            Records::of(package)
+                .holder(&document.order_id, None)
+                .is_some()
+                .to_string(),
         )
         .observed("order_record", format!("{document:?}"))
 }
@@ -296,144 +317,35 @@ pub(crate) fn commit_order_restore<F: FileSystem>(
             Ok(None) => {}
             _ => return Err(changed()),
         }
-        // The locator is rewritten while the directory is still outside active scope, so
-        // a failure here leaves the Package exactly as it was.
-        let rewritten = if let Some(locator) = &plan.locator {
-            Some(rewrite_locator(
-                &plan.root,
-                &plan.source.absolute_path,
-                &plan.document,
-                locator,
-                filesystem,
-            )?)
-        } else {
-            None
-        };
-        match filesystem.rename_new(&plan.source.absolute_path, &plan.destination.absolute_path) {
-            Ok(RenameOutcome::Renamed) => {}
-            Ok(RenameOutcome::DestinationExists) => {
-                let cleanup = rewritten.map_or_else(Vec::new, |(prior, candidate)| {
-                    rollback_locator(&plan, &prior, &candidate, filesystem)
-                });
-                return Err(Failure::commit(
-                    CommitFailure::new(plan.destination.clone()),
-                    cleanup,
-                ));
-            }
-            Err(error) => {
-                let cleanup = rewritten.map_or_else(Vec::new, |(prior, candidate)| {
-                    rollback_locator(&plan, &prior, &candidate, filesystem)
-                });
-                return Err(
-                    Failure::commit(CommitFailure::new(plan.destination.clone()), cleanup)
-                        .unless_unsupported(
-                            &plan.root,
-                            &plan.source.absolute_path,
-                            &error,
-                            filesystem,
-                        ),
-                );
-            }
+        let relocation = relocation(&plan.source, &plan.document, plan.locator.as_deref());
+        if relocation
+            .as_ref()
+            .is_some_and(|(_, candidate)| candidate.is_empty())
+        {
+            let record = record_path(&plan.source.absolute_path);
+            return Err(Failure::commit(
+                CommitFailure::new(planned_location(&plan.root, record)),
+                Vec::new(),
+            ));
         }
-        let touched = Touched::orders([plan.destination.absolute_path.clone()]);
-        let refresh = IndexRefresh::after_commit(&plan.root, &touched, filesystem);
-        Ok(refresh.report(OrderRestoreResult {
-            directory: plan.destination.clone(),
-        }))
+        let committed = restore_journal(
+            &plan.root,
+            &plan.source,
+            &plan.destination,
+            relocation,
+            package.context.index.clone(),
+        )
+        .run(filesystem)?;
+        let refresh = committed.refresh(&plan.root, filesystem);
+        Ok(MutationReport::committed(
+            OrderRestoreResult {
+                directory: plan.destination.clone(),
+            },
+            committed.warnings(refresh),
+        ))
     })
 }
 
-fn rewrite_locator<F: FileSystem>(
-    root: &Path,
-    directory: &Path,
-    document: &OrderDocument,
-    locator: &str,
-    filesystem: &F,
-) -> Result<(Vec<u8>, Vec<u8>), Failure> {
-    let record = order_record(directory);
-    let prior = filesystem.read(&record).map_err(|error| {
-        Failure::from(FailedOperation::filesystem(
-            located(root, record.clone()),
-            &error,
-            filesystem,
-        ))
-    })?;
-    let candidate = relocated_record(document, locator).ok_or_else(|| {
-        Failure::commit(
-            CommitFailure::new(located(root, record.clone())),
-            Vec::new(),
-        )
-    })?;
-    let still_holds_the_planned_record = |current: &[u8]| {
-        OrderDocument::from_json_bytes(current)
-            .ok()
-            .and_then(|parsed| parsed.validate().ok())
-            .is_some_and(|projected| projected.order() == document)
-    };
-    replace_validated_file_expecting(
-        &record,
-        &candidate,
-        DestinationExpectation::Equivalent(&still_holds_the_planned_record),
-        filesystem,
-        |_| Ok::<(), Never>(()),
-    )
-    .map_err(|error| Failure::of_replacement(root, &record, error))?;
-    Ok((prior, candidate))
-}
-
-fn rollback_locator<F: FileSystem>(
-    plan: &OrderRestorePlan,
-    prior: &[u8],
-    candidate: &[u8],
-    filesystem: &F,
-) -> Vec<CleanupFailure> {
-    let record = order_record(&plan.source.absolute_path);
-    let retained = || CleanupFailure::new(located(&plan.root, record.clone()));
-    // A failed move does not authorize following a replacement link or overwriting a
-    // later writer. The rollback is guarded by the exact bytes this restore wrote.
-    if read_record(&plan.source.absolute_path, filesystem).is_none() {
-        return vec![retained()];
-    }
-    match replace_validated_file_expecting(
-        &record,
-        prior,
-        DestinationExpectation::Exactly(candidate),
-        filesystem,
-        |_| Ok::<(), Never>(()),
-    ) {
-        Ok(()) => Vec::new(),
-        Err(error) => {
-            let mut cleanup = vec![retained()];
-            if error.cleanup_failure.is_some() {
-                cleanup.push(CleanupFailure::new(located(
-                    &plan.root,
-                    staging_path(&record).expect("a managed record has a staging path"),
-                )));
-            }
-            cleanup
-        }
-    }
-}
-
-/// The record with its technical locator replaced, as this application's canonical bytes.
-fn relocated_record(document: &OrderDocument, locator: &str) -> Option<Vec<u8>> {
-    let mut object = serde_json::to_value(document).ok()?.as_object().cloned()?;
-    object.insert(
-        "package_root".into(),
-        serde_json::Value::String(locator.to_owned()),
-    );
-    let bytes = serde_json::to_vec(&serde_json::Value::Object(object)).ok()?;
-    let relocated = OrderDocument::from_json_bytes(&bytes).ok()?;
-    relocated.package_root.spelled()?;
-    relocated.to_json_bytes().ok()
-}
-
-fn located(root: &Path, path: PathBuf) -> Location {
-    let relative = package_relative_path_text(root, &path)
-        .expect("a planned restore path has a Package-relative spelling");
-    Location::within_package(path, relative).expect("a planned restore path is normalized")
-}
-
-fn order_record(directory: &Path) -> PathBuf {
+fn record_path(directory: &Path) -> PathBuf {
     directory.join(".spielorders").join("order.json")
 }

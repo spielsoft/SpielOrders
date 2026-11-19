@@ -1,113 +1,32 @@
-//! Drafts: an editor's whole Order, Vendor, or file text, holding whatever the user typed.
-//! Value errors come from checking or planning a draft, so an editor never loses input.
+//! Drafts as the C interface hands them out: the library's [`Draft`] behind a handle, its
+//! fields read and set by their constants, and the text its accessors lend.
 
 use crate::interface::{
-    PathBytes, SPIELORDERS_CONTACT_FIELD_EMAIL, SPIELORDERS_CONTACT_FIELD_NAME,
-    SPIELORDERS_CONTACT_FIELD_PHONE, SPIELORDERS_CONTACT_FIELD_ROLE, SPIELORDERS_DRAFT_KIND_ORDER,
-    SPIELORDERS_DRAFT_KIND_TEXT, SPIELORDERS_DRAFT_KIND_VENDOR,
-    SPIELORDERS_FAILURE_INVALID_CONTACT_POSITION, SPIELORDERS_FAILURE_INVALID_ITEM_POSITION,
-    SPIELORDERS_ITEM_FIELD_CATALOG_NUMBER, SPIELORDERS_ITEM_FIELD_DESCRIPTION,
-    SPIELORDERS_ITEM_FIELD_NOTES, SPIELORDERS_ITEM_FIELD_QUANTITY, SPIELORDERS_ITEM_FIELD_TOTAL,
-    SPIELORDERS_ITEM_FIELD_UNIT_PRICE, SPIELORDERS_ORDER_FIELD_CURRENCY,
-    SPIELORDERS_ORDER_FIELD_DATE_ORDERED, SPIELORDERS_ORDER_FIELD_ORDER_GROUP,
-    SPIELORDERS_ORDER_FIELD_ORDERER, SPIELORDERS_ORDER_FIELD_ORDERING_INSTITUTION,
-    SPIELORDERS_ORDER_FIELD_PROJECT, SPIELORDERS_ORDER_FIELD_STATUS, SPIELORDERS_ORDER_FIELD_TITLE,
-    SPIELORDERS_ORDER_FIELD_TOTAL, SPIELORDERS_ORDER_FIELD_VENDOR, SPIELORDERS_RESULT_BAD_ARGUMENT,
-    SPIELORDERS_RESULT_INTERNAL, SPIELORDERS_RESULT_OK, SPIELORDERS_RESULT_REFUSED,
-    SPIELORDERS_SEVERITY_ERROR, SPIELORDERS_TEXT_FIELD_CONTENT, SPIELORDERS_VENDOR_FIELD_ADDRESS,
-    SPIELORDERS_VENDOR_FIELD_EMAIL, SPIELORDERS_VENDOR_FIELD_NAME, SPIELORDERS_VENDOR_FIELD_PHONE,
-    SPIELORDERS_VENDOR_FIELD_PURCHASING_NOTES, SPIELORDERS_VENDOR_FIELD_WEBSITE,
-    SpielordersConstant, SpielordersEntries, SpielordersOrder, SpielordersPackage,
-    SpielordersResult, SpielordersVendor, Text,
+    PathBytes, SPIELORDERS_DRAFT_KIND_ORDER, SPIELORDERS_DRAFT_KIND_TEXT,
+    SPIELORDERS_DRAFT_KIND_VENDOR, SPIELORDERS_FAILURE_INVALID_CONTACT_POSITION,
+    SPIELORDERS_FAILURE_INVALID_ITEM_POSITION, SPIELORDERS_FAMILY_CONTACT_FIELD,
+    SPIELORDERS_FAMILY_ITEM_FIELD, SPIELORDERS_FAMILY_ORDER_FIELD, SPIELORDERS_FAMILY_VENDOR_FIELD,
+    SPIELORDERS_ITEM_FIELD_TOTAL, SPIELORDERS_ORDER_FIELD_TOTAL, SPIELORDERS_REASON_UNKNOWN_FIELD,
+    SPIELORDERS_RESULT_BAD_ARGUMENT, SPIELORDERS_RESULT_INTERNAL, SPIELORDERS_RESULT_OK,
+    SPIELORDERS_RESULT_REFUSED, SPIELORDERS_SEVERITY_ERROR, SpielordersConstant,
+    SpielordersEntries, SpielordersOrder, SpielordersPackage, SpielordersResult, SpielordersVendor,
+    Text,
     call::{Session, deliver, fallible, quietly, settle},
+    codes,
     entries::{EMPTY, Entry, Subject, c_text},
-    library::name,
+    fields,
     records::{Facts, contact_facts, item_facts, number, order_facts, vendor_facts},
 };
 use crate::{
-    Assignments, Change, NEW_ORDER_TITLE, OrderRef, draft_date_ordered, draft_item_total,
-    draft_order_total,
-    model::{OrderDocument, Vendor},
-    new_order_defaults, new_vendor_name,
+    Change,
+    drafting::{Draft, DraftKind, DraftRefusal, Origin},
     ports::Effects,
 };
 use std::{
     ffi::CString,
     panic::{AssertUnwindSafe, catch_unwind},
-    path::PathBuf,
     sync::atomic::{AtomicBool, Ordering},
 };
-
-const ORDER_FIELDS: [SpielordersConstant; 9] = [
-    SPIELORDERS_ORDER_FIELD_TITLE,
-    SPIELORDERS_ORDER_FIELD_DATE_ORDERED,
-    SPIELORDERS_ORDER_FIELD_STATUS,
-    SPIELORDERS_ORDER_FIELD_VENDOR,
-    SPIELORDERS_ORDER_FIELD_ORDERER,
-    SPIELORDERS_ORDER_FIELD_ORDERING_INSTITUTION,
-    SPIELORDERS_ORDER_FIELD_CURRENCY,
-    SPIELORDERS_ORDER_FIELD_PROJECT,
-    SPIELORDERS_ORDER_FIELD_ORDER_GROUP,
-];
-const ITEM_FIELDS: [SpielordersConstant; 5] = [
-    SPIELORDERS_ITEM_FIELD_DESCRIPTION,
-    SPIELORDERS_ITEM_FIELD_QUANTITY,
-    SPIELORDERS_ITEM_FIELD_UNIT_PRICE,
-    SPIELORDERS_ITEM_FIELD_CATALOG_NUMBER,
-    SPIELORDERS_ITEM_FIELD_NOTES,
-];
-const VENDOR_FIELDS: [SpielordersConstant; 6] = [
-    SPIELORDERS_VENDOR_FIELD_NAME,
-    SPIELORDERS_VENDOR_FIELD_PHONE,
-    SPIELORDERS_VENDOR_FIELD_EMAIL,
-    SPIELORDERS_VENDOR_FIELD_WEBSITE,
-    SPIELORDERS_VENDOR_FIELD_ADDRESS,
-    SPIELORDERS_VENDOR_FIELD_PURCHASING_NOTES,
-];
-const CONTACT_FIELDS: [SpielordersConstant; 4] = [
-    SPIELORDERS_CONTACT_FIELD_NAME,
-    SPIELORDERS_CONTACT_FIELD_ROLE,
-    SPIELORDERS_CONTACT_FIELD_PHONE,
-    SPIELORDERS_CONTACT_FIELD_EMAIL,
-];
-const REUSABLE_FIELDS: [SpielordersConstant; 4] = [
-    SPIELORDERS_ORDER_FIELD_ORDERER,
-    SPIELORDERS_ORDER_FIELD_ORDERING_INSTITUTION,
-    SPIELORDERS_ORDER_FIELD_PROJECT,
-    SPIELORDERS_ORDER_FIELD_ORDER_GROUP,
-];
-
-/// What a draft saves as when it is planned.
-#[derive(Clone, Debug)]
-pub(crate) enum Origin {
-    NewOrder {
-        root: PathBuf,
-    },
-    EditOrder {
-        directory: PathBuf,
-        original: Box<OrderDocument>,
-    },
-    Adoption {
-        root: PathBuf,
-        directory: PathBuf,
-    },
-    NewVendor {
-        root: PathBuf,
-    },
-    EditVendor {
-        root: PathBuf,
-        original: Box<Vendor>,
-    },
-    /// A diagnosis draft, which only its diagnosis plans.
-    Repair,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct Row {
-    /// The row of the read record this row began as, if it did.
-    pub(crate) origin: Option<usize>,
-    facts: Vec<(SpielordersConstant, String)>,
-}
 
 /// An editor's draft of one Order, one Vendor, or one file's text. Use it from one thread
 /// at a time. Its strings live until the next call that changes it.
@@ -117,15 +36,8 @@ pub struct SpielordersDraft {
 }
 
 pub(crate) struct SpielordersDraftData {
-    pub(crate) kind: SpielordersConstant,
-    pub(crate) origin: Origin,
+    draft: Draft,
     poisoned: AtomicBool,
-    facts: Vec<(SpielordersConstant, String)>,
-    pub(crate) rows: Vec<Row>,
-    confirmed: Vec<SpielordersConstant>,
-    /// The facts set since the draft was made, including to the value they had.
-    touched: Vec<SpielordersConstant>,
-    initial: Initial,
     /// What the accessors read, rebuilt after every change.
     shown: Shown,
 }
@@ -137,73 +49,79 @@ struct Shown {
     total: CString,
 }
 
+/// What a draft held when it was made, by the constants of its fields: the read it
+/// edits, or nothing for a new record.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Initial {
+    pub(crate) facts: Vec<(SpielordersConstant, String)>,
+    pub(crate) rows: Vec<Vec<(SpielordersConstant, String)>>,
+}
+
 impl SpielordersDraftData {
-    pub(crate) fn settable(&self) -> &'static [SpielordersConstant] {
-        match self.kind {
-            SPIELORDERS_DRAFT_KIND_ORDER => &ORDER_FIELDS,
-            SPIELORDERS_DRAFT_KIND_VENDOR => &VENDOR_FIELDS,
-            _ => &[SPIELORDERS_TEXT_FIELD_CONTENT],
+    /// The `SPIELORDERS_DRAFT_KIND_*` of this draft.
+    pub(crate) fn kind(&self) -> SpielordersConstant {
+        match self.draft.kind() {
+            DraftKind::Order => SPIELORDERS_DRAFT_KIND_ORDER,
+            DraftKind::Vendor => SPIELORDERS_DRAFT_KIND_VENDOR,
+            DraftKind::Text => SPIELORDERS_DRAFT_KIND_TEXT,
         }
     }
 
-    pub(crate) fn row_settable(&self) -> &'static [SpielordersConstant] {
-        match self.kind {
-            SPIELORDERS_DRAFT_KIND_ORDER => &ITEM_FIELDS,
-            SPIELORDERS_DRAFT_KIND_VENDOR => &CONTACT_FIELDS,
-            _ => &[],
-        }
+    pub(crate) fn draft(&self) -> &Draft {
+        &self.draft
     }
 
-    pub(crate) fn fact(&self, field: SpielordersConstant) -> &str {
-        self.facts
+    /// The fields this draft sets, in the order an editor lists them.
+    pub(crate) fn settable(&self) -> Vec<SpielordersConstant> {
+        self.draft
+            .facts()
             .iter()
-            .find(|(each, _)| *each == field)
-            .map_or("", |(_, value)| value.as_str())
+            .map(|(fact, _)| fields::fact_constant(*fact))
+            .collect()
     }
 
-    fn put(
-        facts: &mut Vec<(SpielordersConstant, String)>,
-        field: SpielordersConstant,
-        text: String,
-    ) {
-        match facts.iter_mut().find(|(each, _)| *each == field) {
-            Some((_, value)) => *value = text,
-            None => facts.push((field, text)),
-        }
-    }
-
-    fn row_value(row: &Row, field: SpielordersConstant) -> &str {
-        row.facts
-            .iter()
-            .find(|(each, _)| *each == field)
-            .map_or("", |(_, value)| value.as_str())
+    /// The fields each of this draft's rows sets, in the order an editor lists them.
+    pub(crate) fn row_settable(&self) -> Vec<SpielordersConstant> {
+        self.draft
+            .kind()
+            .row_facts()
+            .into_iter()
+            .map(fields::row_fact_constant)
+            .collect()
     }
 
     fn refresh(&mut self) {
-        let mut rows = Vec::with_capacity(self.rows.len());
-        let mut totals = Vec::with_capacity(self.rows.len());
-        for row in &self.rows {
-            let mut facts = row.facts.clone();
-            if self.kind == SPIELORDERS_DRAFT_KIND_ORDER {
-                let total = draft_item_total(
-                    Self::row_value(row, SPIELORDERS_ITEM_FIELD_QUANTITY),
-                    Self::row_value(row, SPIELORDERS_ITEM_FIELD_UNIT_PRICE),
-                );
-                totals.push(total);
-                facts.push((
-                    SPIELORDERS_ITEM_FIELD_TOTAL,
-                    total.map(number).unwrap_or_default(),
-                ));
-            }
-            rows.push(Facts::of(facts));
-        }
-        let total = if self.kind == SPIELORDERS_DRAFT_KIND_ORDER {
-            draft_order_total(&totals).map(number).unwrap_or_default()
+        let draft = &self.draft;
+        let order = draft.kind() == DraftKind::Order;
+        let rows = draft
+            .rows()
+            .iter()
+            .map(|row| {
+                let mut facts = row
+                    .facts()
+                    .iter()
+                    .map(|(fact, text)| (fields::row_fact_constant(*fact), text.clone()))
+                    .collect::<Vec<_>>();
+                if order {
+                    facts.push((
+                        SPIELORDERS_ITEM_FIELD_TOTAL,
+                        draft.item_total(row).map(number).unwrap_or_default(),
+                    ));
+                }
+                Facts::of(facts)
+            })
+            .collect();
+        let total = if order {
+            draft.order_total().map(number).unwrap_or_default()
         } else {
             String::new()
         };
-        let mut facts = self.facts.clone();
-        if self.kind == SPIELORDERS_DRAFT_KIND_ORDER {
+        let mut facts = draft
+            .facts()
+            .iter()
+            .map(|(fact, text)| (fields::fact_constant(*fact), text.clone()))
+            .collect::<Vec<_>>();
+        if order {
             facts.push((SPIELORDERS_ORDER_FIELD_TOTAL, total.clone()));
         }
         self.shown = Shown {
@@ -213,159 +131,83 @@ impl SpielordersDraftData {
         };
     }
 
-    fn touch(&mut self, field: SpielordersConstant) {
-        if !self.touched.contains(&field) {
-            self.touched.push(field);
-        }
-    }
-
-    /// The facts and rows as the assignments a plan takes. An existing Order's draft
-    /// names only the facts that were set, so an edit can tell a fact named again from one
-    /// left alone; the rest stay as the record has them.
-    pub(crate) fn assignments(&self) -> (Assignments, Vec<Assignments>) {
-        let mut facts = Assignments::new();
-        let existing = matches!(self.origin, Origin::EditOrder { .. });
-        for (field, value) in &self.facts {
-            if existing && !self.touched.contains(field) {
-                continue;
-            }
-            let field_name = name(*field).unwrap_or_default();
-            facts = if self.confirmed.contains(field) {
-                facts.introduce(field_name, value.clone())
-            } else {
-                facts.assign(field_name, value.clone())
-            };
-        }
-        let rows = self
-            .rows
-            .iter()
-            .map(|row| {
-                row.facts
-                    .iter()
-                    .fold(Assignments::new(), |row, (field, value)| {
-                        row.assign(name(*field).unwrap_or_default(), value.clone())
-                    })
-            })
-            .collect();
-        (facts, rows)
-    }
-
     /// The change this draft saves as, or None for a diagnosis draft.
     pub(crate) fn change(&self) -> Option<Change> {
-        let (assignments, rows) = self.assignments();
-        Some(match &self.origin {
-            Origin::NewOrder { root } => Change::CreateOrder {
-                root: root.clone(),
-                assignments,
-                items: rows,
-            },
-            Origin::EditOrder {
-                directory,
-                original,
-            } => Change::SaveOrder {
-                order: OrderRef::Directory(directory.clone()),
-                assignments,
-                items: rows,
-                original: (**original).clone(),
-            },
-            Origin::Adoption { root, directory } => Change::AdoptOrder {
-                root: root.clone(),
-                directory: directory.clone(),
-                assignments,
-                items: rows,
-            },
-            Origin::NewVendor { root } => Change::CreateVendor {
-                root: root.clone(),
-                assignments,
-                contacts: rows,
-            },
-            Origin::EditVendor { root, original } => Change::SaveVendor {
-                root: root.clone(),
-                assignments,
-                contacts: rows,
-                original: (**original).clone(),
-            },
-            Origin::Repair => return None,
-        })
+        self.draft.change()
     }
 
     pub(crate) fn subject(&self) -> Subject {
-        match self.kind {
-            SPIELORDERS_DRAFT_KIND_ORDER => Subject::Order,
-            SPIELORDERS_DRAFT_KIND_VENDOR => Subject::Vendor,
-            _ => Subject::Text,
+        match self.draft.kind() {
+            DraftKind::Order => Subject::Order,
+            DraftKind::Vendor => Subject::Vendor,
+            DraftKind::Text => Subject::Text,
         }
     }
 
     /// The text of `field`, for a diagnosis that plans this draft.
     pub(crate) fn text(&self, field: SpielordersConstant) -> String {
-        self.fact(field).to_owned()
+        fields::fact(field)
+            .map(|fact| self.draft.fact(fact).to_owned())
+            .unwrap_or_default()
     }
 
     /// The record this draft began from, as its facts and rows.
-    pub(crate) fn initial(&self) -> &Initial {
-        &self.initial
+    pub(crate) fn initial(&self) -> Initial {
+        let initial = self.draft.initial();
+        Initial {
+            facts: initial
+                .facts
+                .iter()
+                .map(|(fact, text)| (fields::fact_constant(*fact), text.clone()))
+                .collect(),
+            rows: initial
+                .rows
+                .iter()
+                .map(|row| {
+                    row.iter()
+                        .map(|(fact, text)| (fields::row_fact_constant(*fact), text.clone()))
+                        .collect()
+                })
+                .collect(),
+        }
     }
 }
 
-/// What a draft held when it was made: the read it edits, or nothing for a new record.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct Initial {
-    pub(crate) facts: Vec<(SpielordersConstant, String)>,
-    pub(crate) rows: Vec<Vec<(SpielordersConstant, String)>>,
-}
-
 impl SpielordersDraft {
+    /// A draft of `kind` (a `SPIELORDERS_DRAFT_KIND_*`) holding the fields of `facts` and
+    /// `rows` it sets; a field it does not set is dropped.
     pub(crate) fn new(
         kind: SpielordersConstant,
         origin: Origin,
         facts: Vec<(SpielordersConstant, String)>,
         rows: Vec<Vec<(SpielordersConstant, String)>>,
     ) -> Self {
-        let mut data = SpielordersDraftData {
-            kind,
-            origin,
-            poisoned: AtomicBool::new(false),
-            facts: Vec::new(),
-            rows: rows
-                .into_iter()
-                .enumerate()
-                .map(|(index, facts)| Row {
-                    origin: Some(index),
-                    facts,
-                })
-                .collect(),
-            confirmed: Vec::new(),
-            touched: Vec::new(),
-            initial: Initial::default(),
-            shown: Shown::default(),
+        let kind = match kind {
+            SPIELORDERS_DRAFT_KIND_ORDER => DraftKind::Order,
+            SPIELORDERS_DRAFT_KIND_VENDOR => DraftKind::Vendor,
+            _ => DraftKind::Text,
         };
-        let settable = data.settable();
-        data.facts = settable
-            .iter()
-            .map(|field| {
-                let value = facts
-                    .iter()
-                    .find(|(each, _)| each == field)
-                    .map(|(_, value)| value.clone())
-                    .unwrap_or_default();
-                (*field, value)
+        let facts = facts
+            .into_iter()
+            .filter_map(|(field, text)| Some((fields::fact(field)?, text)))
+            .collect::<Vec<_>>();
+        let rows = rows
+            .into_iter()
+            .map(|row| {
+                row.into_iter()
+                    .filter_map(|(field, text)| Some((fields::row_fact(field)?, text)))
+                    .collect()
             })
             .collect();
-        let row_settable = data.row_settable();
-        for row in &mut data.rows {
-            row.facts.retain(|(field, _)| row_settable.contains(field));
-        }
-        let new_record = matches!(
-            data.origin,
-            Origin::NewOrder { .. } | Origin::NewVendor { .. } | Origin::Adoption { .. }
-        );
-        if !new_record {
-            data.initial = Initial {
-                facts: data.facts.clone(),
-                rows: data.rows.iter().map(|row| row.facts.clone()).collect(),
-            };
-        }
+        Self::of(Draft::new(kind, origin, &facts, rows))
+    }
+
+    fn of(draft: Draft) -> Self {
+        let mut data = SpielordersDraftData {
+            draft,
+            poisoned: AtomicBool::new(false),
+            shown: Shown::default(),
+        };
         data.refresh();
         Self {
             data: Box::new(data),
@@ -391,7 +233,7 @@ impl SpielordersDraft {
     fn change(
         &mut self,
         outcome: Option<&mut Option<Box<SpielordersEntries>>>,
-        body: impl FnOnce(&mut SpielordersDraftData, &mut Vec<Entry>) -> SpielordersResult,
+        body: impl FnOnce(&mut Draft, &mut Vec<Entry>) -> SpielordersResult,
     ) -> SpielordersResult {
         fallible(outcome, |entries| {
             if self.data.poisoned.load(Ordering::SeqCst) {
@@ -399,7 +241,7 @@ impl SpielordersDraft {
             }
             let data = &mut *self.data;
             match catch_unwind(AssertUnwindSafe(|| {
-                let result = body(data, entries);
+                let result = body(&mut data.draft, entries);
                 data.refresh();
                 result
             })) {
@@ -413,17 +255,32 @@ impl SpielordersDraft {
     }
 }
 
+/// The result a draft change answers: OK, or BAD_ARGUMENT for a field the draft does not
+/// have; a row it does not have is `bad_row`'s.
+fn status(
+    changed: Result<(), DraftRefusal>,
+    draft: &Draft,
+    row: i64,
+    entries: &mut Vec<Entry>,
+) -> SpielordersResult {
+    match changed {
+        Ok(()) => SPIELORDERS_RESULT_OK,
+        Err(DraftRefusal::NotItsField) => SPIELORDERS_RESULT_BAD_ARGUMENT,
+        Err(DraftRefusal::NoRow) => bad_row(draft, row, entries),
+    }
+}
+
 fn index(row: i64, count: usize, inclusive: bool) -> Option<usize> {
     let row = usize::try_from(row).ok()?;
     (row < count || (inclusive && row == count)).then_some(row)
 }
 
 /// The refusal of a row position a draft does not have.
-fn bad_row(data: &SpielordersDraftData, row: i64, entries: &mut Vec<Entry>) -> SpielordersResult {
-    if data.kind == SPIELORDERS_DRAFT_KIND_TEXT {
+fn bad_row(draft: &Draft, row: i64, entries: &mut Vec<Entry>) -> SpielordersResult {
+    if draft.kind() == DraftKind::Text {
         return SPIELORDERS_RESULT_BAD_ARGUMENT;
     }
-    let code = if data.kind == SPIELORDERS_DRAFT_KIND_ORDER {
+    let code = if draft.kind() == DraftKind::Order {
         SPIELORDERS_FAILURE_INVALID_ITEM_POSITION
     } else {
         SPIELORDERS_FAILURE_INVALID_CONTACT_POSITION
@@ -431,7 +288,10 @@ fn bad_row(data: &SpielordersDraftData, row: i64, entries: &mut Vec<Entry>) -> S
     let mut entry = Entry::new(
         code,
         SPIELORDERS_SEVERITY_ERROR,
-        c_text(format!("No row {row}; the draft has {}", data.rows.len())),
+        c_text(format!(
+            "No row {row}; the draft has {}",
+            draft.rows().len()
+        )),
     );
     entry.row = row;
     entries.push(entry);
@@ -445,6 +305,7 @@ pub extern "C" fn spielorders_order_draft(
     order: &SpielordersOrder,
     draft: &mut Option<Box<SpielordersDraft>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(draft, None);
     fallible(None, |_| {
         let read = &order.data().read;
         let rows = read
@@ -475,6 +336,7 @@ pub extern "C" fn spielorders_vendor_draft(
     vendor: &SpielordersVendor,
     draft: &mut Option<Box<SpielordersDraft>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(draft, None);
     fallible(None, |_| {
         let read = &vendor.data().read;
         deliver(
@@ -501,21 +363,13 @@ pub extern "C" fn spielorders_package_new_order_draft(
     draft: &mut Option<Box<SpielordersDraft>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(draft, None);
     fallible(outcome, |entries| {
         let result = package.healthy(entries).map(|_| {
-            let (date, status) = new_order_defaults(Session::uncancellable().today());
-            SpielordersDraft::new(
-                SPIELORDERS_DRAFT_KIND_ORDER,
-                Origin::NewOrder {
-                    root: package.root().to_path_buf(),
-                },
-                vec![
-                    (SPIELORDERS_ORDER_FIELD_TITLE, NEW_ORDER_TITLE.to_owned()),
-                    (SPIELORDERS_ORDER_FIELD_DATE_ORDERED, date),
-                    (SPIELORDERS_ORDER_FIELD_STATUS, status.to_owned()),
-                ],
-                Vec::new(),
-            )
+            SpielordersDraft::of(Draft::new_order(
+                package.root().to_path_buf(),
+                Session::uncancellable().today(),
+            ))
         });
         deliver(result, draft)
     })
@@ -529,19 +383,13 @@ pub extern "C" fn spielorders_package_new_vendor_draft(
     draft: &mut Option<Box<SpielordersDraft>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(draft, None);
     fallible(outcome, |entries| {
         let result = package.healthy(entries).map(|opened| {
-            SpielordersDraft::new(
-                SPIELORDERS_DRAFT_KIND_VENDOR,
-                Origin::NewVendor {
-                    root: package.root().to_path_buf(),
-                },
-                vec![(
-                    SPIELORDERS_VENDOR_FIELD_NAME,
-                    new_vendor_name(&opened.contents.vendors),
-                )],
-                Vec::new(),
-            )
+            SpielordersDraft::of(Draft::new_vendor(
+                package.root().to_path_buf(),
+                &opened.contents.vendors,
+            ))
         });
         deliver(result, draft)
     })
@@ -557,6 +405,7 @@ pub extern "C" fn spielorders_package_adoption_draft(
     draft: &mut Option<Box<SpielordersDraft>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(draft, None);
     fallible(outcome, |entries| {
         let session = Session::new(token);
         let result = package.healthy(entries).and_then(|_| {
@@ -580,7 +429,7 @@ pub extern "C" fn spielorders_package_adoption_draft(
 /// The `SPIELORDERS_DRAFT_KIND_*` of `draft`.
 #[unsafe(no_mangle)]
 pub extern "C" fn spielorders_draft_kind(draft: &SpielordersDraft) -> SpielordersConstant {
-    quietly(SpielordersConstant::NONE, || draft.data.kind)
+    quietly(SpielordersConstant::NONE, || draft.data.kind())
 }
 
 /// Sets `field` of `draft` to `text` exactly as typed, and applies the live rules:
@@ -594,29 +443,12 @@ pub extern "C" fn spielorders_draft_set(
     text: Text<'_>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
-    draft.change(outcome, |data, _| {
-        let Some(text) = text.to_str() else {
+    draft.change(outcome, |draft, entries| {
+        let (Some(text), Some(fact)) = (text.to_str(), fields::fact(field)) else {
             return SPIELORDERS_RESULT_BAD_ARGUMENT;
         };
-        if !data.settable().contains(&field) {
-            return SPIELORDERS_RESULT_BAD_ARGUMENT;
-        }
-        if field == SPIELORDERS_ORDER_FIELD_STATUS
-            && !matches!(data.origin, Origin::Adoption { .. })
-        {
-            let date = draft_date_ordered(
-                data.fact(SPIELORDERS_ORDER_FIELD_STATUS),
-                text,
-                data.fact(SPIELORDERS_ORDER_FIELD_DATE_ORDERED),
-                Session::uncancellable().today(),
-            );
-            SpielordersDraftData::put(&mut data.facts, SPIELORDERS_ORDER_FIELD_DATE_ORDERED, date);
-            data.touch(SPIELORDERS_ORDER_FIELD_DATE_ORDERED);
-        }
-        data.confirmed.retain(|confirmed| *confirmed != field);
-        SpielordersDraftData::put(&mut data.facts, field, text.to_owned());
-        data.touch(field);
-        SPIELORDERS_RESULT_OK
+        let today = Session::uncancellable().today();
+        status(draft.set(fact, text, today), draft, -1, entries)
     })
 }
 
@@ -628,27 +460,13 @@ pub extern "C" fn spielorders_draft_row_insert(
     row: i64,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
-    draft.change(outcome, |data, entries| {
-        if matches!(data.origin, Origin::Repair) {
+    draft.change(outcome, |draft, entries| {
+        if matches!(draft.origin(), Origin::Repair) {
             return SPIELORDERS_RESULT_BAD_ARGUMENT;
         }
-        match index(row, data.rows.len(), true) {
-            Some(at) if data.kind != SPIELORDERS_DRAFT_KIND_TEXT => {
-                let facts = data
-                    .row_settable()
-                    .iter()
-                    .map(|field| (*field, String::new()))
-                    .collect();
-                data.rows.insert(
-                    at,
-                    Row {
-                        origin: None,
-                        facts,
-                    },
-                );
-                SPIELORDERS_RESULT_OK
-            }
-            _ => bad_row(data, row, entries),
+        match index(row, draft.rows().len(), true) {
+            Some(at) => status(draft.insert_row(at), draft, row, entries),
+            None => bad_row(draft, row, entries),
         }
     })
 }
@@ -660,13 +478,10 @@ pub extern "C" fn spielorders_draft_row_remove(
     row: i64,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
-    draft.change(outcome, |data, entries| {
-        match index(row, data.rows.len(), false) {
-            Some(at) => {
-                data.rows.remove(at);
-                SPIELORDERS_RESULT_OK
-            }
-            None => bad_row(data, row, entries),
+    draft.change(outcome, |draft, entries| {
+        match index(row, draft.rows().len(), false) {
+            Some(at) => status(draft.remove_row(at), draft, row, entries),
+            None => bad_row(draft, row, entries),
         }
     })
 }
@@ -679,16 +494,12 @@ pub extern "C" fn spielorders_draft_row_move(
     to: i64,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
-    draft.change(outcome, |data, entries| {
-        let count = data.rows.len();
+    draft.change(outcome, |draft, entries| {
+        let count = draft.rows().len();
         match (index(from, count, false), index(to, count, false)) {
-            (Some(from), Some(to)) => {
-                let moved = data.rows.remove(from);
-                data.rows.insert(to, moved);
-                SPIELORDERS_RESULT_OK
-            }
-            (None, _) => bad_row(data, from, entries),
-            (_, None) => bad_row(data, to, entries),
+            (Some(at), Some(into)) => status(draft.move_row(at, into), draft, from, entries),
+            (None, _) => bad_row(draft, from, entries),
+            (_, None) => bad_row(draft, to, entries),
         }
     })
 }
@@ -702,19 +513,16 @@ pub extern "C" fn spielorders_draft_row_set(
     text: Text<'_>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
-    draft.change(outcome, |data, entries| {
-        let Some(text) = text.to_str() else {
+    draft.change(outcome, |draft, entries| {
+        let (Some(text), Some(fact)) = (text.to_str(), fields::row_fact(field)) else {
             return SPIELORDERS_RESULT_BAD_ARGUMENT;
         };
-        if !data.row_settable().contains(&field) {
+        if !draft.kind().row_facts().contains(&fact) {
             return SPIELORDERS_RESULT_BAD_ARGUMENT;
         }
-        match index(row, data.rows.len(), false) {
-            Some(at) => {
-                SpielordersDraftData::put(&mut data.rows[at].facts, field, text.to_owned());
-                SPIELORDERS_RESULT_OK
-            }
-            None => bad_row(data, row, entries),
+        match index(row, draft.rows().len(), false) {
+            Some(at) => status(draft.set_row(at, fact, text), draft, row, entries),
+            None => bad_row(draft, row, entries),
         }
     })
 }
@@ -730,17 +538,9 @@ pub extern "C" fn spielorders_draft_confirm(
     row: i64,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
-    draft.change(outcome, |data, _| {
-        if data.kind != SPIELORDERS_DRAFT_KIND_ORDER
-            || row != -1
-            || !REUSABLE_FIELDS.contains(&field)
-        {
-            return SPIELORDERS_RESULT_BAD_ARGUMENT;
-        }
-        if !data.confirmed.contains(&field) {
-            data.confirmed.push(field);
-        }
-        SPIELORDERS_RESULT_OK
+    draft.change(outcome, |draft, entries| match fields::order_field(field) {
+        Some(field) if row == -1 => status(draft.confirm(field), draft, row, entries),
+        _ => SPIELORDERS_RESULT_BAD_ARGUMENT,
     })
 }
 
@@ -757,7 +557,9 @@ pub extern "C" fn spielorders_draft_field(
 /// How many rows `draft` holds.
 #[unsafe(no_mangle)]
 pub extern "C" fn spielorders_draft_row_count(draft: &SpielordersDraft) -> i64 {
-    quietly(-1, || i64::try_from(draft.data.rows.len()).unwrap_or(-1))
+    quietly(-1, || {
+        i64::try_from(draft.data.draft.rows().len()).unwrap_or(-1)
+    })
 }
 
 /// The text `field` of row `row` holds, or its live SPIELORDERS_ITEM_FIELD_TOTAL; "" out
@@ -776,7 +578,7 @@ pub extern "C" fn spielorders_draft_row_field(
     })
 }
 
-/// The live Order Total of an Order draft, unrounded; "" while a row's numbers do not
+/// The live Order Total of an Order draft, as computed in floating point and not rounded; "" while a row's numbers do not
 /// parse, and for other drafts.
 #[unsafe(no_mangle)]
 pub extern "C" fn spielorders_draft_total(draft: &SpielordersDraft) -> Text<'_> {
@@ -817,4 +619,40 @@ pub extern "C" fn spielorders_draft_check(
 #[unsafe(no_mangle)]
 pub extern "C" fn spielorders_draft_free(draft: Option<Box<SpielordersDraft>>) {
     quietly((), || drop(draft));
+}
+
+/// Why a record refuses the assignment `name=value` on its own, whatever else a set
+/// assigns with it: the `SPIELORDERS_REASON_*` constant for an identity, a managed
+/// technical field, an ordered collection, a name `family` has no assignable field for, a
+/// required value left blank, or an Item number that is not finite; or -1 when the record
+/// takes it. `family` is SPIELORDERS_FAMILY_ORDER_FIELD, _ITEM_FIELD, _VENDOR_FIELD, or
+/// _CONTACT_FIELD, and any other family takes no assignment. Lets a caller holding
+/// `field=value` text adjudicate it as the library does before setting a Draft field.
+#[unsafe(no_mangle)]
+pub extern "C" fn spielorders_assignment_refusal(
+    family: SpielordersConstant,
+    name: Text<'_>,
+    value: Text<'_>,
+) -> SpielordersConstant {
+    quietly(SPIELORDERS_REASON_UNKNOWN_FIELD, || {
+        let (Some(name), Some(value)) = (name.to_str(), value.to_str()) else {
+            return SPIELORDERS_REASON_UNKNOWN_FIELD;
+        };
+        let refusal = match family {
+            SPIELORDERS_FAMILY_ORDER_FIELD => {
+                crate::order_facts::order_assignment_refusal(name, value)
+            }
+            SPIELORDERS_FAMILY_ITEM_FIELD => {
+                crate::order_facts::item_assignment_refusal(name, value)
+            }
+            SPIELORDERS_FAMILY_VENDOR_FIELD => {
+                crate::vendors::vendor_assignment_refusal(name, value)
+            }
+            SPIELORDERS_FAMILY_CONTACT_FIELD => {
+                crate::vendors::contact_assignment_refusal(name, value)
+            }
+            _ => return SPIELORDERS_REASON_UNKNOWN_FIELD,
+        };
+        refusal.map_or(SpielordersConstant::NONE, codes::reason)
+    })
 }

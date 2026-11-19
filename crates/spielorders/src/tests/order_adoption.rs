@@ -5,6 +5,7 @@
 //! Define integrity, validation, and repair boundaries; Define durable metadata
 //! schemas and version evolution.
 
+use crate::evidence::FactChange;
 use crate::tests::support::committed_order;
 use crate::tests::support::index_is_current;
 use crate::tests::support::{
@@ -13,7 +14,8 @@ use crate::tests::support::{
     reusable,
 };
 use crate::tests::support::{adopted_directory, planned_reuse};
-use crate::{Assignments, Report};
+use crate::tests::support::{committed, created_vendor, edit_vendor, unconfirmed_facts};
+use crate::{Assignments, Change, InUse, Report, VendorRef, answer::DraftFailure};
 use std::ops::Deref;
 use std::path::PathBuf;
 
@@ -21,7 +23,7 @@ use crate::metadata::OrderStatus;
 use crate::ports::FileSystemEntryKind;
 use crate::{Failure, Warning};
 use std::fs;
-use std::os::unix::fs::symlink;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::Path;
 
 /// Where an adoption is made to fail. Every other effect is real.
@@ -42,6 +44,49 @@ enum AdoptionBoundary {
 
 const ORDER_STAGE: &str = ".spielorders/.order.json.spielorders-stage";
 const README_STAGE: &str = ".README.md.spielorders-stage";
+
+#[test]
+fn a_committed_adoption_preserves_a_stage_its_cleanup_cannot_identify() {
+    let tree = package_tree("adoption-unproven-stage");
+    let candidate = tree.path().join("Orders/Candidate");
+    fs::create_dir(&candidate).unwrap();
+    let candidate = candidate.canonicalize().unwrap();
+    let input = (
+        Assignments::new()
+            .assign("title", "Candidate")
+            .assign("date_ordered", "2025-06-07")
+            .assign("status", "received"),
+        Vec::new(),
+    );
+    let plan = crate::plan(
+        &adoption(tree.path(), &candidate, &input),
+        &effects(&PlatformFileSystem),
+    )
+    .result
+    .unwrap();
+    let filesystem = ScriptedFileSystem::new();
+    filesystem
+        .on(Operation::ObserveFileChange)
+        .ending_in(ORDER_STAGE)
+        .reports_evidence(crate::ports::FileChangeEvidence::Uncertain);
+
+    let report = crate::commit(
+        plan,
+        &effects(&filesystem).minting(FixedUuid::new("b86004b3-b753-47bf-88fd-5afe70596a12")),
+    )
+    .result
+    .expect("the Order is committed before its stages are tidied");
+
+    let Report::CommittedWithWarning { warnings, .. } = report else {
+        panic!("the retained stage must be reported: {report:?}");
+    };
+    let stage = candidate.join(ORDER_STAGE);
+    assert!(stage.is_file());
+    assert!(candidate.join(".spielorders/order.json").is_file());
+    assert!(warnings.iter().any(|warning| {
+        matches!(warning, Warning::StagingCleanupFailed(left) if left.location.absolute_path == stage)
+    }), "{warnings:?}");
+}
 
 fn failing_at(boundary: AdoptionBoundary) -> ScriptedFileSystem {
     let filesystem = ScriptedFileSystem::new();
@@ -214,10 +259,10 @@ fn dry_run_is_complete_and_has_no_filesystem_or_identity_effect() {
             "stage_order_record",
             "stage_readme",
             "commit_readme",
+            "replace_vendor_record",
             "commit_order_record",
             "remove_staging",
             "remove_staging",
-            "replace_vendor_record",
             "refresh_package_index",
         ]
     );
@@ -341,29 +386,39 @@ fn managed_partial_invalid_and_damaged_candidates_reject_before_identity_or_writ
 
     let invalid = orders.join("Invalid");
     fs::create_dir(&invalid).unwrap();
-    assert!(matches!(
-        crate::plan(
-            &adoption(
-                tree.path(),
-                invalid.clone(),
-                &(
-                    Assignments::new()
-                        .assign("title", " ")
-                        .assign("date_ordered", "2024-02-30")
-                        .assign("status", "hold"),
-                    vec![
+    assert!(
+        matches!(
+            crate::plan(
+                &adoption(
+                    tree.path(),
+                    invalid.clone(),
+                    &(
                         Assignments::new()
-                            .assign("description", "")
-                            .assign("quantity", f64::NAN.to_string())
-                            .assign("unit_price", "1.0")
-                    ]
-                )
-            ),
-            &effects(&PlatformFileSystem)
-        )
-        .result,
-        Err(Failure::InvalidAssignments(_))
-    ));
+                            .assign("title", " ")
+                            .assign("date_ordered", "2024-02-30")
+                            .assign("status", "hold"),
+                        vec![
+                            Assignments::new()
+                                .assign("description", "")
+                                .assign("quantity", f64::NAN.to_string())
+                                .assign("unit_price", "1.0")
+                        ]
+                    )
+                ),
+                &effects(&PlatformFileSystem)
+            )
+            .result,
+            Err(Failure::InvalidDraft(faults)) if matches!(
+                faults.as_slice(),
+                [
+                    DraftFailure { row: None, failure: Failure::InvalidAssignments(_) },
+                    DraftFailure { row: None, failure: Failure::InvalidFactValue { .. } },
+                    DraftFailure { row: Some(1), failure: Failure::InvalidAssignments(_) },
+                ]
+            )
+        ),
+        "every fault of the facts and the Item's, each where it is, as an edit names them"
+    );
     assert!(matches!(
         crate::plan(
             &adoption(
@@ -379,6 +434,35 @@ fn managed_partial_invalid_and_damaged_candidates_reject_before_identity_or_writ
         .result,
         Err(Failure::UnknownVendor { .. })
     ));
+    let every_fault = crate::plan(
+        &adoption(
+            tree.path(),
+            &invalid,
+            &(
+                input
+                    .0
+                    .clone()
+                    .assign("vendor", "Nonesuch Optics")
+                    .assign("orderer", "Ada"),
+                input.1.clone(),
+            ),
+        ),
+        &effects(&PlatformFileSystem),
+    )
+    .result;
+    assert!(
+        matches!(
+            &every_fault,
+            Err(Failure::InvalidDraft(faults)) if matches!(
+                faults.as_slice(),
+                [
+                    DraftFailure { row: None, failure: Failure::UnknownVendor { .. } },
+                    DraftFailure { row: None, failure: Failure::UnconfirmedReusableValue { field, .. } },
+                ] if field == "orderer"
+            )
+        ),
+        "an adoption names its unknown Vendor and unconfirmed value together: {every_fault:?}"
+    );
 
     fs::write(tree.path().join(".spielorders/vendors.json"), b"not json").unwrap();
     assert!(matches!(
@@ -499,6 +583,35 @@ fn absent_readme_is_created_empty_and_generated_identity_collisions_do_not_mutat
     );
 }
 
+/// What an adoption may not inspect, and the mode that forbids it: the candidate can be
+/// searched by name but not listed, and its Supporting Material cannot be read at all.
+const SEALED: [(&str, u32); 2] = [("", 0o300), ("documents", 0o000)];
+
+/// A candidate sealed as [`SEALED`] says, unsealed again when dropped.
+struct Sealed(PathBuf);
+
+impl Sealed {
+    fn new(candidate: &Path) -> Self {
+        let sealed = Self(candidate.to_path_buf());
+        for (relative, mode) in SEALED.iter().rev() {
+            fs::set_permissions(candidate.join(relative), fs::Permissions::from_mode(*mode))
+                .unwrap();
+        }
+        sealed
+    }
+}
+
+impl Drop for Sealed {
+    fn drop(&mut self) {
+        for (relative, _) in SEALED {
+            let _ = fs::set_permissions(self.0.join(relative), fs::Permissions::from_mode(0o755));
+        }
+    }
+}
+
+/// An adoption reads the candidate's README and its own records by name, and never
+/// lists the candidate or reads its Supporting Material, so a candidate it could do
+/// neither to is adopted all the same.
 #[test]
 fn adoption_never_lists_candidate_contents_or_reads_supporting_material() {
     let tree = package_tree("order-adoption-opaque-evidence");
@@ -512,7 +625,6 @@ fn adoption_never_lists_candidate_contents_or_reads_supporting_material() {
         b"readme is the only user document",
     )
     .unwrap();
-    let scripted = ScriptedFileSystem::new();
     let input = (
         Assignments::new()
             .assign("title", "Opaque")
@@ -520,35 +632,23 @@ fn adoption_never_lists_candidate_contents_or_reads_supporting_material() {
             .assign("status", "ordered"),
         Vec::new(),
     );
-    let plan = crate::plan(
+    let mut uuids = FixedUuid::new("b86004b3-b753-47bf-88fd-5afe70596a12");
+    let sealed = Sealed::new(&candidate);
+
+    let report = crate::plan(
         &adoption(tree.path(), &candidate, &input),
-        &effects(&scripted),
+        &effects(&PlatformFileSystem),
     )
     .result
-    .unwrap();
-    let canonical_candidate = adopted_directory(&plan);
-    let mut uuids = FixedUuid::new("b86004b3-b753-47bf-88fd-5afe70596a12");
+    .map(|plan| crate::commit(plan, &effects(&PlatformFileSystem).minting(&mut uuids)).result);
+    drop(sealed);
 
-    assert!(matches!(
-        crate::commit(plan, &effects(&scripted).minting(&mut uuids)).result,
-        Ok(Report::Committed { .. })
-    ));
-
-    assert!(
-        scripted
-            .paths(Operation::ReadDirectory)
-            .iter()
-            .all(|path| path != &canonical_candidate)
-    );
-    let allowed_reads = [
-        canonical_candidate.join("README.md"),
-        canonical_candidate.join(".spielorders/order.json"),
-        canonical_candidate.join(".spielorders/.order.json.spielorders-stage"),
-    ];
-    assert!(
-        scripted.paths(Operation::Read).iter().all(|path| {
-            !path.starts_with(&canonical_candidate) || allowed_reads.contains(path)
-        })
+    let Ok(Ok(Report::Committed { result, .. })) = report else {
+        panic!("a candidate that cannot be listed is adopted: {report:?}");
+    };
+    assert_eq!(
+        committed_order(&result).readme_text.as_deref(),
+        Some("readme is the only user document")
     );
     assert_eq!(
         fs::read(candidate.join("documents/quote.bin")).unwrap(),
@@ -596,8 +696,8 @@ fn every_precommit_effect_failure_rejects_and_restores_the_unmanaged_candidate()
             crate::commit(plan, &effects(&failing_at(boundary)).minting(&mut uuids)).result;
 
         assert!(
-            report.is_err(),
-            "{boundary:?} must reject before canonical commit"
+            matches!(report, Err(crate::Failure::CommitFailed { .. })),
+            "{boundary:?} must reject before canonical commit, leaving nothing behind: {report:?}"
         );
         assert_eq!(
             fs::read(candidate.join("support.bin")).unwrap(),
@@ -651,6 +751,66 @@ fn rollback_failure_is_explicit_without_overwriting_preexisting_candidate_bytes(
             .join(".spielorders/.order.json.spielorders-stage")
             .exists()
     );
+}
+
+#[test]
+fn an_adoption_that_stops_keeps_a_readme_someone_replaced_after_it_was_created() {
+    let tree = package_tree("order-adoption-replaced-readme");
+    let candidate = tree.path().join("Orders/Candidate");
+    fs::create_dir(&candidate).unwrap();
+    let input = (
+        Assignments::new()
+            .assign("title", "Candidate")
+            .assign("date_ordered", "2025-06-07")
+            .assign("status", "received"),
+        Vec::new(),
+    );
+    let plan = crate::plan(
+        &adoption(tree.path(), &candidate, &input),
+        &effects(&PlatformFileSystem),
+    )
+    .result
+    .unwrap();
+    // The adoption has created the README by the time it publishes the record, which is
+    // when someone else replaces it, and the publication then fails.
+    let filesystem = ScriptedFileSystem::new();
+    filesystem
+        .on(Operation::LinkNewFile)
+        .ending_in(".spielorders/order.json")
+        .once()
+        .preceded_by(|outside| {
+            let readme = outside
+                .call()
+                .path
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join("README.md");
+            outside.remove_file(&readme);
+            outside.write(&readme, b"Notes written meanwhile");
+        })
+        .fails();
+    let mut uuids = FixedUuid::new("58fc4a94-b3f7-41b2-b2a0-f81f552305f1");
+
+    let report = crate::commit(plan, &effects(&filesystem).minting(&mut uuids)).result;
+
+    let Err(failed) = report else {
+        panic!("the failed publication is a rejection")
+    };
+    assert!(
+        failed
+            .cleanup_failures()
+            .iter()
+            .any(|left| left.location.package_relative_path.as_deref()
+                == Some("Orders/Candidate/README.md")),
+        "the README the adoption no longer owns is named: {failed:?}"
+    );
+    assert_eq!(
+        fs::read(candidate.join("README.md")).unwrap(),
+        b"Notes written meanwhile"
+    );
+    assert!(!candidate.join(".spielorders/order.json").exists());
 }
 
 #[test]
@@ -760,9 +920,69 @@ fn reusable_value_outcome_change_after_planning_rejects_before_identity_or_write
     )
     .result;
 
-    assert!(matches!(report, Err(Failure::PreconditionsChanged { .. })));
+    assert_eq!(
+        unconfirmed_facts(&report),
+        [("orderer", FactChange::Differs)],
+        "the refusal names the value whose reuse moved, as a creation's does"
+    );
     assert!(!candidate.join(".spielorders").exists());
     assert!(!candidate.join("README.md").exists());
+}
+
+/// The Vendor an adoption resolved is part of what it was authorized against: one renamed
+/// or deleted before the commit is named as the fact that moved, and nothing is adopted.
+#[test]
+fn a_vendor_renamed_or_deleted_after_planning_refuses_the_adoption_naming_it() {
+    for (label, change) in [
+        ("renamed", FactChange::Differs),
+        ("deleted", FactChange::Vanished),
+    ] {
+        let tree = package_tree(&format!("order-adoption-vendor-{label}"));
+        let root = tree.path();
+        let vendor = created_vendor(root, "Tarnwick", "e0990d31-06aa-42e9-97c8-088e3e894822");
+        let candidate = root.join("Orders/Legacy candidate");
+        fs::create_dir(&candidate).unwrap();
+        let input = (
+            Assignments::new()
+                .assign("title", "Legacy")
+                .assign("date_ordered", "2020-05-06")
+                .assign("status", "complete")
+                .assign("vendor", "Tarnwick"),
+            Vec::new(),
+        );
+        let plan = crate::plan(
+            &adoption(root, &candidate, &input),
+            &effects(&PlatformFileSystem),
+        )
+        .result
+        .unwrap();
+        let vendor = VendorRef::Id(vendor);
+        committed(
+            &match change {
+                FactChange::Differs => edit_vendor(
+                    root,
+                    vendor,
+                    Assignments::new().assign("name", "Tarnwick Inc"),
+                ),
+                _ => Change::DeleteVendor {
+                    root: root.into(),
+                    vendor,
+                    in_use: InUse::Refuse,
+                },
+            },
+            &effects(&PlatformFileSystem),
+        );
+        let mut uuid = FixedUuid::new("90cb9604-9826-4c8d-b213-224b28117eac");
+
+        let report = crate::commit(plan, &effects(&PlatformFileSystem).minting(&mut uuid)).result;
+
+        assert_eq!(
+            unconfirmed_facts(&report),
+            [("vendor_name", change)],
+            "{label}"
+        );
+        assert!(!candidate.join(".spielorders").exists(), "{label}");
+    }
 }
 
 #[test]

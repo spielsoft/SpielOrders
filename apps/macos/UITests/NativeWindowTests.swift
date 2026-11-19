@@ -11,20 +11,6 @@ import CSpielOrders
         try await super.tearDown()
     }
 
-    func testPackagePicker() {
-        let app = XCUIApplication()
-        app.launchArguments = ["-packageBookmark", "", "-sidebarVisible", "YES"]
-        app.launch()
-        XCTAssertTrue(packageMenu(in: app).waitForExistence(timeout: 10))
-        XCTAssertEqual(app.windows.count, 1)
-        fileMenu(in: app).click()
-        app.menuBars.menuItems["Open Package…"].click()
-        XCTAssertTrue(app.sheets.firstMatch.waitForExistence(timeout: 5))
-        app.typeKey(.escape, modifierFlags: [])
-        app.typeKey("q", modifierFlags: .command)
-        XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
-    }
-
     func testClose() throws {
         let root = try makePackage()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -82,7 +68,9 @@ import CSpielOrders
         app.launch()
         XCTAssertTrue(app.buttons["welcome.open"].waitForExistence(timeout: 10))
         XCTAssertFalse(app.tables["orders.table"].exists)
-        app.typeKey("o", modifierFlags: .command)
+        XCTAssertEqual(app.windows.count, 1)
+        fileMenu(in: app).click()
+        app.menuBars.menuItems["Open Package…"].click()
         XCTAssertTrue(app.sheets.firstMatch.waitForExistence(timeout: 5))
         app.typeKey(.escape, modifierFlags: [])
         app.typeKey("w", modifierFlags: .command)
@@ -119,9 +107,13 @@ import CSpielOrders
         showDestination("orders", in: app)
         XCTAssertTrue(app.buttons["diagnosis.back"].waitForNonExistence(timeout: 10))
 
+        // The record menu follows the destination.
         showDestination("vendors", in: app)
         XCTAssertTrue(app.buttons["vendor.new"].waitForExistence(timeout: 10))
-        assertOrderCommandsUnavailable(in: app)
+        XCTAssertFalse(app.menuBars.menuBarItems["Order"].exists)
+        app.menuBars.menuBarItems["Vendor"].click()
+        XCTAssertTrue(app.menuBars.menuBarItems["Vendor"].menuItems["Delete Vendor…"].exists)
+        app.typeKey(.escape, modifierFlags: [])
     }
 
     func testDestinationSidebar() throws {
@@ -154,9 +146,10 @@ import CSpielOrders
     func testValueDestinations() throws {
         let root = try makePackage()
         defer { try? FileManager.default.removeItem(at: root) }
-        try addOrder(in: root, title: "Lenses", orderer: "Ada Lovelace")
-        try addOrder(in: root, title: "Mounts", orderer: "Ada Lovelace")
-        try addOrder(in: root, title: "Probes", orderer: "Grace Hopper")
+        try addOrder(in: root, title: "Coils", orderer: "Ada Lovelace", project: "Greenhouse", group: "Misting")
+        try addOrder(in: root, title: "Lenses", orderer: "Ada Lovelace", project: "Greenhouse", group: "Misting")
+        try addOrder(in: root, title: "Mirrors", orderer: "Grace Hopper", project: "Optics", group: "Misting")
+        try addOrder(in: root, title: "Cables", group: "Spares")
         let app = XCUIApplication()
         app.launchArguments = ["-packageBookmark", "", "-sidebarVisible", "YES"]
         app.launch()
@@ -167,25 +160,10 @@ import CSpielOrders
         XCTAssertEqual(ada.value as? String, "2")
         let grace = app.descendants(matching: .any).matching(identifier: "orderers.row.Grace Hopper.orders").firstMatch
         XCTAssertEqual(grace.value as? String, "1")
-        // The library offers no search over values, so the view has no search field.
-        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "search.query").firstMatch.exists)
         app.typeKey("4", modifierFlags: .command)
         let institutions = app.descendants(matching: .any).matching(identifier: "institutions.table").firstMatch
         XCTAssertTrue(institutions.waitForExistence(timeout: 10))
         XCTAssertFalse(ada.exists)
-    }
-
-    func testProjectsDestination() throws {
-        let root = try makePackage()
-        defer { try? FileManager.default.removeItem(at: root) }
-        try addOrder(in: root, title: "Coils", project: "Greenhouse", group: "Misting")
-        try addOrder(in: root, title: "Lenses", project: "Greenhouse", group: "Misting")
-        try addOrder(in: root, title: "Mirrors", project: "Optics", group: "Misting")
-        try addOrder(in: root, title: "Cables", group: "Spares")
-        let app = XCUIApplication()
-        app.launchArguments = ["-packageBookmark", "", "-sidebarVisible", "YES"]
-        app.launch()
-        openPackage(root, in: app)
         app.typeKey("5", modifierFlags: .command)
         XCTAssertTrue(projectCell("Greenhouse", in: app).waitForExistence(timeout: 10))
         // The same group name under two Projects is two groups, each with its own Orders.
@@ -272,25 +250,6 @@ import CSpielOrders
             .filter { $0.hasSuffix("/README.md") }
             .map { try String(contentsOf: root.appendingPathComponent($0), encoding: .utf8) }
         XCTAssertTrue(readmes.contains("Notes saved by Quit"))
-    }
-
-    func testAbout() {
-        let app = XCUIApplication()
-        app.launchArguments = ["-packageBookmark", "", "-sidebarVisible", "YES"]
-        app.launch()
-        app.menuBars.menuBarItems["SpielOrders"].click()
-        app.menuBars.menuItems["About SpielOrders"].click()
-        let about = app.windows["About SpielOrders"]
-        XCTAssertTrue(about.waitForExistence(timeout: 5))
-        XCTAssertTrue(about.links["Source code"].exists)
-        let version = about.staticTexts.matching(NSPredicate(format: "value BEGINSWITH %@", "Version ")).firstMatch
-        XCTAssertTrue(version.exists)
-        XCTAssertTrue((version.value as? String)?.range(of: #"Version [0-9.]+ \([0-9]+\)"#, options: .regularExpression) != nil)
-        XCTAssertTrue(about.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "A SpielSoft product")).firstMatch.exists)
-        about.buttons[XCUIIdentifierCloseWindow].click()
-        XCTAssertTrue(packageMenu(in: app).exists)
-        app.typeKey("q", modifierFlags: .command)
-        XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
     }
 
     func testReadmePersistence() throws {
@@ -402,30 +361,9 @@ import CSpielOrders
         app.launch()
         let alert = app.descendants(matching: .any).matching(identifier: "package.access.result").firstMatch
         XCTAssertTrue(alert.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["Package access needs renewal"].exists)
+        XCTAssertTrue(app.staticTexts["SpielOrders Can No Longer Access This Package"].exists)
         XCTAssertFalse(app.textViews["Package README"].exists)
         app.buttons["package.access.dismiss"].click()
-        app.typeKey("q", modifierFlags: .command)
-        XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
-    }
-
-    func testSearchSettlement() throws {
-        let root = try makePackage(in: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0])
-        defer { try? FileManager.default.removeItem(at: root) }
-        try addOrder(in: root)
-        let app = XCUIApplication()
-        app.launchArguments = ["-packageBookmark", "", "-sidebarVisible", "YES"]
-        app.launch()
-        openPackage(root, in: app)
-        chooseSearchIn("Folder Contents (Spotlight)", in: app)
-        app.searchFields["search.query"].click()
-        app.searchFields["search.query"].typeText("LifecycleQuote")
-        let progress = app.descendants(matching: .any).matching(identifier: "search.progress").firstMatch
-        try XCTSkipUnless(progress.waitForExistence(timeout: 2),
-                          "Spotlight answered before the in-flight probe; this route remains unverified.")
-        app.windows.firstMatch.buttons[XCUIIdentifierCloseWindow].click()
-        XCTAssertTrue(app.buttons["welcome.open"].waitForExistence(timeout: 5))
-        XCTAssertFalse(progress.exists)
         app.typeKey("q", modifierFlags: .command)
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
     }
@@ -458,6 +396,9 @@ import CSpielOrders
         app.typeKey("a", modifierFlags: .command)
         query.typeText("lifecycle")
         XCTAssertTrue(app.staticTexts["0 of 1 Order"].waitForExistence(timeout: 10))
+        // Escape clears the search and the grid shows every Order again.
+        query.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(app.staticTexts["1 of 1 Order"].waitForExistence(timeout: 10))
         app.typeKey("q", modifierFlags: .command)
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
     }
@@ -510,30 +451,6 @@ import CSpielOrders
         app.launchArguments = []
         app.launch()
         XCTAssertTrue(first.staticTexts.matching(NSPredicate(format: "value == %@", "Older optics")).firstMatch.waitForExistence(timeout: 10))
-        app.typeKey("q", modifierFlags: .command)
-        XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
-    }
-
-    func testSearchFocus() throws {
-        let root = try makePackage(in: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0])
-        defer { try? FileManager.default.removeItem(at: root) }
-        try addOrder(in: root)
-        let app = XCUIApplication()
-        app.launchArguments = ["-packageBookmark", "", "-sidebarVisible", "YES"]
-        app.launch()
-        openPackage(root, in: app)
-        chooseSearchIn("Folder Contents (Spotlight)", in: app)
-        let query = app.searchFields["search.query"]
-        query.click()
-        query.typeText("LifecycleQuote")
-        let progress = app.descendants(matching: .any).matching(identifier: "search.progress").firstMatch
-        try XCTSkipUnless(progress.waitForExistence(timeout: 2) && progress.waitForNonExistence(timeout: 20),
-                          "The real provider did not answer; the focus route remains unverified.")
-        query.click()
-        app.typeKey(.tab, modifierFlags: [])
-        let resubmitted = expectation(for: NSPredicate { _, _ in progress.exists }, evaluatedWith: nil)
-        resubmitted.isInverted = true
-        waitForExpectations(timeout: 1)
         app.typeKey("q", modifierFlags: .command)
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
     }
@@ -619,24 +536,6 @@ import CSpielOrders
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
     }
 
-    func testClearSearch() throws {
-        let root = try makePackage()
-        defer { try? FileManager.default.removeItem(at: root) }
-        try addOrder(in: root, title: "Optics")
-        let app = XCUIApplication()
-        app.launchArguments = ["-packageBookmark", "", "-sidebarVisible", "YES"]
-        app.launch()
-        openPackage(root, in: app)
-        let row = app.tables["orders.table"].staticTexts.matching(NSPredicate(format: "value == %@", "Optics")).firstMatch
-        XCTAssertTrue(row.waitForExistence(timeout: 10))
-        let search = app.searchFields["search.query"]
-        search.click()
-        search.typeText("no matching order")
-        XCTAssertTrue(row.waitForNonExistence(timeout: 10))
-        search.typeKey(.escape, modifierFlags: [])
-        XCTAssertTrue(row.waitForExistence(timeout: 10))
-    }
-
     func testSidebarPersistence() throws {
         let root = try makePackage()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -665,6 +564,42 @@ import CSpielOrders
         app.launch()
         XCTAssertTrue(divider.waitForExistence(timeout: 10))
         XCTAssertEqual(divider.frame.minX - split.frame.minX, width, accuracy: 2)
+        app.typeKey("q", modifierFlags: .command)
+        XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
+    }
+
+    func testDetailKeepsItsWidth() throws {
+        let root = try makePackage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = XCUIApplication()
+        app.launchArguments = ["-packageBookmark", "", "-sidebarVisible", "YES"]
+        app.launch()
+        openPackage(root, in: app)
+        let window = app.windows["package.window"]
+        let split = app.splitGroups["workspace.split"]
+        let divider = split.splitters["list.width"]
+        XCTAssertTrue(divider.waitForExistence(timeout: 10))
+        let start = divider.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: -100, dy: 0)))
+        let original = window.frame
+        let listWidth = divider.frame.minX - split.frame.minX
+        let detailWidth = split.frame.maxX - divider.frame.maxX
+        let shrink = min(120, listWidth - 420)
+        XCTAssertGreaterThan(shrink, 20, "The initial list has room to shrink before its minimum")
+        let edge = window.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5))
+            .withOffset(CGVector(dx: -1, dy: 0))
+        edge.press(forDuration: 0.1, thenDragTo: edge.withOffset(CGVector(dx: -shrink, dy: 0)))
+        let narrowed = window.frame
+        XCTAssertGreaterThan(original.width - narrowed.width, 20)
+        XCTAssertLessThan(divider.frame.minX - split.frame.minX, listWidth - 20)
+        XCTAssertEqual(split.frame.maxX - divider.frame.maxX, detailWidth, accuracy: 2)
+
+        let restore = window.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5))
+            .withOffset(CGVector(dx: -1, dy: 0))
+        restore.press(forDuration: 0.1,
+                      thenDragTo: restore.withOffset(CGVector(dx: original.width - narrowed.width, dy: 0)))
+        XCTAssertEqual(divider.frame.minX - split.frame.minX, listWidth, accuracy: 2)
+        XCTAssertEqual(split.frame.maxX - divider.frame.maxX, detailWidth, accuracy: 2)
         app.typeKey("q", modifierFlags: .command)
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
     }

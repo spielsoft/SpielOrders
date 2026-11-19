@@ -5,8 +5,9 @@ import SwiftUI
 
 /// Chooses one of a field's values. The field completes inline and filters its list as you
 /// type; when the text names no value, the list ends with New Orderer “text”… (named for the
-/// field), which offers to add it. The chosen text is sent to the draft when the field ends,
-/// and the library refuses one the Package lacks, which the field then marks.
+/// field), which offers to add it. The field ends on a value it lists, in that value's
+/// spelling, or on none, which the library judges; text that names no value is not kept,
+/// and the field returns to the draft's value.
 struct ValueChooser: NSViewRepresentable {
     let label: String
     let identifier: String
@@ -15,7 +16,8 @@ struct ValueChooser: NSViewRepresentable {
     /// The draft's value, which the field shows.
     let value: String
     let values: [String]
-    /// Values the Package has, including ones not offered for new use, such as hidden Vendors.
+    /// Values the Package has, including ones not offered for new use, such as hidden Vendors;
+    /// the field ends only on one of these, or on none.
     let knownValues: [String]
     /// Ends the field with `text`, typed or chosen.
     let choose: (String) -> Void
@@ -59,15 +61,9 @@ struct ValueChooser: NSViewRepresentable {
             }
             coordinator.shown = value
         }
-        if !box.isEnabled {
-            // Its own color keeps the value legible while the field is disabled.
-            let attributes: [NSAttributedString.Key: Any] = [.foregroundColor: NSColor.labelColor,
-                                                             .font: box.font ?? .systemFont(ofSize: 0)]
-            box.attributedStringValue = NSAttributedString(string: value, attributes: attributes)
-        }
         if coordinator.problem != problem {
             coordinator.problem = problem
-            let attributes: [NSAttributedString.Key: Any] = [.foregroundColor: NSColor.systemRed,
+            let attributes: [NSAttributedString.Key: Any] = [.foregroundColor: NSColor.problemText,
                                                              .font: box.font ?? .systemFont(ofSize: 0)]
             box.placeholderAttributedString = problem.map { NSAttributedString(string: $0, attributes: attributes) }
         }
@@ -184,7 +180,12 @@ struct ValueChooser: NSViewRepresentable {
 
         private func finish(_ box: NSComboBox, with item: Item) {
             switch item {
-            case let .value(value):
+            case let .value(text):
+                guard let value = chosen(text) else {
+                    NSSound.beep()
+                    restore(box)
+                    return
+                }
                 shown = value
                 parent.choose(value)
             case let .new(text):
@@ -194,8 +195,16 @@ struct ValueChooser: NSViewRepresentable {
             }
         }
 
+        /// The value `text` chooses: the draft's own value, none, or the Package value it
+        /// names, as the library compares them; nil when it names no value.
+        private func chosen(_ text: String) -> String? {
+            if text.utf8.elementsEqual(parent.value.utf8) { return text }
+            if text.trimmingCharacters(in: .whitespaces).isEmpty { return "" }
+            return parent.knownValues.first { valueMatches($0, text) }
+        }
+
         private func restore(_ box: NSComboBox) {
-            box.deselectItem(at: box.indexOfSelectedItem)
+            if box.indexOfSelectedItem >= 0 { box.deselectItem(at: box.indexOfSelectedItem) }
             box.stringValue = parent.value
             shown = parent.value
             list(box)
@@ -221,7 +230,7 @@ extension ValueChooser {
         case SPIELORDERS_ORDER_FIELD_ORDERER: "Orderer"
         case SPIELORDERS_ORDER_FIELD_ORDERING_INSTITUTION: "Institution"
         case SPIELORDERS_ORDER_FIELD_PROJECT: "Project"
-        default: "Group"
+        default: "Order Group"
         }
     }
 }

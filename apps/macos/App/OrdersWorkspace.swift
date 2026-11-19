@@ -22,8 +22,9 @@ private struct OrdersGrid: View {
             .padding(12)
             OrdersTable(model: model)
                 .overlay {
-                    if model.orders.isEmpty, let reason = model.reloadReason {
-                        ReloadRequired(model: model, reason: reason)
+                    if model.orders.isEmpty {
+                        EmptyRecordList(model: model, total: model.orderCount, noun: "Order",
+                                        hint: "Add one with + or ⌘N.")
                     }
                 }
             CreationBar(title: "New Order", identifier: "order.new", action: model.newOrder)
@@ -37,10 +38,13 @@ private struct OrderDetail: View {
     @Bindable var model: DesktopModel
 
     var body: some View {
-        if model.multipleSelection.isEmpty {
-            SelectedOrder(model: model)
-        } else {
+        if !model.multipleSelection.isEmpty {
             SelectedOrders(model: model)
+        } else if model.orderEditor != nil || model.currentOrder != nil {
+            SelectedOrder(model: model)
+        } else if !model.orders.isEmpty {
+            ContentUnavailableView { Text("No Order Selected") }
+                .accessibilityIdentifier("order.detail.placeholder")
         }
     }
 }
@@ -67,29 +71,28 @@ private struct SelectedOrders: View {
 
 /// The detail for one selected Order: its editor, or what can be shown without one.
 private struct SelectedOrder: View {
+    /// The narrowest the Order lays out, its facts in one column; a narrower detail scrolls.
+    private static let narrowest: CGFloat = 420
     @Bindable var model: DesktopModel
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                if let editor = model.orderEditor {
-                    OrderEditorView(model: model, editor: editor)
-                        .id(ObjectIdentifier(editor))
-                    RecordActions(model: model, editor: editor)
-                    if let row = model.currentOrder, model.search.searchesFiles, !editor.isNew {
-                        Divider()
-                        MatchedFiles(model: model, row: row)
-                    }
-                    if let row = model.currentOrder, case let .healthy(details) = model.inspection {
-                        Divider()
-                        OrderAttachments(model: model, row: row, details: details)
-                    }
-                } else {
-                    OrderSummary(model: model)
+        // The README is last, so it takes the height the form and Items leave.
+        DetailScroll(narrowest: Self.narrowest) {
+            if let editor = model.orderEditor {
+                OrderEditorView(model: model, editor: editor)
+                    .id(ObjectIdentifier(editor))
+                RecordActions(model: model, editor: editor)
+                if let row = model.currentOrder, model.search.searchesFiles, !editor.isNew {
+                    Divider()
+                    MatchedFiles(model: model, row: row)
                 }
+                if let row = model.currentOrder, case let .healthy(details) = model.inspection {
+                    Divider()
+                    OrderAttachments(model: model, row: row, details: details)
+                }
+            } else {
+                OrderSummary(model: model)
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .accessibilityLabel("Order detail")
         .accessibilityIdentifier("order.detail")
@@ -102,10 +105,7 @@ private struct MatchedFiles: View {
     let row: OrderRow
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Matched Files")
-                .font(.headline)
-                .accessibilityAddTraits(.isHeader)
+        DetailSection("Matched Files") {
             if let answer = model.contents.answer(for: model.search.text) {
                 let files = answer.matches(in: row)
                 if files.isEmpty {
@@ -170,8 +170,8 @@ private struct MatchedFile: View {
     }
 }
 
-/// The detail without an Order's editor: a damaged Order's diagnosis, an Order that cannot
-/// be edited until the Package is reloaded, or no selection.
+/// The detail without an Order's editor: a damaged Order's diagnosis, or an Order that cannot
+/// be edited until the Package is reloaded.
 private struct OrderSummary: View {
     @Bindable var model: DesktopModel
 
@@ -184,20 +184,22 @@ private struct OrderSummary: View {
                 } else {
                     RecordHeading(title: row.values[OrderColumn.title.field] ?? "", summary: summary(row),
                                   prefix: "order.inspector") {
-                        ReloadBadge(model: model, explanation: "Reload the Package to edit this Order.",
+                        ReloadBadge(model: model, explanation: "Reload the Package to keep editing.",
                                     identifier: "order.inspector.reloadRequired")
                     }
                     OrderFolder(model: model, order: row, prefix: "order.inspector")
+                    Divider()
                     OrderAttachments(model: model, row: row, details: details)
                 }
-            case let .damaged(messages):
-                DamagedOrder(model: model, row: row, messages: messages)
+            case let .damaged(problems):
+                DamagedOrder(model: model, row: row, notices: problems.map(Notice.init))
             case nil:
                 if model.busy {
                     ProgressView("Reading Order…")
                 }
-                HStack {
+                HStack(alignment: .firstTextBaseline) {
                     Text(row.directoryName)
+                        .font(.title2)
                         .textSelection(.enabled)
                     if !model.busy {
                         ReloadBadge(model: model, explanation: "The Order’s details couldn’t be read. Reload the Package.",
@@ -206,9 +208,6 @@ private struct OrderSummary: View {
                     ShowOrderInFinder(model: model, row: row)
                 }
             }
-        } else {
-            Text("Select an Order")
-                .foregroundStyle(.secondary)
         }
     }
 
@@ -223,20 +222,20 @@ private struct OrderSummary: View {
 private struct DamagedOrder: View {
     @Bindable var model: DesktopModel
     let row: OrderRow
-    let messages: [String]
+    let notices: [Notice]
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
             Text(row.directoryName)
-                .font(.headline)
+                .font(.title2)
                 .textSelection(.enabled)
                 .accessibleValue("Directory Name", value: row.directoryName, identifier: "order.inspector.directory")
-            ProblemBadge(level: .problem, title: "Damaged Order", lines: messages,
-                         actions: [model.detailsAction(messages, prefix: "order.inspector")],
+            ProblemBadge(level: .problem, title: "Damaged Order", lines: notices.map(\.summary),
+                         actions: [model.detailsAction(notices, prefix: "order.inspector")],
                          identifier: "order.inspector.diagnosis")
             ShowOrderInFinder(model: model, row: row)
         }
-        Button("Open Diagnostics") { model.showDiagnosis(directory: row.directory) }
+        Button("Diagnose Order") { model.showDiagnosis(directory: row.directory) }
             .disabled(model.busy)
             .accessibilityIdentifier("order.inspector.diagnose")
     }
@@ -250,15 +249,14 @@ private struct OrderAttachments: View {
     let details: OrderDetails
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("README")
-                .font(.headline)
-                .accessibilityAddTraits(.isHeader)
+        DetailSection("README") {
             if let readme = model.readme, readme.order?.id == row.id {
                 ReadmeArea(model: model, readme: readme, label: "Order README", identifier: "order.readme.editor",
                            height: 88...400)
+                    .frame(maxHeight: .infinity)
             } else if details.readmeState == SPIELORDERS_README_STATE_UNREADABLE {
-                Text("README is unreadable. Reload the Package to refresh.")
+                Text("The README couldn’t be read. Reload the Package.")
+                    .foregroundStyle(.secondary)
             } else {
                 Text(details.readmeText)
                     .font(.system(.body, design: .monospaced))
@@ -275,21 +273,25 @@ struct ShowInFinderButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button("Show in Finder", systemImage: "folder", action: action)
-            .labelStyle(.iconOnly)
+        Button(action: action) { IconLabel("Show in Finder", systemImage: "folder") }
             .buttonStyle(.borderless)
             .help("Show in Finder")
     }
 }
 
-/// Shows the Order's folder in Finder, placed beside its directory name.
+/// Opens the Order's folder in Finder to show its contents, placed beside its directory name.
 struct ShowOrderInFinder: View {
     @Bindable var model: DesktopModel
     let row: OrderRow
 
     var body: some View {
-        ShowInFinderButton { model.revealOrder(row.id) }
-            .disabled(model.busy)
-            .accessibilityIdentifier("order.inspector.reveal")
+        Button { model.revealOrder(row.id, contents: true) } label: {
+            IconLabel("Open Folder in Finder", systemImage: "folder")
+        }
+        .buttonStyle(.borderless)
+        .help("Open Folder in Finder")
+        // A click while a field saves waits for the save, so the button doesn't dim for it.
+        .disabled(model.busy && !model.committing)
+        .accessibilityIdentifier("order.inspector.reveal")
     }
 }

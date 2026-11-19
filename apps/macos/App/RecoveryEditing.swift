@@ -29,6 +29,13 @@ extension DesktopModel {
         }
     }
 
+    /// Diagnoses where `notices` are located: the one Order they all concern, or otherwise the
+    /// Package, whose diagnosis lists each Order its findings concern.
+    func diagnose(_ notices: [Notice]) {
+        let orders = Set(notices.map(\.order))
+        showDiagnosis(directory: orders.count == 1 ? orders.first ?? nil : nil)
+    }
+
     func leaveDiagnosis() {
         guard !busy, canBrowseRecords, confirmDiscard(retry: { [self] in leaveDiagnosis() }) else { return }
         discardEditors()
@@ -66,7 +73,7 @@ extension DesktopModel {
                 } onCancel: { cancellation.request() }
                 try Task.checkCancellation()
                 let supplied = editor.action.fields.map { editor.values[$0] ?? "" }.joined(separator: "\n")
-                guard await dialogs.review("Apply \(editor.action.title)?", explanation: "Review the supplied values and planned filesystem changes before committing.",
+                guard await dialogs.review("Apply \(editor.action.title)?", explanation: "Review the values and file changes below before choosing Apply Repair.",
                     details: editor.repair.path + "\n\n" + supplied + "\n\n" + plan.operations.joined(separator: "\n"),
                     identifier: "repair.confirmation", approve: "Apply Repair", destructive: false) else { return }
                 let result = try await library.commit(plan)

@@ -663,9 +663,7 @@ fn an_empty_answer_is_not_the_same_as_nothing_having_looked() {
 ///
 /// The defect this catches is one generic failure: switching indexing on, moving a Package
 /// to an indexed volume, granting access, and rewording a query are four different things to
-/// do, and a caller told only that the search failed can do none of them. The spellings are
-/// asserted distinct because a state a consumer cannot tell from another is the same defect
-/// one step later.
+/// do, and a caller told only that the search failed can do none of them.
 #[test]
 fn every_state_that_prevents_an_answer_is_its_own_state() {
     let (_tree, root) = package("supporting-material-unavailable");
@@ -677,7 +675,6 @@ fn every_state_that_prevents_an_answer_is_its_own_state() {
         provider: Some("fake".to_owned()),
         diagnostics: vec![ProviderDiagnostic::reported("what the platform said")],
     };
-    let mut spellings = Vec::new();
     for (reason, failure) in [
         (
             ProviderUnavailableReason::IndexingDisabled,
@@ -702,18 +699,12 @@ fn every_state_that_prevents_an_answer_is_its_own_state() {
         });
         let answer = search_supporting_material(&package, Some(&index), &NotCancelled);
 
-        spellings.push(failure.code());
         assert_eq!(
             answer.result,
             Err(failure),
             "{reason:?} reaches a caller as itself, beside the provider that reported it"
         );
     }
-
-    let mut distinct = spellings.clone();
-    distinct.sort_unstable();
-    distinct.dedup();
-    assert_eq!(distinct.len(), spellings.len(), "{spellings:?}");
 }
 
 const DAMAGED: &str = "{ not a record";

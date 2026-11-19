@@ -32,8 +32,9 @@ the whole Order belong in its README. Quantity and Unit Price have no sign restr
 
 Item Total Price is Quantity multiplied by Unit Price, and Order Total is the sum of Item
 Total Prices. Neither total is stored or manually overridden; fees, shipping, taxes, and
-discounts may be ordinary Order Items. Calculations are not rounded, and each front end
-chooses the precision it displays monetary values with.
+discounts may be ordinary Order Items. Totals are computed in binary floating point and
+answered as computed, not rounded, so a total may carry a floating-point artifact such as
+1483.6799999999998; each front end rounds monetary values to the precision it displays.
 
 Order Currency is an optional three-letter ISO code applied uniformly as decoration to
 every price in the Order. When absent, numbers are unlabeled; changing the code relabels
@@ -79,8 +80,19 @@ user-defined grouping within a Project with no prescribed meaning.
 
 Orders are merged by naming them in precedence order. The first is kept with its Order
 ID, Title, Date Ordered, Status, and every fact it has; each later Order in turn fills only
-what the result still lacks: a missing optional fact, an Order Group that comes with its
-Project or joins the same Project, and each Item the result does not already hold. Every
+what the result still lacks: a missing optional fact, and an Order Group that comes with
+its Project or joins the same Project. An Order that gains a Project this way takes that
+Project's group in place of its own, as changing its Project would clear it. Each later
+Order adds every Item the kept Order did not hold before the merge, so a later Order's
+repeated lines stay repeated. A later Order that would add Items priced in a currency
+other than the result's refuses the merge, since a currency change never converts prices.
+A merge never labels prices that were unlabeled: having no currency counts as a currency
+of its own, so the result refuses any later Order whose Items are priced differently from
+its own, whichever of the two lacks a currency, and the owner sets the missing currency
+first. An Order with no Items brings no prices, so a result with neither Items nor a
+currency takes the currency of the first later Order that brings some, a result that
+states a currency keeps it, and a later Order with no Items never refuses. The outcome does not depend on which Orders lack Items.
+Every
 entry of a later Order's directory that the result does not hold is moved into the kept
 Order at the same relative path, and an entry it already holds — the README included —
 stays behind. What remains of each later Order is removed as an Order removal removes

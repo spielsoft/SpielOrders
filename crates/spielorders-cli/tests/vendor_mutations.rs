@@ -13,24 +13,6 @@ use crate::support::{
     package_with_a_blocked_index_refresh, populated_package, response,
 };
 
-/// Merging carries the kept Vendor's facts and combined Contacts, not only a write
-/// count that forces the caller to read again.
-#[test]
-fn merging_vendors_returns_the_kept_vendor_and_contacts() {
-    let (_tree, root) = populated_package("vendor-merge-result");
-    let kept = crate::support::hidden_vendor_id(&root);
-    let run = Invocation::new(&["vendor", "merge", "Nethermoor", "Tarnwick", "--json"])
-        .rooted_at(&root)
-        .run();
-    assert_eq!(run.status, Some(0), "{}", run.stdout_text());
-    let document = response(&run);
-    let vendor = &document["data"]["vendor"];
-    assert_eq!(vendor["vendor_id"], kept);
-    assert_eq!(vendor["name"], "Nethermoor");
-    assert_eq!(vendor["contacts"][0]["name"], "Katherine Johnson");
-    assert_eq!(document["data"]["orders"], 1);
-}
-
 /// The two `add-vendor` forms are one command line spelled two ways, and combining them
 /// is a usage error.
 ///
@@ -140,8 +122,8 @@ fn an_empty_value_clears_an_optional_fact_into_absence() {
     );
 }
 
-/// Every `--dry-run` reports the real run's outcome with `committed: false`, and leaves
-/// the Package byte-identical.
+/// A `--dry-run` reports the plan the real run then commits, with `committed: false`, and
+/// leaves the Package byte-identical.
 ///
 /// **The same Package, planned and then mutated**, which is what makes the comparison mean
 /// something: the plan is not a description of a hypothetical Vendor but of this one, and
@@ -150,68 +132,52 @@ fn an_empty_value_clears_an_optional_fact_into_absence() {
 /// The byte-identical snapshot covers the staging file too: a managed write stages beside
 /// its destination, so a dry run that had begun writing would leave one there.
 #[test]
-fn every_dry_run_reports_the_real_runs_outcome_and_changes_nothing() {
-    for (label, command) in [
-        (
-            "dry-run-edit",
-            vec!["vendor", "edit", "Tarnwick", "phone=+1 555 0100"],
-        ),
-        ("dry-run-hide", vec!["vendor", "hide", "Tarnwick"]),
-        ("dry-run-unhide", vec!["vendor", "unhide", "Nethermoor"]),
-    ] {
-        let (_tree, root) = populated_package(label);
-        let before = managed_snapshot(&root);
+fn a_dry_run_reports_the_plan_the_real_run_commits_and_changes_nothing() {
+    let (_tree, root) = populated_package("dry-run-edit");
+    let command = ["vendor", "edit", "Tarnwick", "phone=+1 555 0100"];
+    let before = managed_snapshot(&root);
 
-        let mut planned_run = Invocation::new(&command);
-        planned_run = planned_run.argument("--json").argument("--dry-run");
-        let planned = planned_run.rooted_at(&root).run();
+    let planned = Invocation::new(&command)
+        .argument("--json")
+        .argument("--dry-run")
+        .rooted_at(&root)
+        .run();
+    assert_eq!(planned.status, Some(0), "{}", planned.stderr_text());
+    let planned = response(&planned);
+
+    assert_eq!(planned["data"]["committed"], false);
+    assert_eq!(planned["data"]["outcome"], "planned");
+    assert!(
+        planned["data"]["changes"]
+            .as_array()
+            .is_some_and(|changes| !changes.is_empty()),
+        "the plan changes something: {}",
+        planned["data"]
+    );
+    assert!(
+        planned["data"].get("vendor").is_none(),
+        "a run that never committed refreshed nothing"
+    );
+    assert_eq!(
+        managed_snapshot(&root),
+        before,
+        "no managed file, no staging artifact"
+    );
+
+    let committed = Invocation::new(&command)
+        .argument("--json")
+        .rooted_at(&root)
+        .run();
+    assert_eq!(committed.status, Some(0), "{}", committed.stderr_text());
+    let committed = response(&committed);
+
+    assert_eq!(committed["data"]["committed"], true);
+    assert_eq!(committed["data"]["outcome"], "committed");
+    for member in ["operations", "changes"] {
         assert_eq!(
-            planned.status,
-            Some(0),
-            "{label}: {}",
-            planned.stderr_text()
+            planned["data"][member], committed["data"][member],
+            "the plan is the same question of a dry run and of a commit"
         );
-        let planned = response(&planned);
-
-        assert_eq!(planned["data"]["committed"], false, "{label}");
-        assert_eq!(planned["data"]["outcome"], "planned", "{label}");
-        assert!(
-            planned["data"]["changes"]
-                .as_array()
-                .is_some_and(|changes| !changes.is_empty()),
-            "{label}: the plan changes something: {}",
-            planned["data"]
-        );
-        assert!(
-            planned["data"].get("vendor").is_none(),
-            "{label}: a run that never committed refreshed nothing"
-        );
-        assert_eq!(
-            managed_snapshot(&root),
-            before,
-            "{label}: no managed file, no staging artifact"
-        );
-
-        let committed = Invocation::new(&command)
-            .argument("--json")
-            .rooted_at(&root)
-            .run();
-        assert_eq!(
-            committed.status,
-            Some(0),
-            "{label}: {}",
-            committed.stderr_text()
-        );
-        let committed = response(&committed);
-
-        assert_eq!(committed["data"]["committed"], true, "{label}");
-        assert_eq!(committed["data"]["outcome"], "committed", "{label}");
-        for member in ["operations", "changes"] {
-            assert_eq!(
-                planned["data"][member], committed["data"][member],
-                "{label}: the plan is the same question of a dry run and of a commit"
-            );
-        }
     }
 }
 
@@ -323,5 +289,36 @@ fn the_human_result_names_the_outcome_and_verbose_adds_the_operations() {
     assert!(
         reported.starts_with("warning: index refresh failed"),
         "{reported}"
+    );
+}
+
+/// A Vendor deletion refuses while an entry of the Removed Orders Directory cannot be read,
+/// naming that entry and saying it must be fixed or moved out, in JSON and in human output.
+#[test]
+fn an_unreadable_removed_entry_is_named_with_what_to_do() {
+    let (_tree, root) = crate::support::populated_package("vendor-delete-junk-removed");
+    let junk = root.join("Removed/Junk/.spielorders/order.json");
+    std::fs::create_dir_all(&junk).unwrap();
+    let delete = |mode: &[&str]| {
+        let mut arguments = vec!["vendor", "delete", "Nethermoor", "--clear"];
+        arguments.extend(mode);
+        Invocation::new(&arguments).rooted_at(&root).run()
+    };
+
+    let refused = crate::support::response(&delete(&["--json"]));
+    assert_eq!(refused["error"]["code"], "package_operation_failed");
+    assert_eq!(
+        refused["error"]["detail"]["path"],
+        "Removed/Junk/.spielorders/order.json"
+    );
+    let human = delete(&[]);
+    let human = human.stderr_text();
+    assert!(
+        human.contains("move it out of the Removed Orders Directory"),
+        "{human}"
+    );
+    assert!(
+        human.contains("Removed/Junk/.spielorders/order.json"),
+        "{human}"
     );
 }

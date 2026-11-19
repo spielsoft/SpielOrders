@@ -34,7 +34,8 @@
               "action": "replace_managed_record",
               "required_values": [
                 "record"
-              ]
+              ],
+              "command": "spielorders order repair --root <PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace case=order_semantic_invalid:Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/.spielorders/order.json:<DIGEST> action=replace_managed_record record="
             }
           ]
         }

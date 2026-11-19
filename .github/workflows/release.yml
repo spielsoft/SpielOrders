@@ -1,0 +1,107 @@
+# Publishes a CLI release for a version tag: the repository check, then one archive per
+# platform holding the CLI and the agent guidance from the tagged commit, each with its
+# SHA-256, and the installer that installs them. Run by hand on a branch, it checks,
+# builds, and installs each archive without publishing anything.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    strategy:
+      matrix:
+        runner: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The tag names the workspace version
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          version=$(cargo metadata -q --format-version 1 --no-deps --locked |
+            python3 -c 'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "spielorders-cli"))')
+          test "$GITHUB_REF_NAME" = "v$version" || {
+            echo "Tag $GITHUB_REF_NAME does not name version $version" >&2
+            exit 1
+          }
+      - name: Repository check
+        run: scripts/check.sh
+
+  build:
+    needs: check
+    strategy:
+      matrix:
+        include:
+          - platform: macos-arm64
+            runner: macos-latest
+            target: aarch64-apple-darwin
+          - platform: linux-x86_64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build
+        run: |
+          rustup target add ${{ matrix.target }}
+          cargo build --release --locked -p spielorders-cli --target ${{ matrix.target }}
+      - name: Package
+        run: >
+          sh scripts/package-cli.sh target/${{ matrix.target }}/release/spielorders
+          ${{ matrix.platform }} dist
+      - name: Install the archive with the release installer
+        shell: bash
+        run: |
+          scratch=$(mktemp -d)
+          mkdir "$scratch/home" "$scratch/zsh"
+          if [ "$RUNNER_OS" = macOS ]; then login=/bin/zsh; else login=/bin/bash; fi
+          HOME="$scratch/home" ZDOTDIR="$scratch/zsh" SHELL=$login \
+            sh scripts/install.sh --prefix "$scratch/prefix" \
+            --archive dist/spielorders-${{ matrix.platform }}.tar.gz
+          "$scratch/prefix/bin/spielorders" --version
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            test "$("$scratch/prefix/bin/spielorders" --version)" = "spielorders ${GITHUB_REF_NAME#v}"
+          fi
+          diff -r crates/spielorders/agent-guidance "$scratch/prefix/share/spielorders/agent-guidance"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: spielorders-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp scripts/install.sh dist/install.sh
+          gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title "SpielOrders CLI $GITHUB_REF_NAME" \
+            --notes "Install or update the CLI and its agent guidance:
+
+          curl -fsSL https://github.com/${{ github.repository }}/releases/download/$GITHUB_REF_NAME/install.sh | sh -s -- --version $GITHUB_REF_NAME"

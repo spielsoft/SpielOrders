@@ -8,7 +8,7 @@
 
 use crate::tests::support::{
     PlatformFileSystem, adopted_order, diagnosed_order, findings, initialized_package,
-    order_record as record,
+    record_path as record,
 };
 use crate::{readme::DiagnosticCode, readme::DiagnosticEvidence};
 use std::fs;

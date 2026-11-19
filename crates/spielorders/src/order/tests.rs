@@ -9,10 +9,6 @@ const MINIMAL_ORDER: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../contracts/examples/v1/minimal/order.json"
 ));
-const FULL_ORDER: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../contracts/examples/v1/full/order.json"
-));
 
 #[test]
 fn minimal_order_validates_with_an_empty_total() {
@@ -22,29 +18,6 @@ fn minimal_order_validates_with_an_empty_total() {
 
     assert!(validated.item_totals().is_empty());
     assert_eq!(validated.order_total(), 0.0);
-}
-
-#[test]
-fn impossible_gregorian_date_is_reported() {
-    let source = String::from_utf8(MINIMAL_ORDER.to_vec())
-        .expect("fixture is UTF-8")
-        .replacen("2026-07-19", "2026-02-31", 1);
-    let order = OrderDocument::from_json_bytes(source.as_bytes())
-        .expect("impossible date retains the published structural shape");
-
-    let failures = order.validate().expect_err("impossible date is invalid");
-
-    assert_eq!(failures, vec![OrderValidationFailure::InvalidDateOrdered]);
-}
-
-#[test]
-fn full_order_validates_and_calculates_item_and_order_totals() {
-    let order = OrderDocument::from_json_bytes(FULL_ORDER).expect("full fixture parses");
-
-    let validated = order.validate().expect("full Order is valid");
-
-    assert_eq!(validated.item_totals(), &[169.0]);
-    assert_eq!(validated.order_total(), 169.0);
 }
 
 #[test]
@@ -153,7 +126,13 @@ fn gregorian_leap_year_and_month_lengths_are_enforced() {
         assert!(order.validate().is_ok(), "{date} should be a real date");
     }
 
-    for date in ["0000-01-01", "1900-02-29", "2100-02-29", "2026-04-31"] {
+    for date in [
+        "0000-01-01",
+        "1900-02-29",
+        "2100-02-29",
+        "2026-02-31",
+        "2026-04-31",
+    ] {
         let source = fixture.replacen("2026-07-19", date, 1);
         let order = OrderDocument::from_json_bytes(source.as_bytes()).expect("date shape parses");
         assert_eq!(

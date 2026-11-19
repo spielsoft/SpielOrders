@@ -63,11 +63,12 @@ private struct DestinationRow: View {
 
     private func actions(_ warnings: [Notice]) -> [NoticeAction] {
         let prefix = "navigation.\(destination.key)"
+        // As diagnose(_:) decides: one Order's warnings diagnose that Order, any others the Package.
+        let orders = Set(warnings.map(\.order))
+        let subject = orders.count == 1 && !orders.contains(nil) ? "Order" : "Package"
         return [
-            NoticeAction("Details…", identifier: prefix + ".details") { [model] in model.showDetails(warnings) },
-            NoticeAction("Open Diagnostics", identifier: prefix + ".diagnose") { [model] in
-                model.showDiagnosis(directory: nil)
-            },
+            NoticeAction("Details", identifier: prefix + ".details") { [model] in model.showDetails(warnings) },
+            NoticeAction("Diagnose \(subject)", identifier: prefix + ".diagnose") { [model] in model.diagnose(warnings) },
         ]
     }
 }

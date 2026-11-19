@@ -5,7 +5,7 @@ import SwiftUI
 /// The rows of a draft as a plain spreadsheet: Items of an Order or Contacts of a
 /// Vendor. Double-click or Return edits a cell, Tab advances, and dragging reorders.
 /// Optional columns are chosen from the header's menu; multiline text is edited in a popover.
-/// The table grows with its rows to a limit, then scrolls.
+/// The table grows with its rows, to a limit past which it scrolls when it has one.
 struct DraftRowsTable: NSViewRepresentable {
     @Bindable var model: DesktopModel
     let editor: RecordEditor
@@ -16,16 +16,17 @@ struct DraftRowsTable: NSViewRepresentable {
     let placeholder: String
     /// The currency money columns are shown in.
     var currency = ""
+    /// The most rows the table's height shows before it scrolls; nil shows every row.
+    var rowLimit: Int? = 10
 
-    /// How many rows the table's height shows: room for a first row, and a limit past which
-    /// it scrolls.
-    private static let shownRows = 2...10
+    /// The fewest rows the table's height shows, room for a first row.
+    private static let leastRows = 2
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView scroll: NSScrollView, context: Context) -> CGSize? {
         guard let table = scroll.documentView as? NSTableView else { return nil }
-        let rows = min(max(editor.rowCount, Self.shownRows.lowerBound), Self.shownRows.upperBound)
+        let rows = min(max(editor.rowCount, Self.leastRows), rowLimit ?? .max)
         let header = table.headerView?.frame.height ?? 0
         let content = NSSize(width: proposal.width ?? table.frame.width,
                              height: header + CGFloat(rows) * (table.rowHeight + table.intercellSpacing.height))
@@ -113,9 +114,15 @@ struct DraftRowsTable: NSViewRepresentable {
                 rowsRevision = editor.rowsRevision
                 revision = editor.revision
                 table.reloadData()
+                fitColumns()
             } else if revision != editor.revision {
                 revision = editor.revision
-                if editingCell == nil { table.reloadData() }
+                // A value changed, as a save or another field leaves it: the rows keep their
+                // views, and the cells below redraw in place, so the table never flickers.
+                if editingCell == nil {
+                    if table.numberOfRows != editor.rowCount { table.reloadData() }
+                    fitColumns()
+                }
             }
             refreshVisibleCells()
             let wanted = editor.selectedRows.filteredIndexSet { $0 < table.numberOfRows }
@@ -158,6 +165,23 @@ struct DraftRowsTable: NSViewRepresentable {
                     }
                 }
             }
+        }
+
+        /// Sizes each column that is not flexible to its widest text, its title included, up to
+        /// its width, and gives the flexible columns the rest.
+        private func fitColumns() {
+            guard let table else { return }
+            let measure = NSTextFieldCell(textCell: "")
+            for (index, column) in table.tableColumns.enumerated() {
+                guard let definition = definition(index), !definition.flexible else { continue }
+                let widest = (0..<editor.rowCount).map { row in
+                    measure.stringValue = definition.display(editor.rowField(row, definition.field),
+                                                             currency: parent.currency)
+                    return measure.cellSize.width + RowCell.inset
+                }.max() ?? 0
+                column.width = min(max(widest, column.headerCell.cellSize.width), definition.width)
+            }
+            table.sizeToFit()
         }
 
         /// The definition of the table's column at `index`; none for the notes indicator.
@@ -203,7 +227,7 @@ struct DraftRowsTable: NSViewRepresentable {
             column.style(text, row: row, table: parent.identifier)
             let message = problems.isEmpty ? nil : problems.joined(separator: "\n")
             if let message {
-                text.textColor = .systemRed
+                text.textColor = .problemText
                 text.toolTip = message
             } else if column.multiline, !value.isEmpty {
                 text.toolTip = value
@@ -270,6 +294,7 @@ struct DraftRowsTable: NSViewRepresentable {
             }
             text.isEditable = false
             text.isSelectable = false
+            text.truncates = true
             if valid { editor.finishField() }
         }
 
@@ -324,6 +349,15 @@ struct DraftRowsTable: NSViewRepresentable {
             editCell(column: first, row: table.selectedRow)
         }
 
+        /// Opens the selected row's Notes, where the rows have them.
+        func editSelectedNotes() {
+            guard isEnabled, parent.columns.contains(where: \.multiline), let row = table?.selectedRow, row >= 0 else {
+                NSSound.beep()
+                return
+            }
+            editNotes(row: row)
+        }
+
         @objc func editClickedCell(_ table: NSTableView) {
             let clicked = table.tableColumns.indices.contains(table.clickedColumn)
                 ? table.tableColumns[table.clickedColumn] : nil
@@ -347,6 +381,7 @@ struct DraftRowsTable: NSViewRepresentable {
             text.stringValue = editor.rowField(row, definition.field)
             text.isEditable = true
             text.isSelectable = true
+            text.truncates = false
             table.editColumn(column, row: row, with: nil, select: true)
             if text.currentEditor() != nil { editor.trackFocus(definition.field, row: row) }
         }
@@ -413,12 +448,14 @@ struct DraftRowsTable: NSViewRepresentable {
                     item.setAccessibilityIdentifier("\(parent.identifier).column.visibility.\(key)")
                     menu.addItem(item)
                 }
-            } else if isEnabled, table.clickedRow >= 0 {
+            } else if isEnabled, let row = [table.clickedRow, table.selectedRow].first(where: { $0 >= 0 }) {
+                // A menu opened from the keyboard or VoiceOver has no clicked row; it acts on the selected one.
                 let item = NSMenuItem(title: "Edit Notes…", action: #selector(editClickedNotes(_:)),
-                                      keyEquivalent: "")
+                                      keyEquivalent: "\r")
+                item.keyEquivalentModifierMask = .option
                 item.target = self
-                item.representedObject = table.clickedRow
-                item.setAccessibilityIdentifier("\(parent.identifier).row.\(table.clickedRow).editNotes")
+                item.representedObject = row
+                item.setAccessibilityIdentifier("\(parent.identifier).row.\(row).editNotes")
                 menu.addItem(item)
             }
         }
@@ -474,6 +511,7 @@ struct DraftRowsTable: NSViewRepresentable {
 /// A column of a draft's row table.
 struct RowColumn {
     let field: Int32
+    /// The width a flexible column starts at, or the most that a column sized to its text takes.
     let width: CGFloat
     var editable = true
     var numeric = false
@@ -507,6 +545,8 @@ struct RowColumn {
         table.setAccessibilityIdentifier(identifier)
         table.usesAlternatingRowBackgroundColors = true
         table.rowHeight = 22
+        // A truncated value shows in full while the pointer rests on it.
+        table.allowsExpansionToolTips = true
         table.allowsMultipleSelection = true
         table.allowsEmptySelection = true
         table.allowsColumnReordering = false
@@ -553,7 +593,7 @@ final class RowsScrollView: NSScrollView {
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        placeholder.textColor = .tertiaryLabelColor
+        placeholder.textColor = .secondaryLabelColor
         addSubview(placeholder)
     }
 
@@ -591,8 +631,7 @@ final class RowCell: NSTableCellView {
         self.identifier = identifier
         text.isBordered = false
         text.drawsBackground = false
-        text.lineBreakMode = .byTruncatingTail
-        text.cell?.isScrollable = true
+        text.truncates = true
         text.delegate = delegate
         text.translatesAutoresizingMaskIntoConstraints = false
         symbol.isBordered = false
@@ -613,6 +652,9 @@ final class RowCell: NSTableCellView {
 
     required init?(coder: NSCoder) { nil }
 
+    /// The room around a cell's text: its margins and the text field's own.
+    static let inset: CGFloat = 8
+
     /// Shows the symbol with `message` as its tooltip, or hides it for nil.
     func mark(_ message: String?, label: String, identifier: String) {
         symbol.isHidden = message == nil
@@ -623,6 +665,18 @@ final class RowCell: NSTableCellView {
         let marked = message != nil
         NSLayoutConstraint.deactivate([marked ? plainEnd : markedEnd])
         NSLayoutConstraint.activate([marked ? markedEnd : plainEnd])
+    }
+}
+
+private extension NSTextField {
+    /// Whether the text ends in an ellipsis where it overflows, rather than scrolling to follow
+    /// the insertion point as it does while being edited.
+    var truncates: Bool {
+        get { lineBreakMode == .byTruncatingTail }
+        set {
+            cell?.isScrollable = !newValue
+            lineBreakMode = newValue ? .byTruncatingTail : .byClipping
+        }
     }
 }
 
@@ -672,11 +726,17 @@ private extension NSPasteboard.PasteboardType {
     static let rowIndex = NSPasteboard.PasteboardType("com.spielsoft.SpielOrders.draft-row")
 }
 
-/// Return begins editing the selected row; Delete removes the selected rows.
+/// Return begins editing the selected row, Option-Return opens its Notes, and Delete removes
+/// the selected rows.
 final class RowsTableView: NSTableView {
     weak var coordinator: DraftRowsTable.Coordinator?
 
     override func keyDown(with event: NSEvent) {
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        if modifiers == .option, [36, 76].contains(event.keyCode) {
+            coordinator?.editSelectedNotes()
+            return
+        }
         guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else {
             super.keyDown(with: event)
             return

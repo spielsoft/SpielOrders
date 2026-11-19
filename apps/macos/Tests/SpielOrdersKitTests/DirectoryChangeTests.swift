@@ -62,21 +62,6 @@ private func listed(_ session: PackageSession) async throws -> [OrderRow] {
     #expect(FileManager.default.fileExists(atPath: moved.path))
 }
 
-@Test func cancelledDirectoryPlan() async throws {
-    let root = try initializedPackage()
-    defer { try? FileManager.default.removeItem(at: root) }
-    let directory = try createOrder(in: root)
-    let session = PackageSession()
-    _ = try await session.open(root, cancellation: LibraryCancellation())
-    let row = try #require(try await listed(session).first)
-    let cancellation = LibraryCancellation()
-    cancellation.request()
-    await #expect(throws: (any Error).self) {
-        try await session.planDirectoryChange(row, action: .remove, cancellation: cancellation)
-    }
-    #expect(FileManager.default.fileExists(atPath: directory.path))
-}
-
 private func details(_ session: PackageSession) async throws -> OrderDetails? {
     let row = try #require(try await listed(session).first)
     guard case let .healthy(details) = try await session.inspectOrder(row, cancellation: LibraryCancellation()) else {

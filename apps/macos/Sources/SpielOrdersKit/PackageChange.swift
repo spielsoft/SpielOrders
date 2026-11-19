@@ -70,7 +70,7 @@ extension PackageSession {
         let path = spielorders_report_final_path(report)
         let directory = path.pointee == 0 ? nil
             : URL(fileURLWithFileSystemRepresentation: path, isDirectory: true, relativeTo: nil)
-        notices += refreshAfterCommit(change.source)
+        notices += refreshAfterCommit(change.source, report: report)
         let requiresReopen = package == nil
         if change.action == .trash, let directory {
             let trashFailure: String?
@@ -87,7 +87,7 @@ extension PackageSession {
         var messages: [String]
         switch change.action {
         case .align: messages = ["Directory name aligned."]
-        case .remove: messages = ["Order removed. It remains recoverable at \(directory?.path ?? "the Removed Orders directory")."]
+        case .remove: messages = ["Order removed. It remains recoverable at \(directory?.path ?? "the Removed Orders folder")."]
         default: messages = ["Repair committed."]
         }
         if requiresReopen { messages.append("Reload the Package before continuing.") }

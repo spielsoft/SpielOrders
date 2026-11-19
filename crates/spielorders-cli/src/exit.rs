@@ -46,12 +46,11 @@ impl Exit {
 }
 
 // The response envelope's `ok` and the process status are two spellings of one fact and
-// must never disagree. What keeps them together is that `response::Response` has exactly
-// two constructors — `answered` can only produce `ok: true` and `failed` only
-// `ok: false` — and that every process-level test asserts the document and the status
-// together. There is deliberately no `Exit::is_success` for the envelope to consult: an
-// accessor no code path reads would look like the mechanism while the constructors were
-// actually doing the work, and `tests/response_contract.rs` is where the pair is checked.
+// must never disagree. What keeps them together is that `response::Answer` has exactly
+// two variants — `Answered` can only produce `ok: true` and `Failed` only `ok: false` —
+// and that both the envelope and the status are made from the one variant, while every
+// process-level test asserts the document and the status together.
+// `tests/response_contract.rs` is where the pair is checked.
 
 // Ctrl-C is absent from the enum above, and that is a choice this code makes rather than
 // a rule it is held to. Two things are decided: an interrupted process exits by the

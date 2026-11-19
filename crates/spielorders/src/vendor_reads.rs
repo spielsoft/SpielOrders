@@ -12,7 +12,7 @@
 //! Decision sources: Define the Rust CLI capability contract; Define Vendor identity and
 //! historical semantics.
 
-use crate::vendors::vendor_aggregate;
+use crate::vendors::vendors_location;
 use crate::{
     Failure, VendorRef,
     canonical::{ManagedContext, load_package},
@@ -76,7 +76,7 @@ pub(crate) fn read_vendor<F: FileSystem>(
             },
             VendorRef::Name(name) => Failure::UnknownVendor {
                 name: name.clone(),
-                scope: vendor_aggregate(&package),
+                scope: vendors_location(&package),
             },
         });
     };

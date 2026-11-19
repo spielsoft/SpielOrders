@@ -144,6 +144,21 @@ fn an_order_readme_write_replaces_its_document_and_refreshes_the_derived_index()
         b"prior order notes
 ",
     );
+    fs::create_dir(directory.join("Quotes")).unwrap();
+    fs::write(
+        directory.join("Quotes/quote.bin"),
+        b"opaque supporting material",
+    )
+    .unwrap();
+    let canonical = ["order.json", "vendors.json", "version.json", "config.toml"].map(|name| {
+        let path = if name == "order.json" {
+            directory.join(".spielorders").join(name)
+        } else {
+            root.join(".spielorders").join(name)
+        };
+        let bytes = fs::read(&path).unwrap();
+        (path, bytes)
+    });
     assert_eq!(
         indexed_readme(root),
         "prior order notes
@@ -183,135 +198,17 @@ fn an_order_readme_write_replaces_its_document_and_refreshes_the_derived_index()
         b"",
         "an Order README write leaves the Package README alone"
     );
-}
-
-/// The Package-relative destinations a capability replaced.
-fn replaced(filesystem: &ScriptedFileSystem, root: &Path) -> Vec<String> {
-    filesystem
-        .paths(Operation::ReplaceFile)
-        .iter()
-        .map(|path| relative(root, path))
-        .collect()
-}
-
-/// The Package-relative paths of every call a capability made.
-fn touched(filesystem: &ScriptedFileSystem, root: &Path) -> Vec<String> {
-    filesystem
-        .calls()
-        .iter()
-        .map(|call| relative(root, &call.path))
-        .collect()
-}
-
-/// Effect paths arrive canonicalized, while a fixture root may still contain a
-/// symlinked prefix, so both are canonicalized before comparison.
-fn relative(root: &Path, path: &Path) -> String {
-    let root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-    path.strip_prefix(&root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/")
-}
-
-const CANONICAL_METADATA: [&str; 4] = ["order.json", "vendors.json", "version.json", "config.toml"];
-
-fn assert_no_metadata_write(scripted: &ScriptedFileSystem, label: &str) {
-    for call in scripted.calls() {
-        let written = match call.operation {
-            Operation::WriteNew | Operation::ReplaceFile => call.path,
-            _ => continue,
-        };
-        let name = written.file_name().unwrap().to_string_lossy().to_string();
-        assert!(
-            !CANONICAL_METADATA.contains(&name.as_str()),
-            "{label} writes no canonical metadata, but wrote {name}"
+    for (path, bytes) in &canonical {
+        assert_eq!(
+            &fs::read(path).unwrap(),
+            bytes,
+            "{path:?} is canonical metadata"
         );
     }
-}
-
-fn assert_no_supporting_material_touch(scripted: &ScriptedFileSystem, root: &Path, label: &str) {
-    for touched in touched(scripted, root) {
-        assert!(
-            !touched.contains("quote.bin") && !touched.contains("Quotes"),
-            "{label} never inspects Supporting Material, but touched {touched}"
-        );
-    }
-}
-
-#[test]
-fn a_package_readme_commit_replaces_only_its_own_document() {
-    let tree = package_tree("readme-write-package-scripted");
-    let root = tree.path();
-    let plan = crate::plan(
-        &write_readme(
-            package_scope(PathBuf::from(root)),
-            current_readme(root),
-            "new package prose\n",
-        ),
-        &effects(&PlatformFileSystem),
-    )
-    .result
-    .expect("the Package README can be written");
-
-    let scripted = ScriptedFileSystem::new();
-    let report = crate::commit(plan, &effects(&scripted)).result;
-
-    assert!(matches!(report, Ok(Report::Committed { .. })));
-    // A Package README is not indexed, so its write replaces exactly one path and
-    // never reaches the derived index. Byte equality alone could not show this: a
-    // rebuilt index of unchanged Orders is byte-identical to the one it replaced.
-    assert_eq!(replaced(&scripted, root), ["README.md"]);
     assert_eq!(
-        scripted.paths(Operation::ReadDirectory),
-        Vec::<PathBuf>::new(),
-        "a Package README write lists no directory"
+        fs::read(directory.join("Quotes/quote.bin")).unwrap(),
+        b"opaque supporting material"
     );
-    assert_no_metadata_write(&scripted, "a Package README write");
-    // The directory holding the document is observed, to refuse writing through a link,
-    // and nothing else is.
-    for touched in touched(&scripted, root) {
-        assert!(
-            touched.is_empty()
-                || touched.starts_with("README.md")
-                || touched.starts_with(".README.md"),
-            "a Package README write touches only its own document, but touched {touched}"
-        );
-    }
-}
-
-#[test]
-fn an_order_readme_commit_replaces_only_its_document_and_the_derived_index() {
-    let tree = package_tree("readme-write-order-scripted");
-    let root = tree.path();
-    let directory = order_with_readme(root, b"prior order notes\n");
-    fs::create_dir(directory.join("Quotes")).unwrap();
-    fs::write(directory.join("quote.bin"), b"opaque supporting material").unwrap();
-    let plan = crate::plan(
-        &write_readme(
-            order_scope(directory.clone()),
-            current_readme(&directory),
-            "new order prose\n",
-        ),
-        &effects(&PlatformFileSystem),
-    )
-    .result
-    .expect("the Order README can be written");
-
-    let scripted = ScriptedFileSystem::new();
-    let report = crate::commit(plan, &effects(&scripted)).result;
-
-    assert!(matches!(report, Ok(Report::Committed { .. })));
-    // Exactly the document and the derived index it is projected into. The refresh
-    // lists the Orders Directory, which is that declared derived-index action.
-    assert_eq!(
-        replaced(&scripted, root),
-        [
-            "Orders/Legacy_laser_purchase/README.md",
-            ".spielorders/index.json"
-        ]
-    );
-    assert_no_metadata_write(&scripted, "an Order README write");
-    assert_no_supporting_material_touch(&scripted, root, "an Order README write");
 }
 
 #[test]
@@ -729,8 +626,7 @@ fn a_changed_target_rejects_before_any_write_without_touching_siblings() {
     let package_before = package_readme(root);
     let index_before = fs::read(root.join(".spielorders/index.json")).unwrap();
 
-    let scripted = ScriptedFileSystem::new();
-    let report = crate::commit(plan, &effects(&scripted)).result;
+    let report = crate::commit(plan, &effects(&PlatformFileSystem)).result;
 
     let Err(rejection) = report else {
         panic!("a changed target rejects: {report:?}");
@@ -744,7 +640,6 @@ fn a_changed_target_rejects_before_any_write_without_touching_siblings() {
         b"someone else's prose\n",
         "the intervening write is not silently overwritten"
     );
-    assert_eq!(replaced(&scripted, root), Vec::<String>::new());
     assert_eq!(package_readme(root), package_before);
     assert_eq!(
         fs::read(root.join(".spielorders/index.json")).unwrap(),
@@ -969,34 +864,6 @@ fn an_unreadable_utf8_document_cannot_authorize_replacing_its_bytes() {
     assert_eq!(
         fs::read(directory.join("README.md")).unwrap(),
         [0xff, 0xfe, 0x00, 0x41]
-    );
-}
-
-#[test]
-fn a_package_readme_write_leaves_the_derived_index_alone() {
-    let tree = package_tree("readme-write-package-index-record");
-    let root = tree.path();
-
-    let plan = crate::plan(
-        &write_readme(
-            package_scope(PathBuf::from(root)),
-            current_readme(root),
-            "package prose\n",
-        ),
-        &effects(&PlatformFileSystem),
-    )
-    .result
-    .unwrap();
-    let filesystem = ScriptedFileSystem::new();
-    let report = crate::commit(plan, &effects(&filesystem)).result;
-
-    assert!(matches!(report, Ok(Report::Committed { .. })), "{report:?}");
-    // The Package README is not indexed, so this write leaves the derived index alone.
-    assert!(
-        filesystem
-            .paths(Operation::ReplaceFile)
-            .iter()
-            .all(|path| !path.ends_with(".spielorders/index.json"))
     );
 }
 

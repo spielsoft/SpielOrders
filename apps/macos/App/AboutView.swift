@@ -35,7 +35,7 @@ struct AboutView: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .padding(.top, 16)
-            Link("Source code", destination: Self.sourceCodeURL)
+            Link("Source Code", destination: Self.sourceCodeURL)
                 .font(.footnote)
                 .accessibilityIdentifier("about.sourceCode")
         }

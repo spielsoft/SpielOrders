@@ -25,14 +25,15 @@ actual selected executable and matching resources and verifies resolution in a f
 shell. The GUI makes no claim about the CLI's installation, currentness, or PATH; its own
 process PATH is not evidence of what Terminal or an agent will select.
 
-The [development installer](../../scripts/install-cli.py) builds from a checkout. Public
-distribution still needs a GitHub-hosted bootstrap and prebuilt CLI with matching guidance.
-That installer selects the platform and architecture, verifies the downloaded payload's
-checksum before extraction or execution, stages the complete installation, preserves
-unrelated prefix and shell contents, and rolls back a failed publication or PATH check.
-The prebuilt CLI release
-assets and that installer belong to release readiness; app signing, notarization, and
-Store submission belong to the Store release.
+Public distribution is a GitHub-hosted [bootstrap installer](../../scripts/install.sh)
+and prebuilt CLI release archives with matching guidance, published by the
+[release workflow](../../.github/workflows/release.yml). The installer selects the
+platform and architecture, verifies the downloaded payload's checksum before extraction
+or execution, stages the complete installation, preserves unrelated prefix and shell
+contents, and rolls back a failed publication or PATH check. The
+[development installer](../../scripts/install-cli.py) packages a checkout's build the
+same way and installs it with that installer. App signing, notarization, and Store
+submission belong to the Store release.
 
 An unsandboxed development pass does not establish Store feasibility. An observed
 incompatibility is brought to the owner with evidence; it does not silently change

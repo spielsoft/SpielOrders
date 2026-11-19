@@ -5,25 +5,29 @@ use crate::interface::{
     OptionalPathBytes, OptionalText, PathBytes, SPIELORDERS_CHANGE_FACT,
     SPIELORDERS_CHANGE_NEW_IDENTITY, SPIELORDERS_CHANGE_RECORD_REMOVED,
     SPIELORDERS_CHANGE_ROW_ADDED, SPIELORDERS_CHANGE_ROW_MOVED, SPIELORDERS_CHANGE_ROW_REMOVED,
-    SPIELORDERS_DRAFT_KIND_ORDER, SPIELORDERS_FAILURE_PANICKED, SPIELORDERS_FAMILY_OPERATION,
-    SPIELORDERS_ORDER_FIELD_ORDER_GROUP, SPIELORDERS_ORDER_FIELD_ORDERER,
-    SPIELORDERS_ORDER_FIELD_ORDERING_INSTITUTION, SPIELORDERS_ORDER_FIELD_PROJECT,
-    SPIELORDERS_REPORT_COMMITTED, SPIELORDERS_REPORT_UNCHANGED, SPIELORDERS_RESULT_BAD_ARGUMENT,
-    SPIELORDERS_RESULT_INTERNAL, SPIELORDERS_REUSE_NEW, SPIELORDERS_REUSE_REUSED,
-    SPIELORDERS_SEVERITY_ERROR, SPIELORDERS_VENDOR_FIELD_HIDDEN, SPIELORDERS_VENDOR_FIELD_NAME,
-    SpielordersConstant, SpielordersDraft, SpielordersEntries, SpielordersList, SpielordersOrder,
-    SpielordersPackage, SpielordersReadme, SpielordersResult, SpielordersVendor, Text,
+    SPIELORDERS_DRAFT_KIND_ORDER, SPIELORDERS_FAILURE_PANICKED,
+    SPIELORDERS_ORDER_FIELD_ORDER_GROUP, SPIELORDERS_REPORT_COMMITTED,
+    SPIELORDERS_REPORT_UNCHANGED, SPIELORDERS_RESULT_BAD_ARGUMENT, SPIELORDERS_RESULT_INTERNAL,
+    SPIELORDERS_REUSE_NEW, SPIELORDERS_REUSE_REUSED, SPIELORDERS_SEVERITY_ERROR,
+    SPIELORDERS_VENDOR_FIELD_HIDDEN, SPIELORDERS_VENDOR_FIELD_NAME, SpielordersConstant,
+    SpielordersDraft, SpielordersEntries, SpielordersList, SpielordersOrder, SpielordersPackage,
+    SpielordersReadme, SpielordersResult, SpielordersVendor, Text,
     call::{Session, deliver, fallible, put, quietly, settle},
-    draft::{Origin, SpielordersDraftData},
+    codes,
+    draft::SpielordersDraftData,
     entries::{EMPTY, Entry, Subject, c_text},
-    library::member,
+    fields::{self, Table},
     list::value_list,
-    package::query,
+    package::{open, text_or_empty},
     records::{ReadmeScope, contact_facts, document_facts, item_facts, path_text, vendor_facts},
     text::{paths, texts},
 };
 use crate::{
-    Change, ChangeResult, OrderRef, Plan, Report, Scope, VendorRef, package::ReusableValue,
+    Change, ChangeResult, OrderRef, Plan, Report, Scope, VendorRef,
+    change::Merged,
+    drafting::Origin,
+    model::{OrderDocument, Vendor},
+    values::ReusableValue,
 };
 use std::{
     ffi::CString,
@@ -40,6 +44,8 @@ pub(crate) struct PlannedChange {
     before: CString,
     after: CString,
     reuse: SpielordersConstant,
+    /// The zero-based batch addition the change belongs to, in a batch's plan.
+    addition: i64,
 }
 
 impl PlannedChange {
@@ -57,7 +63,14 @@ impl PlannedChange {
             before: c_text(before),
             after: c_text(after),
             reuse: SpielordersConstant::NONE,
+            addition: -1,
         }
+    }
+
+    /// The same change, as one batch addition `addition` makes.
+    pub(crate) fn of_addition(mut self, addition: usize) -> Self {
+        self.addition = i64::try_from(addition).unwrap_or(-1);
+        self
     }
 }
 
@@ -81,12 +94,7 @@ struct SpielordersPlanData {
 fn operations(plan: &Plan) -> Vec<(SpielordersConstant, CString)> {
     plan.operations()
         .into_iter()
-        .map(|(kind, path)| {
-            (
-                member(SPIELORDERS_FAMILY_OPERATION, &kind).unwrap_or(SpielordersConstant::NONE),
-                path_text(&path.absolute_path),
-            )
-        })
+        .map(|(act, path)| (codes::operation(act), path_text(&path.absolute_path)))
         .collect()
 }
 
@@ -95,10 +103,133 @@ type Record = (
     Vec<Vec<(SpielordersConstant, String)>>,
 );
 
+/// The changes a merge makes to the record it keeps, and each Vendor a Vendor merge or
+/// deletion removes.
+fn merge_changes(plan: &Plan) -> Vec<PlannedChange> {
+    let mut changes = match plan.merged() {
+        Some(Merged::Order([(before, before_vendor), (after, after_vendor)])) => record_changes(
+            &order_record(before, before_vendor),
+            &order_record(after, after_vendor),
+        ),
+        Some(Merged::Vendor([before, after])) => {
+            record_changes(&vendor_record(before), &vendor_record(after))
+        }
+        None => Vec::new(),
+    };
+    changes.extend(plan.removed_vendors().into_iter().map(|vendor| {
+        PlannedChange::new(
+            SPIELORDERS_CHANGE_RECORD_REMOVED,
+            SPIELORDERS_VENDOR_FIELD_NAME,
+            -1,
+            vendor.name.as_str(),
+            "",
+        )
+    }));
+    changes
+}
+
+/// An Order record in the fields its draft edits.
+fn order_record(document: &OrderDocument, vendor: Option<&Vendor>) -> Record {
+    let mut facts = document_facts(document, vendor);
+    facts.retain(|(field, _)| fields::assigns(Table::Order, *field));
+    let rows = document
+        .items
+        .iter()
+        .map(|item| {
+            let mut row = item_facts(item, None);
+            row.retain(|(field, _)| fields::assigns(Table::Item, *field));
+            row
+        })
+        .collect();
+    (facts, rows)
+}
+
+/// A Vendor record in the fields its draft edits.
+fn vendor_record(vendor: &Vendor) -> Record {
+    let mut facts = vendor_facts(vendor);
+    facts.retain(|(field, _)| fields::assigns(Table::Vendor, *field));
+    let rows = vendor
+        .contacts
+        .iter()
+        .map(|contact| {
+            let mut row = contact_facts(contact);
+            row.retain(|(field, _)| fields::assigns(Table::Contact, *field));
+            row
+        })
+        .collect();
+    (facts, rows)
+}
+
+/// What changes from `before` to `after`: each fact, each fact of a row both hold, each
+/// row `after` adds with its facts, and each row it drops.
+fn record_changes(before: &Record, after: &Record) -> Vec<PlannedChange> {
+    let mut changes = Vec::new();
+    for (field, value) in &after.0 {
+        let prior = value_of(&before.0, *field);
+        if prior != value {
+            changes.push(PlannedChange::new(
+                SPIELORDERS_CHANGE_FACT,
+                *field,
+                -1,
+                prior,
+                value,
+            ));
+        }
+    }
+    for (index, row) in after.1.iter().enumerate() {
+        let at = i64::try_from(index).unwrap_or(-1);
+        match before.1.get(index) {
+            Some(prior_row) => {
+                for (field, value) in row {
+                    let prior = value_of(prior_row, *field);
+                    if prior != value {
+                        changes.push(PlannedChange::new(
+                            SPIELORDERS_CHANGE_FACT,
+                            *field,
+                            at,
+                            prior,
+                            value,
+                        ));
+                    }
+                }
+            }
+            None => {
+                changes.push(PlannedChange::new(
+                    SPIELORDERS_CHANGE_ROW_ADDED,
+                    SpielordersConstant::NONE,
+                    at,
+                    "",
+                    "",
+                ));
+                for (field, value) in row.iter().filter(|(_, value)| !value.is_empty()) {
+                    changes.push(PlannedChange::new(
+                        SPIELORDERS_CHANGE_FACT,
+                        *field,
+                        at,
+                        "",
+                        value,
+                    ));
+                }
+            }
+        }
+    }
+    for index in after.1.len()..before.1.len() {
+        changes.push(PlannedChange::new(
+            SPIELORDERS_CHANGE_ROW_REMOVED,
+            SpielordersConstant::NONE,
+            i64::try_from(index).unwrap_or(-1),
+            "",
+            "",
+        ));
+    }
+    changes
+}
+
 /// The record a plan would write, read in the fields its draft edits.
 fn planned_record(draft: &SpielordersDraftData, plan: &Plan) -> Option<Record> {
-    let (mut facts, mut rows): Record = if draft.kind == SPIELORDERS_DRAFT_KIND_ORDER {
-        let (document, vendor, _) = plan.order_record()?;
+    let (mut facts, mut rows): Record = if draft.kind() == SPIELORDERS_DRAFT_KIND_ORDER {
+        let facts = plan.order_record()?;
+        let (document, vendor) = (&facts.document, facts.vendor.as_ref());
         (
             document_facts(document, vendor),
             document
@@ -114,26 +245,23 @@ fn planned_record(draft: &SpielordersDraftData, plan: &Plan) -> Option<Record> {
             vendor.contacts.iter().map(contact_facts).collect(),
         )
     };
-    facts.retain(|(field, _)| draft.settable().contains(field));
+    let (settable, row_settable) = (draft.settable(), draft.row_settable());
+    facts.retain(|(field, _)| settable.contains(field));
     for row in &mut rows {
-        row.retain(|(field, _)| draft.row_settable().contains(field));
+        row.retain(|(field, _)| row_settable.contains(field));
     }
     Some((facts, rows))
 }
 
 /// Whether `field`'s planned value reuses a value the Package already has, or is new.
-fn reuse(plan: &Plan, field: SpielordersConstant) -> SpielordersConstant {
-    let Some((_, _, values)) = plan.order_record() else {
+fn reuse_kind(plan: &Plan, field: SpielordersConstant) -> SpielordersConstant {
+    let Some(values) = plan.order_record().map(|facts| &facts.values) else {
         return SpielordersConstant::NONE;
     };
-    let value = match field {
-        SPIELORDERS_ORDER_FIELD_ORDERER => &values.orderer,
-        SPIELORDERS_ORDER_FIELD_ORDERING_INSTITUTION => &values.ordering_institution,
-        SPIELORDERS_ORDER_FIELD_PROJECT => &values.project,
-        SPIELORDERS_ORDER_FIELD_ORDER_GROUP => &values.order_group,
-        _ => return SpielordersConstant::NONE,
+    let Some(kind) = fields::reusable(field) else {
+        return SpielordersConstant::NONE;
     };
-    match value {
+    match values.of(kind) {
         ReusableValue::Reused(_) => SPIELORDERS_REUSE_REUSED,
         ReusableValue::New(_) => SPIELORDERS_REUSE_NEW,
         ReusableValue::Absent => SpielordersConstant::NONE,
@@ -148,16 +276,13 @@ fn value_of(facts: &[(SpielordersConstant, String)], field: SpielordersConstant)
 }
 
 /// Every change the plan of `draft` makes to the record the draft began from.
-fn draft_changes(draft: &SpielordersDraftData, plan: &Plan) -> Vec<PlannedChange> {
+pub(crate) fn draft_changes(draft: &SpielordersDraftData, plan: &Plan) -> Vec<PlannedChange> {
     let Some((facts, rows)) = planned_record(draft, plan) else {
         return Vec::new();
     };
     let initial = draft.initial();
     let mut changes = Vec::new();
-    if matches!(
-        draft.origin,
-        Origin::NewOrder { .. } | Origin::NewVendor { .. } | Origin::Adoption { .. }
-    ) {
+    if draft.draft().origin().is_new_record() {
         changes.push(PlannedChange::new(
             SPIELORDERS_CHANGE_NEW_IDENTITY,
             SpielordersConstant::NONE,
@@ -170,12 +295,12 @@ fn draft_changes(draft: &SpielordersDraftData, plan: &Plan) -> Vec<PlannedChange
         let before = value_of(&initial.facts, *field);
         if before != after {
             let mut change = PlannedChange::new(SPIELORDERS_CHANGE_FACT, *field, -1, before, after);
-            change.reuse = reuse(plan, *field);
+            change.reuse = reuse_kind(plan, *field);
             changes.push(change);
         }
     }
     let mut kept = vec![false; initial.rows.len()];
-    for (index, row) in draft.rows.iter().enumerate() {
+    for (index, row) in draft.draft().rows().iter().enumerate() {
         let at = i64::try_from(index).unwrap_or(-1);
         let planned = rows.get(index).cloned().unwrap_or_default();
         let before_row = row.origin.and_then(|origin| {
@@ -257,9 +382,10 @@ pub extern "C" fn spielorders_provision_agent(
     plan: &mut Option<Box<SpielordersPlan>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(plan, None);
     fallible(outcome, |entries| {
         let root = directory.as_path().to_path_buf();
-        let result = planned(
+        let result = plan_change(
             &Change::ProvisionAgent { root: root.clone() },
             root,
             Subject::Other,
@@ -293,7 +419,7 @@ impl SpielordersPlan {
 }
 
 /// Plans `change`, honoring `token`, as a plan of `subject` under `root`.
-pub(crate) fn planned(
+pub(crate) fn plan_change(
     change: &Change,
     root: PathBuf,
     subject: Subject,
@@ -315,13 +441,14 @@ pub extern "C" fn spielorders_draft_plan(
     plan: &mut Option<Box<SpielordersPlan>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(plan, None);
     fallible(outcome, |entries| {
         let result = draft.guarded(
             Err(SPIELORDERS_RESULT_BAD_ARGUMENT),
             Err(SPIELORDERS_RESULT_INTERNAL),
             |data| {
                 let change = data.change().ok_or(SPIELORDERS_RESULT_BAD_ARGUMENT)?;
-                let root = match &data.origin {
+                let root = match data.draft().origin() {
                     Origin::NewOrder { root }
                     | Origin::Adoption { root, .. }
                     | Origin::NewVendor { root }
@@ -329,7 +456,7 @@ pub extern "C" fn spielorders_draft_plan(
                     Origin::EditOrder { directory, .. } => directory.clone(),
                     Origin::Repair => PathBuf::new(),
                 };
-                planned(&change, root, data.subject(), token, entries, |value| {
+                plan_change(&change, root, data.subject(), token, entries, |value| {
                     draft_changes(data, value)
                 })
             },
@@ -346,13 +473,14 @@ pub extern "C" fn spielorders_order_plan_align(
     plan: &mut Option<Box<SpielordersPlan>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(plan, None);
     fallible(outcome, |entries| {
         let directory = order.directory().to_path_buf();
         let change = Change::AlignOrder {
             order: OrderRef::Directory(directory.clone()),
         };
         deliver(
-            planned(&change, directory, Subject::Order, token, entries, |_| {
+            plan_change(&change, directory, Subject::Order, token, entries, |_| {
                 Vec::new()
             }),
             plan,
@@ -370,13 +498,14 @@ pub extern "C" fn spielorders_order_plan_remove(
     plan: &mut Option<Box<SpielordersPlan>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(plan, None);
     fallible(outcome, |entries| {
         let directory = order.directory().to_path_buf();
         let change = Change::RemoveOrder {
             order: OrderRef::Directory(directory.clone()),
         };
         deliver(
-            planned(&change, directory, Subject::Order, token, entries, |_| {
+            plan_change(&change, directory, Subject::Order, token, entries, |_| {
                 Vec::new()
             }),
             plan,
@@ -402,6 +531,7 @@ pub extern "C" fn spielorders_order_plan_merge(
     plan: &mut Option<Box<SpielordersPlan>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(plan, None);
     fallible(outcome, |entries| {
         let directory = order.directory().to_path_buf();
         let result = paths(merged, count)
@@ -413,9 +543,14 @@ pub extern "C" fn spielorders_order_plan_merge(
                         .map(OrderRef::Directory)
                         .collect(),
                 };
-                planned(&change, directory, Subject::Order, token, entries, |_| {
-                    Vec::new()
-                })
+                plan_change(
+                    &change,
+                    directory,
+                    Subject::Order,
+                    token,
+                    entries,
+                    merge_changes,
+                )
             });
         deliver(result, plan)
     })
@@ -430,6 +565,7 @@ pub extern "C" fn spielorders_vendor_plan_hidden(
     plan: &mut Option<Box<SpielordersPlan>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(plan, None);
     fallible(outcome, |entries| {
         let read = &vendor.data().read;
         let was = read.vendor.is_hidden();
@@ -438,7 +574,7 @@ pub extern "C" fn spielorders_vendor_plan_hidden(
             vendor: VendorRef::Id(read.vendor.vendor_id.to_string()),
             hidden: hidden != 0,
         };
-        let result = planned(
+        let result = plan_change(
             &change,
             vendor.root(),
             Subject::Vendor,
@@ -473,6 +609,7 @@ pub extern "C" fn spielorders_vendor_plan_delete(
     plan: &mut Option<Box<SpielordersPlan>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(plan, None);
     fallible(outcome, |entries| {
         let read = &vendor.data().read;
         let change = Change::DeleteVendor {
@@ -480,7 +617,7 @@ pub extern "C" fn spielorders_vendor_plan_delete(
             vendor: VendorRef::Id(read.vendor.vendor_id.to_string()),
             in_use: crate::InUse::Refuse,
         };
-        let result = planned(
+        let result = plan_change(
             &change,
             vendor.root(),
             Subject::Vendor,
@@ -507,14 +644,7 @@ pub extern "C" fn spielorders_vendor_plan_delete(
 fn value_kind(
     field: SpielordersConstant,
 ) -> Result<crate::model::ReusableValueKind, SpielordersResult> {
-    use crate::model::ReusableValueKind;
-    Ok(match field {
-        SPIELORDERS_ORDER_FIELD_ORDERER => ReusableValueKind::Orderer,
-        SPIELORDERS_ORDER_FIELD_ORDERING_INSTITUTION => ReusableValueKind::OrderingInstitution,
-        SPIELORDERS_ORDER_FIELD_PROJECT => ReusableValueKind::Project,
-        SPIELORDERS_ORDER_FIELD_ORDER_GROUP => ReusableValueKind::OrderGroup,
-        _ => return Err(SPIELORDERS_RESULT_BAD_ARGUMENT),
-    })
+    fields::reusable(field).ok_or(SPIELORDERS_RESULT_BAD_ARGUMENT)
 }
 
 /// `text` as UTF-8, or BAD_ARGUMENT.
@@ -530,7 +660,7 @@ fn value_project(
     field: SpielordersConstant,
     project: OptionalText<'_>,
 ) -> Result<Option<String>, SpielordersResult> {
-    let project = query(project)?;
+    let project = text_or_empty(project)?;
     Ok(
         (field == SPIELORDERS_ORDER_FIELD_ORDER_GROUP && !project.trim().is_empty())
             .then_some(project),
@@ -548,7 +678,7 @@ fn value_plan(
 ) -> SpielordersResult {
     let root = package.root().to_path_buf();
     let result = change(root.clone())
-        .and_then(|change| planned(&change, root, subject, token, entries, |_| Vec::new()));
+        .and_then(|change| plan_change(&change, root, subject, token, entries, merge_changes));
     deliver(result, plan)
 }
 
@@ -567,6 +697,7 @@ pub extern "C" fn spielorders_package_plan_add_value(
     plan: &mut Option<Box<SpielordersPlan>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(plan, None);
     fallible(outcome, |entries| {
         let change = |root| {
             Ok(Change::AddValue {
@@ -596,6 +727,7 @@ pub extern "C" fn spielorders_package_plan_rename_value(
     plan: &mut Option<Box<SpielordersPlan>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(plan, None);
     fallible(outcome, |entries| {
         let change = |root| {
             Ok(Change::RenameValue {
@@ -628,6 +760,7 @@ pub extern "C" fn spielorders_package_plan_merge_values(
     plan: &mut Option<Box<SpielordersPlan>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(plan, None);
     fallible(outcome, |entries| {
         let change = |root| {
             Ok(Change::MergeValues {
@@ -663,6 +796,7 @@ pub extern "C" fn spielorders_package_plan_delete_value(
     plan: &mut Option<Box<SpielordersPlan>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(plan, None);
     fallible(outcome, |entries| {
         let change = |root| {
             Ok(Change::DeleteValue {
@@ -670,7 +804,7 @@ pub extern "C" fn spielorders_package_plan_delete_value(
                 kind: value_kind(field)?,
                 project: value_project(field, project)?,
                 value: utf8(value)?,
-                in_use: in_use(replacement, str::to_owned)?,
+                in_use: in_use_choice(replacement, str::to_owned)?,
             })
         };
         value_plan(package, change, Subject::Order, token, plan, entries)
@@ -679,7 +813,7 @@ pub extern "C" fn spielorders_package_plan_delete_value(
 
 /// What `replacement` says of Orders using a deleted value: NULL refuses, "" clears, and
 /// any other text names the replacement.
-fn in_use<T>(
+fn in_use_choice<T>(
     replacement: OptionalText<'_>,
     named: impl FnOnce(&str) -> T,
 ) -> Result<crate::InUse<T>, SpielordersResult> {
@@ -708,6 +842,7 @@ pub extern "C" fn spielorders_package_plan_merge_vendors(
     plan: &mut Option<Box<SpielordersPlan>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(plan, None);
     fallible(outcome, |entries| {
         let change = |root| {
             Ok(Change::MergeVendors {
@@ -737,18 +872,25 @@ pub extern "C" fn spielorders_vendor_plan_delete_replacing(
     plan: &mut Option<Box<SpielordersPlan>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(plan, None);
     fallible(outcome, |entries| {
         let root = vendor.root();
-        let result = in_use(replacement, |id| VendorRef::Id(id.to_owned())).and_then(|in_use| {
-            let change = Change::DeleteVendor {
-                root: root.clone(),
-                vendor: VendorRef::Id(vendor.data().read.vendor.vendor_id.to_string()),
-                in_use,
-            };
-            planned(&change, root, Subject::Vendor, token, entries, |_| {
-                Vec::new()
-            })
-        });
+        let result =
+            in_use_choice(replacement, |id| VendorRef::Id(id.to_owned())).and_then(|in_use| {
+                let change = Change::DeleteVendor {
+                    root: root.clone(),
+                    vendor: VendorRef::Id(vendor.data().read.vendor.vendor_id.to_string()),
+                    in_use,
+                };
+                plan_change(
+                    &change,
+                    root,
+                    Subject::Vendor,
+                    token,
+                    entries,
+                    merge_changes,
+                )
+            });
         deliver(result, plan)
     })
 }
@@ -772,6 +914,7 @@ pub extern "C" fn spielorders_readme_plan_write(
     plan: &mut Option<Box<SpielordersPlan>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(plan, None);
     fallible(outcome, |entries| {
         let Some(text) = text.to_str() else {
             return deliver(Err(SPIELORDERS_RESULT_BAD_ARGUMENT), plan);
@@ -790,7 +933,7 @@ pub extern "C" fn spielorders_readme_plan_write(
             text: text.to_owned(),
         };
         deliver(
-            planned(&change, root, Subject::Other, token, entries, |_| {
+            plan_change(&change, root, Subject::Other, token, entries, |_| {
                 Vec::new()
             }),
             plan,
@@ -816,6 +959,7 @@ pub extern "C" fn spielorders_package_plan_restore_order(
     plan: &mut Option<Box<SpielordersPlan>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(plan, None);
     fallible(outcome, |entries| {
         let root = package.root().to_path_buf();
         let change = Change::RestoreOrder {
@@ -823,7 +967,7 @@ pub extern "C" fn spielorders_package_plan_restore_order(
             removed: removed.as_path().to_path_buf(),
         };
         deliver(
-            planned(&change, root, Subject::Order, token, entries, |_| {
+            plan_change(&change, root, Subject::Order, token, entries, |_| {
                 Vec::new()
             }),
             plan,
@@ -839,11 +983,12 @@ pub extern "C" fn spielorders_package_plan_rebuild_index(
     plan: &mut Option<Box<SpielordersPlan>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(plan, None);
     fallible(outcome, |entries| {
         let root = package.root().to_path_buf();
         let change = Change::RebuildIndex { root: root.clone() };
         deliver(
-            planned(&change, root, Subject::Other, token, entries, |_| {
+            plan_change(&change, root, Subject::Other, token, entries, |_| {
                 Vec::new()
             }),
             plan,
@@ -862,6 +1007,7 @@ pub extern "C" fn spielorders_plan_initialize(
     plan: &mut Option<Box<SpielordersPlan>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(plan, None);
     fallible(outcome, |entries| {
         let text = |path: OptionalPathBytes<'_>| {
             path.as_path()
@@ -878,7 +1024,7 @@ pub extern "C" fn spielorders_plan_initialize(
                 orders_path: text(orders_path)?,
                 removed_path: text(removed_path)?,
             };
-            planned(
+            plan_change(
                 &change,
                 root.as_path().to_path_buf(),
                 Subject::Other,
@@ -954,10 +1100,21 @@ pub extern "C" fn spielorders_plan_operation_directory(plan: &SpielordersPlan, i
     })
 }
 
-/// How many changes `plan` makes to the record its draft edits.
+/// How many changes `plan` makes to the record its draft edits, or, for an Order or Vendor
+/// merge, to the record it keeps, with each Vendor a Vendor merge or deletion removes.
 #[unsafe(no_mangle)]
 pub extern "C" fn spielorders_plan_change_count(plan: &SpielordersPlan) -> i64 {
     quietly(-1, || i64::try_from(plan.data.changes.len()).unwrap_or(-1))
+}
+
+/// The zero-based addition of a batch that change `index` of the batch's plan belongs to;
+/// -1 for any other plan or out of range.
+#[unsafe(no_mangle)]
+pub extern "C" fn spielorders_plan_change_addition(plan: &SpielordersPlan, index: i64) -> i64 {
+    quietly(-1, || {
+        plan.planned_change(index)
+            .map_or(-1, |change| change.addition)
+    })
 }
 
 /// The `SPIELORDERS_CHANGE_*` of change `index`, or -1 out of range.
@@ -1036,6 +1193,7 @@ struct SpielordersReportData {
     vendor: Option<SpielordersVendor>,
     values: Option<Vec<crate::canonical::ReusableValueProjection>>,
     final_path: CString,
+    package: Option<SpielordersPackage>,
 }
 
 /// What `report` committed, read again through the commit's own `session`, which
@@ -1046,6 +1204,9 @@ fn refreshed(
     subject: Subject,
     session: &Session,
 ) -> SpielordersReportData {
+    // Capture the commit's Package before record readback: an external locator edit may
+    // make that read load a different Package even when it then refuses the Order.
+    let current_root = session.current_root();
     let (kind, result) = match report {
         Report::Unchanged { result, .. } => (SPIELORDERS_REPORT_UNCHANGED, result),
         Report::Committed { result, .. } | Report::CommittedWithWarning { result, .. } => {
@@ -1108,19 +1269,25 @@ fn refreshed(
         .or(written)
         .map(|path| path_text(&path))
         .unwrap_or_default();
+    // Normally the session still remembers this Package, so opening it reads only its
+    // README. If a changed locator led readback elsewhere, open the original Package.
+    let package = current_root.and_then(|root| open(&root, session, &mut Vec::new()).ok());
     SpielordersReportData {
         kind,
         order,
         vendor,
         values,
         final_path,
+        package,
     }
 }
 
 /// Commits `plan`. Takes no token: it ends committed, refused before its first write
 /// (SPIELORDERS_FAILURE_PRECONDITIONS_CHANGED when anything it was planned against
-/// changed), or failed with its rollback reported. Warnings arrive in the outcome with
-/// SPIELORDERS_RESULT_OK. A plan may be committed once; a second commit refuses as its
+/// changed, or SPIELORDERS_FAILURE_PLAN_EVIDENCE_UNCONFIRMED naming each fact it was
+/// planned against that moved: a saved Order's Vendor and values, or the facts an Order
+/// alignment, removal, or restoration found), or failed with its rollback reported.
+/// Warnings arrive in the outcome with SPIELORDERS_RESULT_OK. A plan may be committed once; a second commit refuses as its
 /// evidence no longer stands.
 #[unsafe(no_mangle)]
 pub extern "C" fn spielorders_plan_commit(
@@ -1128,44 +1295,44 @@ pub extern "C" fn spielorders_plan_commit(
     report: &mut Option<Box<SpielordersReport>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(report, None);
     fallible(outcome, |entries| {
         let session = Session::uncancellable();
+        // The read-back after the commit is inside the catch too: a panic there follows a
+        // write, and the caller is told so.
         let committed = catch_unwind(AssertUnwindSafe(|| {
-            crate::commit(plan.data.plan.clone(), &session)
-        }));
-        let answer = match committed {
-            Ok(answer) => answer,
-            Err(_) => {
-                let mut entry = Entry::new(
-                    SPIELORDERS_FAILURE_PANICKED,
-                    SPIELORDERS_SEVERITY_ERROR,
-                    c_text("The commit stopped on an internal failure"),
-                );
-                entry.after = c_text(if session.wrote() {
-                    "replaced"
-                } else {
-                    "unchanged"
-                });
-                entries.push(entry);
-                put(report, None);
-                return SPIELORDERS_RESULT_INTERNAL;
-            }
-        };
-        let result = settle(answer, &session, plan.data.subject, entries).map(|done| {
-            if let Report::CommittedWithWarning { warnings, .. } = &done {
-                for warning in warnings {
-                    Entry::warnings(warning, entries);
+            let answer = crate::commit(plan.data.plan.clone(), &session);
+            settle(answer, &session, plan.data.subject, entries).map(|done| {
+                if let Report::CommittedWithWarning { warnings, .. } = &done {
+                    for warning in warnings {
+                        Entry::warnings(warning, entries);
+                    }
                 }
-            }
-            SpielordersReport {
-                data: Box::new(refreshed(
-                    &done,
-                    &plan.data.root,
-                    plan.data.subject,
-                    &session,
-                )),
-            }
-        });
+                SpielordersReport {
+                    data: Box::new(refreshed(
+                        &done,
+                        &plan.data.root,
+                        plan.data.subject,
+                        &session,
+                    )),
+                }
+            })
+        }));
+        let Ok(result) = committed else {
+            let mut entry = Entry::new(
+                SPIELORDERS_FAILURE_PANICKED,
+                SPIELORDERS_SEVERITY_ERROR,
+                c_text("The commit stopped on an internal failure"),
+            );
+            entry.after = c_text(if session.wrote() {
+                "replaced"
+            } else {
+                "unchanged"
+            });
+            entries.push(entry);
+            put(report, None);
+            return SPIELORDERS_RESULT_INTERNAL;
+        };
         deliver(result, report)
     })
 }
@@ -1229,13 +1396,25 @@ pub extern "C" fn spielorders_report_values(
     })
 }
 
-/// Where the committed Order Directory now is, or "". Lists refresh by opening the
-/// Package again.
+/// Where the committed Order Directory now is, or "". Lists refresh from
+/// spielorders_report_package, or by opening the Package again.
 #[unsafe(no_mangle)]
 pub extern "C" fn spielorders_report_final_path(report: &SpielordersReport) -> PathBytes<'_> {
     quietly(PathBytes::new(EMPTY), || {
         PathBytes::new(&report.data.final_path)
     })
+}
+
+/// The Package as this commit left it, opened as spielorders_package_open opens it.
+/// Each call returns an independent new handle: free it with spielorders_package_free;
+/// freeing the report does not invalidate it. Returns NULL when no reusable Package is
+/// available, including a refresh that could not prove a current index or a report for
+/// non-Package work; then open the Package again. An unchanged commit may supply one.
+#[unsafe(no_mangle)]
+pub extern "C" fn spielorders_report_package(
+    report: &SpielordersReport,
+) -> Option<Box<SpielordersPackage>> {
+    quietly(None, || report.data.package.clone().map(Box::new))
 }
 
 /// Frees `report`. Freeing NULL does nothing.

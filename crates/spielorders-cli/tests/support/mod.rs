@@ -951,6 +951,18 @@ pub fn package_with_a_blocked_index_refresh(label: &str) -> (TemporaryTree, Path
     (tree, root)
 }
 
+/// A populated Package whose two Orders can merge: Mirror mounts' Items are priced in the
+/// kept Order's currency, as a merge requires.
+pub fn package_with_mergeable_orders(label: &str) -> (TemporaryTree, PathBuf) {
+    let (tree, root) = populated_package(label);
+    edit_order(
+        &order_directory(&root, "Mirror_mounts"),
+        &[("currency", "USD")],
+        &[],
+    );
+    (tree, root)
+}
+
 /// The same, for a Package with nothing in it yet.
 pub fn initialized_package_with_a_blocked_index_refresh(label: &str) -> (TemporaryTree, PathBuf) {
     let (tree, root) = initialized_package(label);
@@ -958,7 +970,7 @@ pub fn initialized_package_with_a_blocked_index_refresh(label: &str) -> (Tempora
     (tree, root)
 }
 
-fn block_index_refresh(root: &Path) {
+pub fn block_index_refresh(root: &Path) {
     std::fs::create_dir(root.join(".spielorders/.index.json.spielorders-stage"))
         .expect("the index staging name is occupied");
 }
@@ -986,7 +998,7 @@ pub fn damage_index(root: &Path) {
         .expect("the index is damaged");
 }
 
-pub fn reversion_index(root: &Path) {
+pub fn future_index(root: &Path) {
     std::fs::write(
         root.join(".spielorders/index.json"),
         b"{\n  \"schema_version\": 999,\n  \"orders\": [],\n  \"vendors\": []\n}\n",
@@ -1008,9 +1020,10 @@ pub fn reversion_index(root: &Path) {
 /// carries no destination verdict at all.
 pub fn package_with_a_staging_artifact(label: &str) -> (TemporaryTree, PathBuf) {
     let (tree, root) = populated_package(label);
-    std::fs::write(
+    // A write interrupted after staging the Vendor record it was replacing.
+    std::fs::copy(
+        root.join(".spielorders/vendors.json"),
         root.join(".spielorders/.vendors.json.spielorders-stage"),
-        b"{\n  \"schema_version\": 1,\n  \"vendors\": []\n}\n",
     )
     .expect("the leftover staging artifact is written");
     (tree, root)
@@ -1643,9 +1656,7 @@ pub fn package_with_an_order_staging_artifact(label: &str) -> (TemporaryTree, Pa
 /// The two conditions together are what a committed-with-warnings repair needs: a
 /// Package-level case to apply, and a real filesystem refusal of the index rebuild that
 /// follows the canonical write.
-pub fn package_with_a_package_case_and_a_blocked_index_refresh(
-    label: &str,
-) -> (TemporaryTree, PathBuf) {
+pub fn package_with_a_case_and_a_blocked_index_refresh(label: &str) -> (TemporaryTree, PathBuf) {
     let (tree, root) = package_with_a_staging_artifact(label);
     block_index_refresh(&root);
     (tree, root)

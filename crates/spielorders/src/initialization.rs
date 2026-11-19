@@ -2,12 +2,9 @@
 
 use crate::{
     Answer, Failure,
-    creation_batch::{
-        CreationBatch, CreationDestinationKind, CreationOperationKind, CreationPrecondition,
-        commit_creation, create_directory, create_file, planned_location, preserve_directory,
-        preserve_file,
-    },
+    change::PlannedAct,
     filesystem::staging_path,
+    journal::{CreationAct, Journal, planned_location},
     metadata::{IndexDocument, StoredValues, VendorsDocument, Version1, VersionDocument},
     mutation::{CommitFailure, MutationReport},
     operations::{FailedOperation, FailedPath, refuse_linked_root},
@@ -55,11 +52,11 @@ impl Default for InitializationOptions {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PackageInitializationPlan {
     orders_directory: PathBuf,
     removed_directory: PathBuf,
-    pub(crate) batch: CreationBatch,
+    pub(crate) journal: Journal,
 }
 
 pub(crate) type PackageInitializationReport = MutationReport<()>;
@@ -132,12 +129,17 @@ pub(crate) fn plan_package_initialization<F: FileSystem>(
             }
         }
 
-        let mut operations = vec![create_directory(&root, root.join(".spielorders"))];
+        let act = PlannedAct::Creation;
+        let mut journal = Journal::new(&root);
+        journal.require(root.clone(), Some(FileSystemEntryKind::Directory));
+        let mut created_files = Vec::new();
+        journal.create_directory(root.join(".spielorders"), act(CreationAct::CreateDirectory));
         let mut orders_directory = root.clone();
         for component in orders_components {
             orders_directory.push(component);
             match observe(&orders_directory, Some(&root_location), filesystem)? {
-                None => operations.push(create_directory(&root, orders_directory.clone())),
+                None => journal
+                    .create_directory(orders_directory.clone(), act(CreationAct::CreateDirectory)),
                 Some(FileSystemEntryKind::Directory) => {
                     let resolved = filesystem
                         .canonicalize(&orders_directory)
@@ -157,7 +159,11 @@ pub(crate) fn plan_package_initialization<F: FileSystem>(
                             path: planned_location(&root, orders_directory),
                         });
                     }
-                    operations.push(preserve_directory(&root, orders_directory.clone()));
+                    journal.preserve(
+                        orders_directory.clone(),
+                        FileSystemEntryKind::Directory,
+                        act(CreationAct::PreserveDirectory),
+                    );
                 }
                 Some(FileSystemEntryKind::SymbolicLink) => {
                     return Err(Failure::DisallowedLink {
@@ -199,7 +205,11 @@ pub(crate) fn plan_package_initialization<F: FileSystem>(
         match removed_kind {
             None => {}
             Some(FileSystemEntryKind::Directory) => {
-                operations.push(preserve_directory(&root, removed_directory.clone()));
+                journal.preserve(
+                    removed_directory.clone(),
+                    FileSystemEntryKind::Directory,
+                    act(CreationAct::PreserveDirectory),
+                );
             }
             Some(FileSystemEntryKind::SymbolicLink) => {
                 return Err(Failure::DisallowedLink {
@@ -238,17 +248,27 @@ pub(crate) fn plan_package_initialization<F: FileSystem>(
         }
         .to_json_bytes()
         .expect("empty version 1 Package Index serialization is infallible");
-        operations.extend([
-            create_file(&root, metadata.join("config.toml"), config),
-            create_file(&root, metadata.join("version.json"), version),
-            create_file(&root, metadata.join("vendors.json"), vendors),
-            create_file(&root, metadata.join("index.json"), index),
-        ]);
+        for (name, bytes) in [
+            ("config.toml", config),
+            ("version.json", version),
+            ("vendors.json", vendors),
+            ("index.json", index),
+        ] {
+            created_files.push(metadata.join(name));
+            journal.create_file(metadata.join(name), bytes, act(CreationAct::CreateFile));
+        }
 
         let readme = root.join("README.md");
         match observe(&readme, Some(&root_location), filesystem)? {
-            None => operations.push(create_file(&root, readme, Vec::new())),
-            Some(FileSystemEntryKind::File) => operations.push(preserve_file(&root, readme)),
+            None => {
+                created_files.push(readme.clone());
+                journal.create_file(readme, Vec::new(), act(CreationAct::CreateFile));
+            }
+            Some(FileSystemEntryKind::File) => journal.preserve(
+                readme,
+                FileSystemEntryKind::File,
+                act(CreationAct::PreserveFile),
+            ),
             Some(FileSystemEntryKind::SymbolicLink) => {
                 return Err(Failure::DisallowedLink {
                     root: root_location,
@@ -264,39 +284,23 @@ pub(crate) fn plan_package_initialization<F: FileSystem>(
             }
         }
 
-        for operation in &operations {
-            if operation.kind == CreationOperationKind::Create
-                && operation.destination_kind == CreationDestinationKind::File
-            {
-                let stage =
-                    staging_path(operation.path()).expect("planned creation files have basenames");
-                if let Some(actual) = observe(&stage, Some(&root_location), filesystem)? {
-                    return Err(Failure::DestinationCollision {
-                        root: root_location,
-                        location: planned_location(&root, stage),
-                        found: Some(actual),
-                    });
-                }
+        for file in &created_files {
+            let stage = staging_path(file).expect("planned creation files have basenames");
+            if let Some(actual) = observe(&stage, Some(&root_location), filesystem)? {
+                return Err(Failure::DestinationCollision {
+                    root: root_location,
+                    location: planned_location(&root, stage),
+                    found: Some(actual),
+                });
             }
         }
+        journal.require(removed_directory.clone(), removed_kind);
+        journal.require_planned();
 
         Ok(PackageInitializationPlan {
             orders_directory,
-            removed_directory: removed_directory.clone(),
-            batch: CreationBatch {
-                preconditions: vec![
-                    CreationPrecondition {
-                        path: root.clone(),
-                        expected: Some(FileSystemEntryKind::Directory),
-                    },
-                    CreationPrecondition {
-                        path: removed_directory.clone(),
-                        expected: removed_kind,
-                    },
-                ],
-                root,
-                operations,
-            },
+            removed_directory,
+            journal,
         })
     })
 }
@@ -331,19 +335,28 @@ pub(crate) fn commit_package_initialization<F: FileSystem>(
     plan: PackageInitializationPlan,
     filesystem: &F,
 ) -> Answer<PackageInitializationReport> {
-    let root = plan.batch.root.clone();
-    commit_creation(plan.batch, filesystem, |directory, filesystem| {
-        if directory != plan.orders_directory {
-            return None;
-        }
-        match managed_paths_collide(&plan.orders_directory, &plan.removed_directory, filesystem) {
-            Ok(false) => None,
-            Ok(true) => Some(CommitFailure::new(planned_location(
-                &root,
-                plan.removed_directory.clone(),
-            ))),
-            Err((path, _)) => Some(CommitFailure::new(planned_location(&root, path))),
-        }
+    Answer::of(|| {
+        let root = plan.journal.root();
+        let committed = plan
+            .journal
+            .run_checking(filesystem, |directory, filesystem| {
+                if directory != plan.orders_directory {
+                    return None;
+                }
+                match managed_paths_collide(
+                    &plan.orders_directory,
+                    &plan.removed_directory,
+                    filesystem,
+                ) {
+                    Ok(false) => None,
+                    Ok(true) => Some(CommitFailure::new(planned_location(
+                        root,
+                        plan.removed_directory.clone(),
+                    ))),
+                    Err((path, _)) => Some(CommitFailure::new(planned_location(root, path))),
+                }
+            })?;
+        Ok(committed.report(()))
     })
 }
 

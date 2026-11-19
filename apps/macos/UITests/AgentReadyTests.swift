@@ -42,15 +42,6 @@ import XCTest
         app.buttons["agentReady.dismiss"].click()
     }
 
-    func testCancelledFolderChoice() throws {
-        let app = launch()
-        begin(in: app)
-        XCTAssertTrue(app.buttons["Choose Folder"].waitForExistence(timeout: 10))
-        app.sheets.buttons["Cancel"].click()
-        XCTAssertTrue(app.menuBars.menuBarItems["File"].isEnabled)
-        XCTAssertFalse(app.buttons["agentReady.dismiss"].exists)
-    }
-
     func testGuidanceWithoutPackage() throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -62,18 +53,13 @@ import XCTest
         XCTAssertTrue(ready.isEnabled)
         ready.click()
         choose(root, in: app, prompt: "Choose Folder")
-        notice("“\(root.lastPathComponent)” is ready for agents.", in: app)
+        notice("“\(root.lastPathComponent)” is ready for agents", in: app)
         XCTAssertTrue(app.buttons["welcome.open"].exists)
         XCTAssertEqual(app.windows["package.window"].label, "SpielOrders")
         let skill = root.appendingPathComponent(".agents/skills/spielorders/SKILL.md")
         XCTAssertFalse(try Data(contentsOf: skill).isEmpty)
         XCTAssertEqual(try String(contentsOf: instructions, encoding: .utf8), "Keep the owner's instructions.\n")
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".spielorders").path))
-        try "Custom guidance\n".write(to: skill, atomically: true, encoding: .utf8)
-        begin(in: app)
-        choose(root, in: app, prompt: "Choose Folder")
-        notice("“\(root.lastPathComponent)” is ready for agents.", in: app)
-        XCTAssertEqual(try String(contentsOf: skill, encoding: .utf8), "Custom guidance\n")
     }
 
     func testProvisioningElsewhereKeepsDraftAndPackage() throws {
@@ -94,6 +80,8 @@ import XCTest
         begin(in: app)
         XCTAssertTrue(app.buttons["Choose Folder"].waitForExistence(timeout: 10))
         app.sheets.buttons["Cancel"].click()
+        // A cancelled folder choice reports nothing and writes nothing.
+        XCTAssertFalse(app.buttons["agentReady.dismiss"].exists)
         XCTAssertEqual(title.value as? String, "Keep this draft")
         XCTAssertTrue(title.isEnabled)
         XCTAssertEqual(app.windows["package.window"].label, package.lastPathComponent)
@@ -101,7 +89,7 @@ import XCTest
         XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: target.path).isEmpty)
         begin(in: app)
         choose(target, in: app, prompt: "Choose Folder")
-        notice("“\(target.lastPathComponent)” is ready for agents.", in: app)
+        notice("“\(target.lastPathComponent)” is ready for agents", in: app)
         XCTAssertEqual(title.value as? String, "Keep this draft")
         XCTAssertTrue(title.isEnabled)
         XCTAssertEqual(app.windows["package.window"].label, package.lastPathComponent)

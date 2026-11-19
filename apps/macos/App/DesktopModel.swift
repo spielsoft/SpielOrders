@@ -33,15 +33,20 @@ import SpielOrdersKit
     var orderSortDescending = UserDefaults.standard.bool(forKey: "orderSortDescending") {
         didSet { UserDefaults.standard.set(orderSortDescending, forKey: "orderSortDescending") }
     }
-    var vendors: [VendorRow] = []
-    /// How many Vendors the list holds before search, under Include Hidden Vendors.
+    var vendors: [VendorRow] = [] {
+        didSet {
+            let listed = multipleVendorSelection.filter { id in vendors.contains { $0.id == id } }
+            multipleVendorSelection = listed.count > 1 ? listed : []
+        }
+    }
+    /// How many Vendors the list holds before search, hidden ones included.
     var vendorCount = 0
     var selectedVendorID: String?
+    /// The Vendors selected together, in the order the owner selected them; empty unless more
+    /// than one is. While it holds any, no single Vendor is selected or shown.
+    var multipleVendorSelection: [String] = []
     var vendorContext: VendorRow?
     var vendorDetails: VendorDetails?
-    var includeHiddenVendors = UserDefaults.standard.object(forKey: "includeHiddenVendors") as? Bool ?? false {
-        didSet { UserDefaults.standard.set(includeHiddenVendors, forKey: "includeHiddenVendors") }
-    }
     var vendorSortField = SPIELORDERS_VENDOR_FIELD_NAME
     var vendorSortDescending = false
     var canBrowseRecords = false
@@ -92,7 +97,17 @@ import SpielOrdersKit
     var valueSelection: Set<ValueItem> = []
     /// The value a table row names in place: a new one, or one being renamed.
     var naming: ValueItem?
-    var library = PackageSession()
+    /// Name input belongs to this Package even after the field that held it disappears.
+    var valueNames: [ValueNameEdit] = []
+    var library = PackageSession() {
+        // Work asked for in one Package never applies to the next.
+        didSet {
+            waiting.clear()
+            valueNames = []
+            valueSelection = []
+            naming = nil
+        }
+    }
     private let preferences = UserDefaults.standard
     var folder: AuthorizedFolder?
     let recents = RecentPackages()
@@ -103,10 +118,13 @@ import SpielOrdersKit
     var continuingSave = false
     var afterCommit: (() -> Void)?
     var continueAfterFailure = false
+    /// Ends of fields and names that other work held, applied once the window is free.
+    @ObservationIgnored lazy var waiting = WaitingWork { [weak self] in self?.busy ?? false }
     private var lookupRevision = 0
     var dirty: Bool {
         readme?.draft.unsaved == true || rawDirty || recoveryEditor?.dirty == true
             || [orderEditor, vendorEditor, vendorSheet].contains { $0?.dirty == true }
+            || valueNames.contains { $0.draft.dirty }
     }
     /// File → Save writes only the expert document editor's raw JSON.
     var canSave: Bool { !busy && rawDirty }
@@ -116,7 +134,7 @@ import SpielOrdersKit
         do { open(try AuthorizedFolder.restore(bookmark), preserveSelection: false) }
         catch {
             starting = false
-            alert("Package access needs renewal", "Open the Package again to continue.",
+            alert("SpielOrders Can No Longer Access This Package", "Open it again with File → Open Package…",
                   details: error.localizedDescription, identifier: "package.access")
         }
     }
@@ -161,7 +179,7 @@ import SpielOrdersKit
     private func offerRemoval(of recent: RecentPackage) {
         busy = true
         Task {
-            let remove = await confirm("“\(recent.name)” can’t be opened.",
+            let remove = await confirm("“\(recent.name)” can’t be opened",
                 "It may have been moved, renamed, or deleted, or SpielOrders can no longer access it. "
                     + "Remove it from the recent Packages?",
                 identifier: "package.recent.missing", approve: "Remove from List")
@@ -194,7 +212,7 @@ import SpielOrdersKit
                 openDocument(selected)
             }
         } catch {
-            documentRefusal("Folder access could not be authorized. Use File → Open Package to choose it again.")
+            documentRefusal("Folder access couldn’t be authorized. Use File → Open Package to choose it again.")
         }
     }
 
@@ -219,7 +237,7 @@ import SpielOrdersKit
         guard dirty else { open(folder, preserveSelection: true); return }
         busy = true
         Task {
-            let reload = await confirm("Reload Package?", "Unwritten changes will be discarded. Changes already written are kept.",
+            let reload = await confirm("Reload Package?", "Unsaved changes will be discarded. Saved changes are kept.",
                 identifier: "package.reopen", approve: "Reload", destructive: true)
             busy = false
             if reload { open(folder, preserveSelection: true) }
@@ -245,9 +263,10 @@ import SpielOrdersKit
         refreshLookup()
     }
 
-    /// Reveals an Order's directory once the library still finds it.
-    func revealOrder(_ id: String?) {
-        if deferNavigation({ [self] in revealOrder(id) }) { return }
+    /// Shows an Order's directory in Finder once the library still finds it: selected in its
+    /// parent, or opened to show its contents.
+    func revealOrder(_ id: String?, contents: Bool = false) {
+        if deferNavigation({ [self] in revealOrder(id, contents: contents) }) { return }
         guard !busy, let retainedFolder = folder, let row = orderRow(id) else { return }
         busy = true
         let cancellation = LibraryCancellation()
@@ -258,7 +277,7 @@ import SpielOrdersKit
                     try await library.inspectOrder(row, cancellation: cancellation)
                 } onCancel: { cancellation.request() }
                 try Task.checkCancellation()
-                reveal(row.directory)
+                reveal(row.directory, contents: contents)
             } catch {
                 if !Task.isCancelled {
                     alert("The Order couldn’t be shown in Finder", "Reload the Package, then try again.",
@@ -296,7 +315,7 @@ import SpielOrdersKit
                         } onCancel: { cancellation.request() }
                     } catch {
                         selectedOrderID = nil
-                        warn(.orders, "The selected Order couldn’t be read. Reload the Package.", error: error)
+                        warn(.orders, "The selected Order couldn’t be read. Reload the Package, then try again.", error: error)
                     }
                 }
             } catch {
@@ -306,23 +325,22 @@ import SpielOrdersKit
         return true
     }
 
-    func changeVendorList(includeHidden: Bool, field: Int32, descending: Bool) -> Bool {
+    func changeVendorSort(field: Int32, descending: Bool) -> Bool {
         guard !busy, canBrowseRecords, let retainedFolder = folder else { return false }
-        guard includeHidden != includeHiddenVendors || field != vendorSortField || descending != vendorSortDescending else { return true }
+        guard field != vendorSortField || descending != vendorSortDescending else { return true }
         busy = true
         let cancellation = LibraryCancellation()
         work = OwnedOperation(kind: .read) { [self] in
             defer { busy = false; withExtendedLifetime(retainedFolder) {} }
             do {
                 let listed = try await withTaskCancellationHandler {
-                    try await searchVendors(library, search, includeHidden: includeHidden, sortField: field,
+                    try await searchVendors(library, search, sortField: field,
                                             descending: descending, cancellation: cancellation)
                 } onCancel: { cancellation.request() }
                 let total = search.text.isEmpty ? listed.rows.count
-                    : try await countVendors(library, includeHidden: includeHidden, cancellation: cancellation)
+                    : try await countVendors(library, cancellation: cancellation)
                 try Task.checkCancellation()
                 vendorCount = total
-                includeHiddenVendors = includeHidden
                 vendorSortField = field
                 vendorSortDescending = descending
                 vendors = listed.rows
@@ -339,7 +357,7 @@ import SpielOrdersKit
                         } onCancel: { cancellation.request() }
                     } catch {
                         selectedVendorID = nil
-                        warn(.vendors, "The selected Vendor couldn’t be read. Reload the Package.", error: error)
+                        warn(.vendors, "The selected Vendor couldn’t be read. Reload the Package, then try again.", error: error)
                     }
                 }
             } catch {
@@ -347,10 +365,6 @@ import SpielOrdersKit
             }
         }
         return true
-    }
-
-    func setIncludeHiddenVendors(_ value: Bool) {
-        _ = changeVendorList(includeHidden: value, field: vendorSortField, descending: vendorSortDescending)
     }
 
     func chooseInitialization() {
@@ -403,8 +417,8 @@ import SpielOrdersKit
                 undoManager.removeAllActions()
                 discardEditors()
                 contents.stop()
-                let findings = initialized.notices + (await candidate.findings)
-                warnings = [.orders: Notice.list(findings)]
+                let findings = Notice.list(initialized.notices) + Notice.list(await candidate.findings)
+                warnings = [.orders: findings]
                 orders = []
                 orderCount = 0
                 search = RecordQuery()
@@ -415,6 +429,7 @@ import SpielOrdersKit
                 vendors = []
                 vendorCount = 0
                 selectedVendorID = nil
+                multipleVendorSelection = []
                 vendorContext = nil
                 vendorDetails = nil
                 destination = .orders
@@ -426,13 +441,13 @@ import SpielOrdersKit
                         orders = listed.rows
                         orderCount = orders.count
                         let listedVendors = try await candidate.vendors(query: "", caseSensitive: false,
-                                                                        includeHidden: includeHiddenVendors,
+                                                                        includeHidden: true,
                                                                         sortField: vendorSortField,
                                                                         descending: vendorSortDescending,
                                                                         cancellation: cancellation)
                         vendors = listedVendors.rows
                         vendorCount = vendors.count
-                        showWarnings(orders: findings + listed.notices, vendors: listedVendors.notices)
+                        showWarnings(orders: findings + Notice.list(listed.notices), vendors: Notice.list(listedVendors.notices))
                     } catch {
                         requireReload(Notice("The Package was created, but its records couldn’t be listed.",
                                              details: error.localizedDescription))
@@ -463,7 +478,7 @@ import SpielOrdersKit
 
     /// A chosen folder the sandbox would not grant access to.
     private func refuseAccess(_ error: Error) {
-        alert("Folder access could not be authorized", "Choose the folder again.",
+        alert("Folder access couldn’t be authorized", "Choose the folder again.",
               details: error.localizedDescription, identifier: "package.access")
     }
 
@@ -484,7 +499,7 @@ import SpielOrdersKit
                 var rows: [OrderRow] = []
                 var vendorRows: [VendorRow] = []
                 var orderNotices = await candidate.findings
-                var vendorNotices: [String] = []
+                var vendorNotices: [Problem] = []
                 let diagnosticOnly = await candidate.diagnosticOnly
                 if !diagnosticOnly {
                     let listed = try await withTaskCancellationHandler {
@@ -494,7 +509,7 @@ import SpielOrdersKit
                     rows = listed.rows
                     orderNotices += listed.notices
                     let listedVendors = try await withTaskCancellationHandler {
-                        try await candidate.vendors(query: "", caseSensitive: false, includeHidden: includeHiddenVendors, sortField: vendorSortField,
+                        try await candidate.vendors(query: "", caseSensitive: false, includeHidden: true, sortField: vendorSortField,
                                                      descending: vendorSortDescending, cancellation: cancellation)
                     } onCancel: { cancellation.request() }
                     vendorRows = listedVendors.rows
@@ -527,10 +542,11 @@ import SpielOrdersKit
                 vendors = vendorRows
                 vendorCount = vendorRows.count
                 selectedVendorID = vendorRows.first { $0.id == priorVendorSelection }?.id
+                multipleVendorSelection = []
                 vendorContext = vendorRows.first { $0.id == selectedVendorID }
                 vendorDetails = nil
                 warnings = [:]
-                showWarnings(orders: orderNotices, vendors: vendorNotices)
+                showWarnings(orders: Notice.list(orderNotices), vendors: Notice.list(vendorNotices))
                 if diagnosticOnly {
                     diagnosis = try await candidate.diagnose(directory: nil, cancellation: cancellation)
                     diagnosticDirectory = nil
@@ -544,7 +560,7 @@ import SpielOrdersKit
                         } onCancel: { cancellation.request() }
                     } catch {
                         selectedOrderID = nil
-                        warn(.orders, "The selected Order couldn’t be read. Reload the Package.", error: error)
+                        warn(.orders, "The selected Order couldn’t be read. Reload the Package, then try again.", error: error)
                     }
                 }
                 if let selectedVendor = vendorRows.first(where: { $0.id == selectedVendorID }) {
@@ -554,7 +570,7 @@ import SpielOrdersKit
                         } onCancel: { cancellation.request() }
                     } catch {
                         selectedVendorID = nil
-                        warn(.vendors, "The selected Vendor couldn’t be read. Reload the Package.", error: error)
+                        warn(.vendors, "The selected Vendor couldn’t be read. Reload the Package, then try again.", error: error)
                     }
                 }
                 await openSelection(candidate, cancellation: cancellation)
@@ -590,13 +606,17 @@ import SpielOrdersKit
         reveal(root)
     }
 
-    func reveal(_ location: URL) {
+    func reveal(_ location: URL, contents: Bool = false) {
         do {
             guard try location.checkResourceIsReachable() else { throw CocoaError(.fileNoSuchFile) }
-            NSWorkspace.shared.activateFileViewerSelecting([location])
+            if contents {
+                NSWorkspace.shared.open(location)
+            } else {
+                NSWorkspace.shared.activateFileViewerSelecting([location])
+            }
         } catch {
             alert("“\(location.lastPathComponent)” couldn’t be shown in Finder",
-                  "It may have been moved or deleted. Reload the Package or search again.",
+                  "It may have been moved or deleted. Reload the Package, then try again.",
                   details: error.localizedDescription, identifier: "finder.reveal")
         }
     }
@@ -673,7 +693,7 @@ import SpielOrdersKit
                         await showListing(listed.notices, of: .orders, session: library)
                     } else {
                         let listed = try await withTaskCancellationHandler {
-                            try await searchVendors(library, requested, includeHidden: includeHiddenVendors,
+                            try await searchVendors(library, requested,
                                                     sortField: vendorSortField, descending: vendorSortDescending,
                                                     cancellation: cancellation)
                         } onCancel: { cancellation.request() }
@@ -715,10 +735,11 @@ import SpielOrdersKit
                                                 cancellation: cancellation)
     }
 
-    func searchVendors(_ session: PackageSession, _ query: RecordQuery, includeHidden: Bool, sortField: Int32,
+    /// The Vendors table's rows: every Vendor matching `query`, hidden ones marked rather than left out.
+    func searchVendors(_ session: PackageSession, _ query: RecordQuery, sortField: Int32,
                        descending: Bool, cancellation: LibraryCancellation) async throws -> VendorListing {
         try await session.vendors(query: query.text, field: query.scope.field, caseSensitive: query.matchCase,
-                                  includeHidden: includeHidden, sortField: sortField, descending: descending,
+                                  includeHidden: true, sortField: sortField, descending: descending,
                                   cancellation: cancellation)
     }
 
@@ -782,8 +803,8 @@ import SpielOrdersKit
                 // Remove Order is recoverable, so it commits at once and Edit → Undo restores it.
                 if action != .remove {
                     let explanation = action == .trash
-                        ? "The Order is removed recoverably first, then handed to macOS Trash. A failed Trash move leaves it in the Removed Orders directory."
-                        : "Only the directory name changes; the Order's facts and files are retained."
+                        ? "The Order goes to the Trash. If that fails, it stays recoverable in Removed Orders."
+                        : "Only the directory name changes; the Order’s facts and files are retained."
                     guard await dialogs.review(action.title + "?", explanation: explanation,
                         details: row.directoryName + "\n\n" + plan.operations.joined(separator: "\n"),
                         identifier: "order.directory.confirmation", approve: action.title,
@@ -795,7 +816,7 @@ import SpielOrdersKit
                 // A Trash move that failed leaves the Order recoverable where removal put it.
                 if action == .trash, let removed = disposition.finalDirectory {
                     alert("The Order couldn’t be moved to the Trash",
-                          "It was removed, and stays recoverable in the Removed Orders directory.",
+                          "It was removed, and stays recoverable in the Removed Orders folder.",
                           details: disposition.message, identifier: "order.trash", location: removed)
                 }
                 if action == .remove, let directory = disposition.finalDirectory {
@@ -834,9 +855,16 @@ import SpielOrdersKit
         return false
     }
 
-    /// A click that ended a field waits for that field's save instead of being swallowed.
+    /// A click that ended a field waits for that field's save instead of being swallowed. One
+    /// action waits at a time: a later navigation replaces a waiting one, as the owner's latest
+    /// choice, but a change to a record's rows (`afterFailure`) is never replaced and never
+    /// replaces one; the later action beeps instead.
     func deferNavigation(afterFailure: Bool = false, _ action: @escaping () -> Void) -> Bool {
         guard committing else { return false }
+        guard afterCommit == nil || !afterFailure && !continueAfterFailure else {
+            NSSound.beep()
+            return true
+        }
         afterCommit = action
         continueAfterFailure = afterFailure
         return true
@@ -868,6 +896,7 @@ import SpielOrdersKit
         selectedOrderID = nil
         multipleSelection = []
         selectedVendorID = nil
+        multipleVendorSelection = []
         orderContext = nil
         vendorContext = nil
         inspection = nil
@@ -894,6 +923,17 @@ import SpielOrdersKit
     /// outer draft: a navigation that subsequently fails or is cancelled still shows it.
     private func resolveDrafts() async -> Bool {
         while dirty {
+            if let name = valueNames.first(where: { $0.draft.dirty }) {
+                let reserved = navigationPending
+                navigationPending = false
+                finishName(name.draft)
+                let saving = operationBusy ? work : nil
+                navigationPending = reserved
+                guard let saving else { return false }
+                await saving.settleForExit()
+                guard !name.draft.dirty, !name.draft.refused else { return false }
+                continue
+            }
             if readme?.draft.unsaved == true {
                 guard await settleReadme() else { return false }
                 continue
@@ -918,7 +958,7 @@ import SpielOrdersKit
             }
             if let editor, editor.isNew {
                 let discard = await confirm("Discard this new \(editor.kind == .order ? "Order" : "Vendor")?",
-                    "It has not been created. Choose Create in the editor to create it.",
+                    "It hasn’t been created yet. Choose Create to keep it.",
                     identifier: "draft.unsaved", approve: "Discard", destructive: true)
                 guard discard else { return false }
                 if sheet {
@@ -997,10 +1037,9 @@ import SpielOrdersKit
     }
 
     /// How many Vendors the list holds without search, for the count above it.
-    func countVendors(_ session: PackageSession, includeHidden: Bool,
-                      cancellation: LibraryCancellation) async throws -> Int {
+    func countVendors(_ session: PackageSession, cancellation: LibraryCancellation) async throws -> Int {
         let listed = try await withTaskCancellationHandler {
-            try await session.vendors(query: "", caseSensitive: false, includeHidden: includeHidden,
+            try await session.vendors(query: "", caseSensitive: false, includeHidden: true,
                                       sortField: vendorSortField, descending: vendorSortDescending,
                                       cancellation: cancellation)
         } onCancel: { cancellation.request() }

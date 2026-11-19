@@ -58,7 +58,14 @@ impl FileSystem for PlatformFileSystem {
 
     fn write_new(&self, path: &Path, contents: &[u8]) -> Result<(), Self::Error> {
         let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
-        file.write_all(contents)
+        if let Err(error) = file.write_all(contents) {
+            drop(file);
+            // The file is this call's own, created just now. Left partly written, it would
+            // stand where every retry must create its own, so it goes with the failure.
+            let _ = std::fs::remove_file(path);
+            return Err(error);
+        }
+        Ok(())
     }
 
     fn sync_file(&self, path: &Path) -> Result<(), Self::Error> {
@@ -108,7 +115,7 @@ impl FileSystem for PlatformFileSystem {
     fn observe_file_change(&self, path: &Path) -> Result<FileChangeObservation, Self::Error> {
         match std::fs::symlink_metadata(path) {
             Ok(metadata) => {
-                let evidence = status_change(&metadata);
+                let evidence = status_change(path, &metadata);
                 Ok(FileChangeObservation {
                     kind: Some(entry_kind(&metadata.file_type())),
                     evidence,
@@ -417,8 +424,18 @@ fn entry_kind(file_type: &std::fs::FileType) -> FileSystemEntryKind {
 /// index was written cannot look older than the index. Modification time is not this
 /// evidence: restores, copies, and syncs preserve it.
 #[cfg(unix)]
-fn status_change(metadata: &std::fs::Metadata) -> FileChangeEvidence {
+fn status_change(path: &Path, metadata: &std::fs::Metadata) -> FileChangeEvidence {
     use std::os::unix::fs::MetadataExt;
+    // statfs follows links, so ask a link's parent about the link's own volume.
+    // An ordinary entry may itself be a mount root and must name its own volume.
+    let volume_path = if metadata.file_type().is_symlink() {
+        path.parent().unwrap_or(path)
+    } else {
+        path
+    };
+    if !keeps_status_changes(volume_path, metadata.dev()) {
+        return FileChangeEvidence::Uncertain;
+    }
     match (
         u128::try_from(metadata.ctime()),
         u128::try_from(metadata.ctime_nsec()),
@@ -432,8 +449,73 @@ fn status_change(metadata: &std::fs::Metadata) -> FileChangeEvidence {
 }
 
 #[cfg(not(unix))]
-fn status_change(_metadata: &std::fs::Metadata) -> FileChangeEvidence {
+fn status_change(_path: &Path, _metadata: &std::fs::Metadata) -> FileChangeEvidence {
     FileChangeEvidence::Uncertain
+}
+
+/// Whether the volume holding `path`, device `device`, sets status-change times itself.
+/// FAT and exFAT keep none: what they report is a modification time, which restores and
+/// copies set back. Asked once per device for the life of the process.
+#[cfg(unix)]
+fn keeps_status_changes(path: &Path, device: u64) -> bool {
+    static VOLUMES: std::sync::Mutex<std::collections::BTreeMap<u64, bool>> =
+        std::sync::Mutex::new(std::collections::BTreeMap::new());
+    if let Ok(volumes) = VOLUMES.lock()
+        && let Some(known) = volumes.get(&device)
+    {
+        return *known;
+    }
+    let keeps = volume_keeps_status_changes(path);
+    if let Ok(mut volumes) = VOLUMES.lock() {
+        volumes.insert(device, keeps);
+    }
+    keeps
+}
+
+#[cfg(target_vendor = "apple")]
+fn volume_keeps_status_changes(path: &Path) -> bool {
+    let Ok(path) = nul_terminated(path) else {
+        return false;
+    };
+    // SAFETY: `path` is NUL-terminated and `volume` is a writable statfs that lives
+    // through the call.
+    let mut volume: libc::statfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statfs(path.as_ptr(), &raw mut volume) } != 0 {
+        return false;
+    }
+    // SAFETY: the kernel NUL-terminates the type name within its array.
+    let kind = unsafe { std::ffi::CStr::from_ptr(volume.f_fstypename.as_ptr()) };
+    matches!(kind.to_bytes(), b"apfs" | b"hfs")
+}
+
+#[cfg(target_os = "linux")]
+fn volume_keeps_status_changes(path: &Path) -> bool {
+    const KEEPING: &[u64] = &[
+        0xEF53,      // ext2, ext3, ext4
+        0x5846_5342, // xfs
+        0x9123_683E, // btrfs
+        0x0102_1994, // tmpfs
+        0x2FC1_2FC1, // zfs
+        0xF2F5_2010, // f2fs
+        0x794C_7630, // overlayfs
+    ];
+    let Ok(path) = nul_terminated(path) else {
+        return false;
+    };
+    // SAFETY: `path` is NUL-terminated and `volume` is a writable statfs that lives
+    // through the call.
+    let mut volume: libc::statfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statfs(path.as_ptr(), &raw mut volume) } != 0 {
+        return false;
+    }
+    // The field is signed under glibc and unsigned under musl.
+    #[allow(clippy::useless_conversion, clippy::unnecessary_fallible_conversions)]
+    u64::try_from(volume.f_type).is_ok_and(|kind| KEEPING.contains(&kind))
+}
+
+#[cfg(all(unix, not(any(target_vendor = "apple", target_os = "linux"))))]
+fn volume_keeps_status_changes(_path: &Path) -> bool {
+    false
 }
 
 #[cfg(test)]

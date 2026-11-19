@@ -44,8 +44,8 @@ spielorders value add project "Clock" --root "$package"
 spielorders value rename project "Clock" "Telescope" --root "$package"
 ```
 
-`order readme` reads or writes the README as its help describes; `order validate`
-checks the scoped Order. `order align` explicitly aligns its directory name with its
+`order readme` prints the path of the Order's README, to read or edit with ordinary
+tools; `order validate` checks the scoped Order. `order align` explicitly aligns its directory name with its
 facts. It is not a side effect of editing or adoption and can break external links.
 `order remove` moves the complete directory into the Package's configured recovery
 directory. `order remove --delete` additionally requests native Trash; a failed handoff
@@ -54,15 +54,17 @@ leaves the recoverable directory named in the result. There is no Item-level Tra
 Many edits go faster as one batch:
 
 ```sh
-printf '%s\n' "[\"order\", \"edit\", \"currency=USD\", \"--root\", \"$directory\"]" > "${TMPDIR:-/tmp}/spielorders-operations.jsonl"
-spielorders apply "${TMPDIR:-/tmp}/spielorders-operations.jsonl" --root "$package" --dry-run
+printf '%s\n' "[\"order\", \"edit\", \"currency=USD\", \"--root\", \"$directory\"]" | spielorders apply - --root "$package" --dry-run
 ```
 
 `order merge` merges other Orders into the one `--root` names, in precedence order: the
 kept Order keeps its facts and gains only the facts, Items, and directory entries it
-lacks, and what remains of each other Order goes to the recovery directory. It asks
-before discarding each entry the kept Order already holds; pass `--yes` when no one is
-there to answer, after reviewing `--dry-run`.
+lacks, and what remains of each other Order goes to the recovery directory. An Order
+that brings Items priced in another currency is refused (`currency_differs`); no currency
+counts as a currency of its own, so set the missing one first. An Order with no Items
+takes the currency of the first Order that brings some. It asks before discarding each
+entry the kept Order already holds; pass `--yes` when no one is there to answer, after
+reviewing `--dry-run`.
 
 ```sh
 spielorders add-order --root "$package" title="Duplicate order"

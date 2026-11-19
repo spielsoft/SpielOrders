@@ -14,6 +14,8 @@ struct OrdersTable: NSViewRepresentable {
         table.setAccessibilityIdentifier("orders.table")
         table.usesAlternatingRowBackgroundColors = true
         table.rowHeight = 22
+        // A truncated value shows in full while the pointer rests on it.
+        table.allowsExpansionToolTips = true
         table.allowsMultipleSelection = true
         table.allowsEmptySelection = true
         table.allowsColumnReordering = true
@@ -62,6 +64,12 @@ struct OrdersTable: NSViewRepresentable {
         context.coordinator.update()
     }
 
+    /// Whatever size the list offers: wide columns scroll sideways rather than widening the
+    /// list, which would take the width the owner gave the detail.
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
+        proposal.replacingUnspecifiedDimensions(by: CGSize(width: 400, height: 300))
+    }
+
     @MainActor final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate, NSMenuItemValidation {
         let model: DesktopModel
         weak var table: NSTableView?
@@ -91,12 +99,30 @@ struct OrdersTable: NSViewRepresentable {
             updating = true
             defer { updating = false }
             if revision != model.ordersRevision {
+                let previous = rows
                 rows = model.orders
                 revision = model.ordersRevision
-                table.reloadData()
+                reload(from: previous, in: table)
+                // An empty table is plain behind what it says instead of rows.
+                table.usesAlternatingRowBackgroundColors = !rows.isEmpty
             }
             synchronizeSelection()
             if !model.busy { synchronizeSort() }
+        }
+
+        /// Shows the listing that replaced `previous`. A listing of the same length, as a saved
+        /// edit leaves it, redraws only the rows that changed, so the rest of the list holds
+        /// still; any other listing reloads the table.
+        private func reload(from previous: [OrderRow], in table: NSTableView) {
+            guard previous.count == rows.count else {
+                table.reloadData()
+                return
+            }
+            let changed = IndexSet(rows.indices.filter { index in
+                let old = previous[index], new = rows[index]
+                return old.id != new.id || old.damage != new.damage || old.values != new.values
+            })
+            table.reloadData(forRowIndexes: changed, columnIndexes: IndexSet(integersIn: 0..<table.numberOfColumns))
         }
 
         func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
@@ -111,7 +137,6 @@ struct OrdersTable: NSViewRepresentable {
                 cell = NSTableCellView()
                 cell.identifier = tableColumn.identifier
                 let image = NSImageView()
-                image.image = NSImage(named: NSImage.cautionName)
                 image.setAccessibilityLabel("Damaged Order")
                 let text = NSTextField(labelWithString: "")
                 text.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
@@ -131,24 +156,14 @@ struct OrdersTable: NSViewRepresentable {
             }
             let value = rows[row]
             let damagedTitle = value.damage != nil && column == .title
+            // Only a damaged Order's title draws its symbol, so other cells skip making it.
+            cell.imageView?.image = damagedTitle ? NoticeLevel.problem.image : nil
             cell.imageView?.isHidden = !damagedTitle
-            cell.toolTip = damagedTitle ? "This directory needs attention. Open Diagnostics for details." : nil
-            cell.textField?.stringValue = damagedTitle ? value.directoryName : display(column, of: value)
+            cell.toolTip = damagedTitle ? "This Order’s folder needs attention. Diagnose Order for details." : nil
+            cell.textField?.stringValue = damagedTitle ? value.directoryName : value.display(column)
             cell.textField?.setAccessibilityLabel(column.label)
             cell.textField?.setAccessibilityIdentifier("\(rowIdentifier(value)).\(column.rawValue)")
             return cell
-        }
-
-        /// A Status by its label, a date in the short style, a Total as money, and every
-        /// other value as the library gives it.
-        private func display(_ column: OrderColumn, of row: OrderRow) -> String {
-            let value = row.values[column.field] ?? ""
-            switch column {
-            case .status: return OrderStatus.label(value)
-            case .date: return ShortDate.display(value)
-            case .total: return Money.display(value, currency: row.values[OrderColumn.currency.field] ?? "")
-            default: return value
-            }
         }
 
         private func rowIdentifier(_ row: OrderRow) -> String {
@@ -239,7 +254,7 @@ struct OrdersTable: NSViewRepresentable {
                     menu.addItem(merge)
                     return
                 }
-                let open = NSMenuItem(title: row.damage == nil ? "Open" : "Open Diagnostics", action: #selector(open(_:)), keyEquivalent: "")
+                let open = NSMenuItem(title: row.damage == nil ? "Open" : "Diagnose Order", action: #selector(open(_:)), keyEquivalent: "")
                 open.representedObject = row.id
                 open.target = self
                 open.setAccessibilityIdentifier("\(rowIdentifier(row)).open")
@@ -335,5 +350,19 @@ final class OrdersTableView: NSTableView {
         if [36, 76].contains(event.keyCode) { open() }
         else if [51, 117].contains(event.keyCode) { remove() }
         else { super.keyDown(with: event) }
+    }
+}
+
+extension OrderRow {
+    /// A Status by its label, a date in the short style, a Total as money, and every other
+    /// value as the library gives it.
+    @MainActor func display(_ column: OrderColumn) -> String {
+        let value = values[column.field] ?? ""
+        switch column {
+        case .status: return OrderStatus.label(value)
+        case .date: return ShortDate.display(value)
+        case .total: return Money.display(value, currency: values[OrderColumn.currency.field] ?? "")
+        default: return value
+        }
     }
 }

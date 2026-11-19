@@ -14,15 +14,16 @@ public struct RepairOption: Sendable, Identifiable {
     public let id: Int64
     public let code: Int32
     public let fields: [Int32]
+    /// The action as the owner reads it, in place of the library's own name.
     public var title: String {
         switch code {
-        case SPIELORDERS_REPAIR_ACTION_REPLACE_MANAGED_RECORD: "Replace Managed Record"
-        case SPIELORDERS_REPAIR_ACTION_PROMOTE_STAGING_CANDIDATE: "Promote Staging Candidate"
-        case SPIELORDERS_REPAIR_ACTION_ASSIGN_EXISTING_VENDOR: "Assign Existing Vendor"
-        case SPIELORDERS_REPAIR_ACTION_CREATE_AND_ASSIGN_VENDOR: "Create and Assign Vendor"
-        case SPIELORDERS_REPAIR_ACTION_CLEAR_VENDOR_REFERENCE: "Clear Vendor Reference"
-        case SPIELORDERS_REPAIR_ACTION_ADOPT_NEW_ORDER_IDENTITY: "Adopt New Order Identity"
-        case SPIELORDERS_REPAIR_ACTION_REPAIR_PACKAGE_LOCATOR: "Repair Package Locator"
+        case SPIELORDERS_REPAIR_ACTION_REPLACE_MANAGED_RECORD: "Replace Damaged Record"
+        case SPIELORDERS_REPAIR_ACTION_PROMOTE_STAGING_CANDIDATE: "Finish Interrupted Save"
+        case SPIELORDERS_REPAIR_ACTION_ASSIGN_EXISTING_VENDOR: "Choose Existing Vendor"
+        case SPIELORDERS_REPAIR_ACTION_CREATE_AND_ASSIGN_VENDOR: "Create New Vendor"
+        case SPIELORDERS_REPAIR_ACTION_CLEAR_VENDOR_REFERENCE: "Remove Vendor from Order"
+        case SPIELORDERS_REPAIR_ACTION_ADOPT_NEW_ORDER_IDENTITY: "Give Order a New ID"
+        case SPIELORDERS_REPAIR_ACTION_REPAIR_PACKAGE_LOCATOR: "Update Package Location"
         default: String(cString: spielorders_constant_name(code))
         }
     }
@@ -41,10 +42,15 @@ public final class PackageDiagnosis: Sendable {
     public let isValid: Bool
     public let findings: [DiagnosticFinding]
     public let cases: [RepairCase]
+    /// For the Package's diagnosis, which covers its own files, the Order Directories its
+    /// findings are located in, each diagnosed on its own; none for an Order's.
+    public let orders: [URL]
 
-    init(_ pointer: UnsafeMutablePointer<SpielordersDiagnosis>, source: LibraryHandle<SpielordersPackage>) {
+    init(_ pointer: UnsafeMutablePointer<SpielordersDiagnosis>, source: LibraryHandle<SpielordersPackage>,
+         orders: [URL]) {
         handle = LibraryHandle(pointer, free: spielorders_diagnosis_free)
         self.source = source
+        self.orders = orders
         isValid = spielorders_diagnosis_is_valid(pointer) != 0
         let entries = spielorders_diagnosis_findings(pointer)
         defer { spielorders_entries_free(entries) }
@@ -98,19 +104,33 @@ extension PackageSession {
 
     public func diagnose(directory: URL?, cancellation: LibraryCancellation) throws -> PackageDiagnosis {
         guard let package else { throw SessionAccessError.reopenRequired }
+        // Refresh the affected-Order projection rather than reusing the session's older
+        // listing. Keep editor evidence and session identity.
+        let observed: LibraryHandle<SpielordersPackage>
+        if directory == nil {
+            var opened: UnsafeMutablePointer<SpielordersPackage>?
+            var outcome: UnsafeMutablePointer<SpielordersEntries>?
+            let result = spielorders_package_open(spielorders_package_root(package.pointer), cancellation.token,
+                                                   &opened, &outcome)
+            _ = try checked(result, outcome)
+            guard let opened else { throw LibraryFailure(result: SPIELORDERS_RESULT_INTERNAL, entries: []) }
+            observed = LibraryHandle(opened, free: spielorders_package_free)
+        } else {
+            observed = package
+        }
         var diagnosis: UnsafeMutablePointer<SpielordersDiagnosis>?
         var outcome: UnsafeMutablePointer<SpielordersEntries>?
         let result: Int32
         if let directory {
             result = try FileSystemPath(url: directory).withUnsafeFileSystemRepresentation {
-                spielorders_package_diagnose_order(package.pointer, $0, cancellation.token, &diagnosis, &outcome)
+                spielorders_package_diagnose_order(observed.pointer, $0, cancellation.token, &diagnosis, &outcome)
             }
         } else {
-            result = spielorders_package_diagnose(package.pointer, cancellation.token, &diagnosis, &outcome)
+            result = spielorders_package_diagnose(observed.pointer, cancellation.token, &diagnosis, &outcome)
         }
         _ = try checked(result, outcome)
         guard let diagnosis else { throw LibraryFailure(result: SPIELORDERS_RESULT_INTERNAL, entries: []) }
-        return PackageDiagnosis(diagnosis, source: package)
+        return PackageDiagnosis(diagnosis, source: package, orders: directory == nil ? affectedOrders(in: observed) : [])
     }
 
     public func planRepair(_ diagnosis: PackageDiagnosis, repair: RepairCase, action: RepairOption,

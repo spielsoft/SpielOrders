@@ -10,19 +10,47 @@
     "committed": true,
     "operations": [
       {
-        "kind": "replace_order_record",
-        "path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace/.spielorders/order.json"
-      },
-      {
         "kind": "replace_vendor_record",
         "path": "<PACKAGE_ROOT>/.spielorders/vendors.json"
+      },
+      {
+        "kind": "replace_order_record",
+        "path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace/.spielorders/order.json"
       },
       {
         "kind": "refresh_package_index",
         "path": "<PACKAGE_ROOT>/.spielorders/index.json"
       }
     ],
-    "changes": [],
+    "changes": [
+      {
+        "kind": "fact",
+        "field": "title",
+        "position": null,
+        "before": "Laser components",
+        "after": "Laser parts",
+        "reuse": null,
+        "line": 1
+      },
+      {
+        "kind": "new_identity",
+        "field": null,
+        "position": null,
+        "before": null,
+        "after": null,
+        "reuse": null,
+        "line": 2
+      },
+      {
+        "kind": "fact",
+        "field": "name",
+        "position": null,
+        "before": null,
+        "after": "Elderglass Optics",
+        "reuse": null,
+        "line": 2
+      }
+    ],
     "final_path": null,
     "orders": 1,
     "applied": 2

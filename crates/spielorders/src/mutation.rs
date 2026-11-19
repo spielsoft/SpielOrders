@@ -2,15 +2,14 @@
 
 use crate::{
     Failure, Warning,
-    canonical::{CurrentPackageCandidate, PackageLoad, Touched, load_package_and_refresh_index},
-    filesystem::{
-        MultiFileReplacementError, MultiFileReplacementFailure, ReplacementPlanFailure,
-        RollbackFailure, ValidatedReplacementError, staging_path,
+    canonical::{
+        CurrentPackageCandidate, PackageIndexState, PackageLoad, Touched,
+        load_package_and_refresh_index,
     },
+    filesystem::{ValidatedReplacementError, staging_path},
     ports::FileSystem,
     readme::{Location, located_in_package},
 };
-use serde::Serialize;
 use std::path::Path;
 
 /// What committing one capability's plan did, before [`crate::commit`] reports it as a
@@ -54,7 +53,15 @@ impl IndexRefresh {
         filesystem: &F,
     ) -> Self {
         let (package, warning) = match load_package_and_refresh_index(root, touched, filesystem) {
-            Ok(PackageLoad::Available(package)) => (Some(package), None),
+            // A load that could not cache every Order, such as one whose README it could
+            // not read, leaves the stored index as it found it.
+            Ok(PackageLoad::Available(package)) => {
+                let refreshed = package.index.state == PackageIndexState::Current;
+                (
+                    Some(package),
+                    (!refreshed).then_some(Warning::RefreshUnavailable),
+                )
+            }
             Ok(PackageLoad::PackageIndexReplacementFailed(failed)) => {
                 let (evidence, failure) = failed.into_parts();
                 (
@@ -99,8 +106,7 @@ impl IndexRefresh {
 
 /// Why one canonical `field=value` assignment was refused. An atomic assignment
 /// set reports every rejected field and changes nothing.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RejectedAssignmentReason {
     UnknownField,
     ImmutableIdentity,
@@ -111,8 +117,6 @@ pub enum RejectedAssignmentReason {
     NotAReusableValue,
     NotAFiniteNumber,
 }
-
-impl crate::code::Coded for RejectedAssignmentReason {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RejectedAssignment {
@@ -173,9 +177,9 @@ impl Failure {
         }
     }
 
-    /// This refusal, or, where it left nothing behind and the filesystem cannot perform
-    /// the operation that failed on `path` at all, that answer instead, so the caller
-    /// learns the volume is the obstacle.
+    /// This refusal, or, where the filesystem cannot perform the operation that failed on
+    /// `path` at all, that answer instead, so the caller learns the volume is the obstacle;
+    /// whatever the commit could not undo is still named beside it.
     pub(crate) fn unless_unsupported<F: FileSystem>(
         self,
         root: &Path,
@@ -192,6 +196,24 @@ impl Failure {
                     filesystem,
                 )
                 .into()
+            }
+            Self::CommitFailedCleanupIncomplete {
+                cleanup_failures, ..
+            } if filesystem.is_unsupported(error) => {
+                match crate::operations::FailedOperation::inside(
+                    root,
+                    path.to_path_buf(),
+                    error,
+                    filesystem,
+                ) {
+                    crate::operations::FailedOperation::FilesystemUnsupported(failure) => {
+                        Self::FilesystemUnsupportedCleanupIncomplete {
+                            failure,
+                            cleanup_failures,
+                        }
+                    }
+                    other => other.into(),
+                }
             }
             other => other,
         }
@@ -215,83 +237,6 @@ impl Failure {
                 .collect(),
         )
     }
-
-    /// A promotion of a stage that already sat beside `destination` inside the Root at
-    /// `root`. The stage was not this commit's to remove, so nothing is left to clean up.
-    pub(crate) fn of_promotion(root: &Path, destination: &Path) -> Self {
-        let failure = CommitFailure::new(located_in_package(root, destination.to_path_buf()));
-        Self::commit(failure, Vec::new())
-    }
-
-    /// A replacement of several files at once inside the Root at `root`, `destinations`
-    /// in the order it wrote them. Every stage it could not remove and every destination
-    /// it could not put back is a cleanup failure.
-    pub(crate) fn of_replacements<V>(
-        root: &Path,
-        destinations: &[&Path],
-        error: MultiFileReplacementError<V>,
-    ) -> Self {
-        let locate = |path: &Path| located_in_package(root, path.to_path_buf());
-        let stage_of = |destination: &Path| {
-            staging_path(destination).expect("a replaced destination has a stage name")
-        };
-        let MultiFileReplacementError {
-            failure,
-            cleanup_failures,
-            rollback_failures,
-            refused_rollbacks,
-        } = error;
-        let mut cleanup_failures = cleanup_failures
-            .into_iter()
-            .map(|failure| stage_left(root, failure.projection().path.as_path()))
-            .collect::<Vec<_>>();
-        let failure = match *failure {
-            MultiFileReplacementFailure::InvalidPlan(failures) => {
-                let index = match failures
-                    .into_iter()
-                    .next()
-                    .expect("an invalid plan names what is invalid in it")
-                {
-                    ReplacementPlanFailure::DestinationIdentity {
-                        operation_index, ..
-                    }
-                    | ReplacementPlanFailure::CandidateValidation { operation_index }
-                    | ReplacementPlanFailure::InvalidDestination { operation_index }
-                    | ReplacementPlanFailure::DuplicateDestination { operation_index } => {
-                        operation_index
-                    }
-                };
-                CommitFailure::new(locate(destinations[index]))
-            }
-            MultiFileReplacementFailure::DestinationChanged { destination }
-            | MultiFileReplacementFailure::PriorRead { destination, .. } => {
-                CommitFailure::new(locate(&destination))
-            }
-            MultiFileReplacementFailure::Replacement { destination, error } => {
-                cleanup_failures.extend(
-                    error
-                        .cleanup_failure
-                        .map(|_| stage_left(root, &stage_of(&destination))),
-                );
-                CommitFailure::new(locate(&destination))
-            }
-        };
-        for rollback in rollback_failures {
-            let RollbackFailure { destination, error } = rollback;
-            cleanup_failures.push(CleanupFailure::new(locate(&destination)));
-            cleanup_failures.extend(
-                error
-                    .cleanup_failure
-                    .map(|_| stage_left(root, &stage_of(&destination))),
-            );
-        }
-        cleanup_failures.extend(
-            refused_rollbacks
-                .into_iter()
-                .map(|refused| CleanupFailure::new(locate(&refused.destination))),
-        );
-        Self::commit(failure, cleanup_failures)
-    }
 }
 
 /// The stage at `stage` inside the Root at `root`, which a replacement could not remove.
@@ -301,8 +246,7 @@ fn stage_left(root: &Path, stage: &Path) -> CleanupFailure {
 
 /// One managed act a mutation plan performs, named the same whichever capability
 /// performs it.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum OperationKind {
     CreateStagingDirectory,
     CreateMetadataDirectory,
@@ -327,8 +271,6 @@ pub enum OperationKind {
     DiscardMergedEntry,
 }
 
-impl crate::code::Coded for OperationKind {}
-
 /// One managed operation a plan performs, where the Package locates it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlannedOperation {
@@ -337,13 +279,6 @@ pub struct PlannedOperation {
     /// Whether the entry the operation acts on is a directory, for the operations that act
     /// on a merged Order's entries.
     pub directory: bool,
-}
-
-/// Whether committing `operations` replaces the Vendor record.
-pub(crate) fn replaces_vendors(operations: &[PlannedOperation]) -> bool {
-    operations
-        .iter()
-        .any(|operation| operation.kind == OperationKind::ReplaceVendorRecord)
 }
 
 impl PlannedOperation {

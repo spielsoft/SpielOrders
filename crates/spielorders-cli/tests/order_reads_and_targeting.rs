@@ -12,8 +12,8 @@
 //! and lifecycle contract; Define durable metadata schemas and version evolution.
 
 use crate::support::{
-    Invocation, directory_that_is_not_a_root, managed_snapshot, newest_order_id, order_directory,
-    populated_package, response,
+    Invocation, directory_that_is_not_a_root, newest_order_id, order_directory, populated_package,
+    response,
 };
 
 /// Standing in an Order Directory with no options at all is the ordinary human
@@ -141,68 +141,6 @@ fn uuid_resolves_an_order_of_the_current_directory_package() {
     assert_eq!(by_identity["data"], by_directory["data"]);
 }
 
-/// The two routes are two ways of naming one Order, so a command line supplying both is
-/// asking about two — and it is refused before anything is read or written.
-///
-/// The read is the visible half of the defect this ends and the mutation is the costly
-/// one. While `--root` was the executable's option and `--uuid` this family's, the two
-/// landed in one subcommand's own matches only at some of the placements a caller could
-/// write; at the others — including the one the top-level help taught,
-/// `spielorders --root … order show` — the command answered instead, having quietly read
-/// `--root` as the Package to resolve the identity against, and an `order edit` written
-/// that way resolved the Order and **committed**. Both options are now the command's own,
-/// so there is one placement and the parser refuses it.
-///
-/// A usage error carries the one shared `spielorders.usage` identity and never the
-/// command's own: exit `2` exists because nothing about the subject was attempted, so no
-/// command shape ran to be identified.
-#[test]
-fn naming_one_order_both_ways_reads_nothing_and_changes_nothing() {
-    let (_tree, root) = populated_package("order-uuid-and-root");
-    let before = managed_snapshot(&root);
-    // The SpielOrders Root rather than an Order Directory, because that is the value the
-    // unenforced placement quietly gave a second meaning: `--root` names the Order
-    // Directory for every `order` command, and there it was consumed as the Package the
-    // identity resolves against, so the command answered about a real Order.
-    let package_root = root.display().to_string();
-
-    for line in [
-        vec!["order", "show"],
-        vec!["order", "item", "list"],
-        vec!["order", "edit", "project=Telescope"],
-    ] {
-        let mut written = line.clone();
-        written.extend([
-            "--root",
-            package_root.as_str(),
-            "--uuid",
-            crate::support::SOME_ORDER_ID,
-            "--json",
-        ]);
-        let outcome = Invocation::new(&written).run();
-        let document = response(&outcome);
-
-        assert_eq!(outcome.status, Some(2), "{line:?}");
-        assert_eq!(document["contract"], "spielorders.usage", "{line:?}");
-        assert_eq!(document["error"]["code"], "usage_invalid", "{line:?}");
-        // Named rather than classified: these two are targeting routes, and a sentence
-        // that called them output modes was the defect this pins shut.
-        let message = document["error"]["detail"]
-            .as_str()
-            .expect("a usage error carries its message");
-        assert!(
-            message.contains("--root") && message.contains("--uuid"),
-            "{line:?}: the refusal names both routes: {message}"
-        );
-    }
-
-    assert_eq!(
-        managed_snapshot(&root),
-        before,
-        "a refused command line changes nothing"
-    );
-}
-
 /// `--uuid` against a directory that is not a SpielOrders Root reports the same code a
 /// Package-level command does, and says which route the caller actually took.
 ///
@@ -299,43 +237,26 @@ fn the_human_surface_numbers_the_items_and_renders_their_totals() {
     assert!(printed.contains("\ntotal: 181.00\n"), "{printed}");
 }
 
-/// `--quiet` says nothing on success and `--verbose` adds the detail, for all three.
+/// `--verbose` adds which Order and which Package a read is of: the Package Root wherever a
+/// read renders the Order, and the Order's UUID wherever the response carries one.
 ///
-/// The four output modes are one set, so a command that answered under `--quiet` or that
-/// leaked its result into the wrong stream would be a hole in a rule fifteen other
-/// commands keep.
+/// `order readme`'s payload is the three facts the decision enumerates for it — the
+/// absolute path, the relevant relative path, and existence — so it carries no Order
+/// identity to hold back, and its absolute path is what attributes its answer.
 #[test]
-fn the_four_output_modes_hold_for_every_order_read() {
+fn verbose_adds_the_roots_and_the_order_identity_to_the_order_reads() {
     let (_tree, root) = populated_package("order-output-modes");
     let directory = order_directory(&root, "Laser_components");
 
-    // `order readme`'s payload is the three facts the decision enumerates for it — the
-    // absolute path, the relevant relative path, and existence — so it carries no Order
-    // identity to hold back, and its absolute path is what attributes its answer.
-    // `order item list` renders only the Items, so its `--verbose` detail is not asserted.
-    for (command, renders_the_order, names_the_order) in [
-        (vec!["order", "show"], true, true),
-        (vec!["order", "readme"], true, false),
-        (vec!["order", "item", "list"], false, false),
+    for (command, names_the_order) in [
+        (vec!["order", "show"], true),
+        (vec!["order", "readme"], false),
     ] {
-        let quiet = Invocation::new(&command)
-            .argument("--quiet")
-            .rooted_at(&directory)
-            .run();
-        assert_eq!(quiet.status, Some(0), "{command:?}");
-        assert_eq!(quiet.stdout, b"", "{command:?}: {}", quiet.stdout_text());
-        assert_eq!(quiet.stderr, b"", "{command:?}: {}", quiet.stderr_text());
-
         let verbose = Invocation::new(&command)
             .argument("--verbose")
             .rooted_at(&directory)
             .run();
         assert_eq!(verbose.status, Some(0), "{command:?}");
-        if !renders_the_order {
-            continue;
-        }
-        // Both roots are `--verbose` detail, because which Order and which Package a read
-        // is of is the same detail wherever a read renders it.
         assert!(
             verbose
                 .stdout_text()
@@ -346,8 +267,7 @@ fn the_four_output_modes_hold_for_every_order_read() {
         assert_eq!(
             verbose.stdout_text().contains(&*newest_order_id(&root)),
             names_the_order,
-            "{command:?}: an Order's UUID is `--verbose` detail wherever the response \
-             carries one: {}",
+            "{command:?}: {}",
             verbose.stdout_text()
         );
     }

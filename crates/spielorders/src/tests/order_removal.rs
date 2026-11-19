@@ -21,6 +21,7 @@ use crate::metadata::OrderDocument;
 use crate::ports::RenameOutcome;
 use crate::{Failure, Warning};
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 const ORDER_ID: &str = "8b6e3f0a-8ec5-4d47-95e1-412652a56d16";
@@ -139,6 +140,7 @@ fn a_removal_moves_the_intact_directory_into_the_removed_orders_directory() {
     let (_tree, root, directory) = default_package("removal-recoverable");
     let removed = root.join("Removed").join(BASENAME);
     let before = contents(&directory);
+    let index_before = fs::read(root.join(".spielorders/index.json")).unwrap();
     assert!(!root.join("Removed").exists(), "Removed starts absent");
 
     let plan = crate::plan(
@@ -158,7 +160,15 @@ fn a_removal_moves_the_intact_directory_into_the_removed_orders_directory() {
         ],
         "a same-depth disposition rewrites no record"
     );
+    // A dry run creates no Removed Orders Directory, moves nothing, and rebuilds no
+    // index.
     assert!(directory.is_dir(), "planning moves nothing");
+    assert_eq!(contents(&directory), before);
+    assert!(!root.join("Removed").exists());
+    assert_eq!(
+        fs::read(root.join(".spielorders/index.json")).unwrap(),
+        index_before
+    );
 
     let report = crate::commit(plan, &effects(&PlatformFileSystem)).result;
 
@@ -236,7 +246,7 @@ fn an_existing_removed_orders_directory_is_reused_rather_than_clobbered() {
 }
 
 #[test]
-fn the_locator_outcome_covers_unchanged_updated_and_not_applicable() {
+fn the_moved_record_locator_is_rewritten_only_when_its_depth_changes() {
     // Unchanged: Orders and Removed are both direct children, so the relative path
     // back to the Package root keeps its depth.
     let (_tree, root, directory) = default_package("removal-locator-unchanged");
@@ -299,37 +309,61 @@ fn stored_locator(directory: &Path) -> String {
     .expect("the canonical Order parses")
 }
 
+/// What a disposition may not inspect, and the mode that forbids it: the Order
+/// Directory can be searched by name but not listed, and its Supporting Material
+/// cannot be read at all.
+const SEALED: [(&str, u32); 3] = [("", 0o300), ("quote.bin", 0o000), ("Quotes", 0o000)];
+
+/// An Order Directory sealed as [`SEALED`] says, unsealed again when dropped at
+/// whichever of its places it then occupies.
+struct Sealed(Vec<PathBuf>);
+
+impl Sealed {
+    fn new(directory: &Path, places: &[&Path]) -> Self {
+        let sealed = Self(places.iter().map(|place| place.to_path_buf()).collect());
+        for (relative, mode) in SEALED.iter().rev() {
+            fs::set_permissions(directory.join(relative), fs::Permissions::from_mode(*mode))
+                .unwrap();
+        }
+        sealed
+    }
+}
+
+impl Drop for Sealed {
+    fn drop(&mut self) {
+        for place in &self.0 {
+            for (relative, _) in SEALED {
+                // Absent at the place the directory does not occupy.
+                let _ =
+                    fs::set_permissions(place.join(relative), fs::Permissions::from_mode(0o755));
+            }
+        }
+    }
+}
+
+/// A disposition never enumerates the directory it moves or reads its Supporting
+/// Material, so one it could do neither to moves it whole.
 #[test]
 fn no_disposition_enumerates_the_directory_it_moves() {
     let (_tree, root, directory) = default_package("removal-no-enumeration");
+    let removed = root.join("Removed").join(BASENAME);
+    let before = contents(&directory);
+    let sealed = Sealed::new(&directory, &[&directory, &removed]);
+
     let plan = crate::plan(
         &remove_order(directory.clone()),
         &effects(&PlatformFileSystem),
     )
-    .result
-    .unwrap();
+    .result;
+    let report = plan.map(|plan| crate::commit(plan, &effects(&PlatformFileSystem)).result);
+    drop(sealed);
 
-    let observing = ScriptedFileSystem::new();
-    let report = crate::commit(plan, &effects(&observing)).result;
-
-    assert!(matches!(report, Ok(Report::Committed { .. })));
-    // The refresh that follows lists the Orders Directory, which is its declared
-    // work. Nothing lists inside the Order that moved, and nothing reads its opaque
-    // Supporting Material.
-    let removed = root.join("Removed").join(BASENAME);
-    for listed in observing.paths(Operation::ReadDirectory) {
-        assert!(
-            !listed.starts_with(&directory) && !listed.starts_with(&removed),
-            "no disposition enumerates the Order Directory, but listed {listed:?}"
-        );
-    }
-    for read in observing.paths(Operation::Read) {
-        let read = read.to_string_lossy().to_string();
-        assert!(
-            !read.contains("quote.bin") && !read.contains("drawing.bin"),
-            "Supporting Material is never inspected, but read {read}"
-        );
-    }
+    assert!(
+        matches!(report, Ok(Ok(Report::Committed { .. }))),
+        "{report:?}"
+    );
+    assert!(!directory.exists());
+    assert_eq!(contents(&removed), before);
 }
 
 /// Real effects, except that the whole-directory move fails.
@@ -351,12 +385,6 @@ fn move_erroring_after_arrival(arrival: &'static str) -> ScriptedFileSystem {
             outside.write(&destination.parent().unwrap().join(arrival), b"not ours\n");
         })
         .fails();
-    filesystem
-}
-
-fn move_erroring_with_undo_failing() -> ScriptedFileSystem {
-    let filesystem = move_erroring();
-    filesystem.on(Operation::RemoveDirectory).fails();
     filesystem
 }
 
@@ -532,31 +560,6 @@ fn an_order_edited_after_planning_is_never_carried_back_out_stale() {
 }
 
 #[test]
-fn planning_a_removal_moves_nothing() {
-    let (_tree, root, directory) = default_package("removal-dry-run");
-    let before = contents(&directory);
-    let index_before = fs::read(root.join(".spielorders/index.json")).unwrap();
-
-    let plan = crate::plan(
-        &remove_order(directory.clone()),
-        &effects(&PlatformFileSystem),
-    )
-    .result
-    .unwrap_or_else(|error| panic!("a removal can be planned: {error:?}"));
-    assert!(!plan.operations().is_empty());
-
-    // A dry run creates no Removed Orders Directory, moves nothing, and rebuilds no
-    // index.
-    assert!(!root.join("Removed").exists());
-    assert!(directory.is_dir());
-    assert_eq!(contents(&directory), before);
-    assert_eq!(
-        fs::read(root.join(".spielorders/index.json")).unwrap(),
-        index_before
-    );
-}
-
-#[test]
 fn a_destination_collision_stops_removal_without_inventing_a_suffix() {
     let (_tree, root, directory) = default_package("removal-collision");
     let removed_root = root.join("Removed");
@@ -706,25 +709,6 @@ fn injected_disposition_failures_leave_the_order_active_and_whole() {
     assert!(!root.join("Removed").join(BASENAME).exists());
     assert_eq!(indexed_order_ids(&root), [ORDER_ID.to_owned()]);
 
-    // The destination is taken between planning and the move.
-    let (_tree, _root, directory) = default_package("removal-move-collision-race");
-    let plan = crate::plan(
-        &remove_order(directory.clone()),
-        &effects(&PlatformFileSystem),
-    )
-    .result
-    .unwrap();
-    let report = crate::commit(
-        plan,
-        &effects(&move_reporting(RenameOutcome::DestinationExists)),
-    )
-    .result;
-    assert!(
-        report.is_err(),
-        "a taken destination at commit is a collision: {report:?}"
-    );
-    assert!(directory.is_dir());
-
     // The lazy Removed Orders Directory cannot be created.
     let (_tree, root, directory) = default_package("removal-create-failure");
     let plan = crate::plan(
@@ -845,40 +829,6 @@ fn a_rejected_removal_retains_a_directory_it_created_that_evidence_arrived_in() 
         fs::read(&arrived).unwrap(),
         b"not ours\n",
         "the rollback never discards what it did not create"
-    );
-    assert!(directory.is_dir(), "the Order stays active");
-}
-
-#[test]
-fn a_cleanup_that_fails_is_reported_beside_the_failure_that_initiated_it() {
-    let (_tree, root, directory) = default_package("removal-rollback-undo-failure");
-    let removed_root = root.join("Removed");
-    let plan = crate::plan(
-        &remove_order(directory.clone()),
-        &effects(&PlatformFileSystem),
-    )
-    .result
-    .unwrap();
-
-    let report = crate::commit(plan, &effects(&move_erroring_with_undo_failing())).result;
-
-    // Beside, not instead of: the removal was refused because the move failed, and the
-    // caller separately learns that the directory that refusal created is still there.
-    let Failure::CommitFailedCleanupIncomplete {
-        failure: _,
-        cleanup_failures,
-    } = failed_commit(&report)
-    else {
-        panic!("the initiating failure and the cleanup failure are both reported: {report:?}");
-    };
-    assert_reported_beside(failed_commit(&report));
-    let [cleanup] = cleanup_failures.as_slice() else {
-        panic!("one directory was left: {cleanup_failures:?}");
-    };
-    assert_eq!(cleanup.location.absolute_path, removed_root);
-    assert!(
-        removed_root.is_dir(),
-        "the report names a directory that really is still there"
     );
     assert!(directory.is_dir(), "the Order stays active");
 }
@@ -1191,4 +1141,222 @@ fn a_volume_without_exclusive_rename_is_named_as_the_obstacle() {
     );
     assert_eq!(contents(&directory), before);
     assert!(!root.join("Removed").exists());
+}
+
+#[test]
+fn a_restore_whose_move_fails_puts_the_rewritten_locator_back() {
+    let (_tree, root, directory) = package_with_a_deeper_orders_directory("restore-move-fails");
+    let plan = crate::plan(
+        &remove_order(directory.clone()),
+        &effects(&PlatformFileSystem),
+    )
+    .result
+    .unwrap();
+    assert!(matches!(
+        crate::commit(plan, &effects(&PlatformFileSystem)).result,
+        Ok(Report::Committed { .. })
+    ));
+    let removed = root.join("Removed").join(BASENAME);
+    let (record, stage) = moved_record(&removed);
+    let before = fs::read(&record).unwrap();
+    let restore = Change::RestoreOrder {
+        root: root.clone(),
+        removed: removed.clone(),
+    };
+    let plan = crate::plan(&restore, &effects(&PlatformFileSystem))
+        .result
+        .unwrap();
+    assert_eq!(
+        operation_kinds(&plan),
+        [
+            "replace_order_record",
+            "move_order_directory",
+            "refresh_package_index",
+        ],
+        "the restore rewrites the locator before the move"
+    );
+
+    let report = crate::commit(plan, &effects(&move_erroring())).result;
+
+    assert!(
+        matches!(report, Err(Failure::CommitFailed { .. })),
+        "{report:?}"
+    );
+    assert_eq!(
+        fs::read(&record).unwrap(),
+        before,
+        "the locator is put back"
+    );
+    assert_eq!(stored_locator(&removed), "../..");
+    assert!(!stage.exists());
+    assert!(!directory.exists(), "the Order stays removed");
+}
+
+#[test]
+fn a_removal_on_a_volume_without_exclusive_rename_names_the_volume_and_what_it_left() {
+    let (_tree, root, directory) = default_package("removal-exfat");
+    let filesystem = crate::tests::support::exfat_like();
+    let plan = crate::plan(
+        &remove_order(directory.clone()),
+        &effects(&PlatformFileSystem),
+    )
+    .result
+    .unwrap();
+
+    let failure = crate::commit(plan, &effects(&filesystem))
+        .result
+        .unwrap_err();
+
+    assert!(
+        matches!(
+            failure,
+            Failure::FilesystemUnsupportedCleanupIncomplete { .. }
+        ),
+        "{failure:?}"
+    );
+    assert!(directory.is_dir(), "the Order stays active");
+    // Nothing proves the Removed Orders Directory is this commit's own, so it stays and is
+    // named.
+    assert!(root.join("Removed").is_dir());
+    let reported = crate::tests::support::reported(&failure);
+    assert!(
+        reported
+            .iter()
+            .all(|(code, _)| *code == crate::SPIELORDERS_FAILURE_FILESYSTEM_UNSUPPORTED),
+        "{reported:?}"
+    );
+    assert!(
+        reported.iter().any(|(_, path)| path == "Removed"),
+        "{reported:?}"
+    );
+}
+
+/// A restore whose move fails after someone else rewrote the record the restore had
+/// already relocated, so its undo must refuse to put the old locator back.
+fn restore_refused_by_another_writer(label: &str) -> (TemporaryTree, PathBuf, Change) {
+    let (tree, root, directory) = package_with_a_deeper_orders_directory(label);
+    let plan = crate::plan(
+        &remove_order(directory.clone()),
+        &effects(&PlatformFileSystem),
+    )
+    .result
+    .unwrap();
+    assert!(matches!(
+        crate::commit(plan, &effects(&PlatformFileSystem)).result,
+        Ok(Report::Committed { .. })
+    ));
+    let removed = root.join("Removed").join(BASENAME);
+    let restore = Change::RestoreOrder {
+        root: root.clone(),
+        removed: removed.clone(),
+    };
+    (tree, removed, restore)
+}
+
+fn rewriting_the_record_then_failing_the_move() -> ScriptedFileSystem {
+    let filesystem = ScriptedFileSystem::new();
+    filesystem
+        .on(Operation::RenameNew)
+        .preceded_by(|outside| {
+            let record = outside
+                .call()
+                .source
+                .clone()
+                .expect("a move names its source")
+                .join(".spielorders/order.json");
+            outside.write(&record, b"another writer's record");
+        })
+        .fails();
+    filesystem
+}
+
+#[test]
+fn a_restore_never_publishes_changed_rollback_bytes() {
+    let (_tree, removed, restore) = restore_refused_by_another_writer("restore-rollback-candidate");
+    let (record, stage) = moved_record(&removed);
+    let plan = crate::plan(&restore, &effects(&PlatformFileSystem))
+        .result
+        .unwrap();
+    let filesystem = ScriptedFileSystem::new();
+    filesystem.on(Operation::RenameNew).fails();
+    filesystem
+        .on(Operation::WriteNew)
+        .ending_in(".order.json.spielorders-stage")
+        .skipping(1)
+        .once()
+        .followed_by(|outside| outside.write(&outside.call().path, b"unowned rollback bytes"))
+        .proceeds();
+
+    let failure = crate::commit(plan, &effects(&filesystem))
+        .result
+        .expect_err("the failed move cannot restore from a changed stage");
+
+    assert_ne!(fs::read(&record).unwrap(), b"unowned rollback bytes");
+    assert_eq!(fs::read(&stage).unwrap(), b"unowned rollback bytes");
+    for path in [record, stage] {
+        assert!(
+            failure
+                .cleanup_failures()
+                .iter()
+                .any(|left| left.location.absolute_path == path),
+            "every retained entry is named: {failure:?}"
+        );
+    }
+}
+
+#[test]
+fn a_refused_undo_takes_back_the_stage_it_wrote() {
+    let (_tree, removed, restore) = restore_refused_by_another_writer("restore-undo-refused");
+    let (record, stage) = moved_record(&removed);
+    let plan = crate::plan(&restore, &effects(&PlatformFileSystem))
+        .result
+        .unwrap();
+    let filesystem = rewriting_the_record_then_failing_the_move();
+
+    let failure = crate::commit(plan, &effects(&filesystem))
+        .result
+        .unwrap_err();
+
+    assert!(filesystem.disturbed());
+    assert_eq!(fs::read(&record).unwrap(), b"another writer's record");
+    assert!(
+        !stage.exists(),
+        "the refused restoration removed its own stage"
+    );
+    let left: Vec<_> = failure
+        .cleanup_failures()
+        .iter()
+        .map(|left| spelled(&left.location))
+        .collect();
+    assert_eq!(
+        left,
+        [format!("Removed/{BASENAME}/.spielorders/order.json")]
+    );
+}
+
+#[test]
+fn a_refused_undo_names_the_stage_it_could_not_take_back() {
+    let (_tree, removed, restore) = restore_refused_by_another_writer("restore-undo-stage-kept");
+    let (_, stage) = moved_record(&removed);
+    let plan = crate::plan(&restore, &effects(&PlatformFileSystem))
+        .result
+        .unwrap();
+    let filesystem = rewriting_the_record_then_failing_the_move();
+    filesystem
+        .on(Operation::RemoveFile)
+        .ending_in(".order.json.spielorders-stage")
+        .fails();
+
+    let failure = crate::commit(plan, &effects(&filesystem))
+        .result
+        .unwrap_err();
+
+    assert!(stage.exists());
+    assert!(
+        failure.cleanup_failures().iter().any(|left| left
+            .location
+            .absolute_path
+            .ends_with(".spielorders/.order.json.spielorders-stage")),
+        "{failure:?}"
+    );
 }

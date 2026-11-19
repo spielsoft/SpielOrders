@@ -51,7 +51,7 @@ pub fn read_vendor<E: Effects>(root: &Path, vendor: &VendorRef, effects: &E) -> 
 /// records are in; an Order's needs a healthy Order.
 pub fn read_readme<E: Effects>(scope: &Scope, effects: &E) -> Answer<ReadmeRead> {
     match scope {
-        Scope::Package(root) => canonical::read_package_readme(root, effects.file_system()).into(),
+        Scope::Package(root) => canonical::read_readme(root, effects.file_system()).into(),
         Scope::Order(order) => read_order(order, effects).map(|read| read.readme),
     }
 }

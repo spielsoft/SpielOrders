@@ -25,23 +25,6 @@ import Testing
     #expect(cleared.rows.last?.damage != nil)
 }
 
-@Test func vendorLookup() async throws {
-    let root = try initializedPackage()
-    defer { try? FileManager.default.removeItem(at: root) }
-    _ = try createVendor(in: root, name: "Optics Alpha")
-    _ = try createVendor(in: root, name: "optics Zulu")
-    let session = PackageSession()
-    _ = try await session.open(root, cancellation: LibraryCancellation())
-    let insensitive = try await session.vendors(query: "optics", caseSensitive: false, includeHidden: false,
-                                                  sortField: SPIELORDERS_VENDOR_FIELD_NAME, descending: true,
-                                                  cancellation: LibraryCancellation())
-    #expect(insensitive.rows.map(\.name) == ["optics Zulu", "Optics Alpha"])
-    let sensitive = try await session.vendors(query: "optics", caseSensitive: true, includeHidden: false,
-                                                sortField: SPIELORDERS_VENDOR_FIELD_NAME, descending: true,
-                                                cancellation: LibraryCancellation())
-    #expect(sensitive.rows.map(\.name) == ["optics Zulu"])
-}
-
 @Test func fieldScopedOrderLookup() async throws {
     let root = try initializedPackage()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -71,14 +54,15 @@ import Testing
     _ = try createVendor(in: root, name: "Beam Works")
     let session = PackageSession()
     _ = try await session.open(root, cancellation: LibraryCancellation())
-    func names(_ query: String, in field: Int32?) async throws -> [String] {
-        try await session.vendors(query: query, field: field, caseSensitive: false, includeHidden: false,
+    func names(_ query: String, in field: Int32?, caseSensitive: Bool = false) async throws -> [String] {
+        try await session.vendors(query: query, field: field, caseSensitive: caseSensitive, includeHidden: false,
                                   sortField: SPIELORDERS_VENDOR_FIELD_NAME, descending: false,
                                   cancellation: LibraryCancellation())
             .rows.map(\.name)
     }
 
     #expect(try await names("beam", in: nil) == ["Beam Works", "Optics Alpha"])
+    #expect(try await names("beam", in: nil, caseSensitive: true) == ["Optics Alpha"])
     #expect(try await names("beam", in: SPIELORDERS_VENDOR_FIELD_NAME) == ["Beam Works"])
     #expect(try await names("beam", in: SPIELORDERS_CONTACT_FIELD_EMAIL) == ["Optics Alpha"])
     for field in PackageSession.vendorSearchFields {

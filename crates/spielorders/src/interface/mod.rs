@@ -9,10 +9,12 @@
 
 mod batch;
 mod call;
+mod codes;
 mod constants;
 mod diagnosis;
 mod draft;
 mod entries;
+mod fields;
 mod library;
 mod list;
 mod material;

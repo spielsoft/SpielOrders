@@ -1,7 +1,7 @@
 import SpielOrdersKit
 import SwiftUI
 
-/// A README's always-editable text, marked at its corner when a save wrote nothing, warned,
+/// A README's always-editable text, marked at its corner when a save was refused, warned,
 /// or left it to wait for Reload.
 struct ReadmeArea: View {
     @Bindable var model: DesktopModel
@@ -23,7 +23,7 @@ struct ReadmeArea: View {
                         .padding(.trailing, 20)
                 }
         } else {
-            Text("README is unreadable. Reload the Package to refresh.")
+            Text("The README couldn’t be read. Reload the Package.")
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier(identifier + ".note")
         }
@@ -41,7 +41,7 @@ private struct ReadmeBadge: View {
                 ProblemBadge(level: .problem, title: "Not Saved", lines: [failure.summary], actions: repairs(failure),
                              identifier: "readme.notSaved")
             } else if !readme.writable || !model.canBrowseRecords {
-                ReloadBadge(model: model, explanation: "Reload the Package before editing this README.",
+                ReloadBadge(model: model, explanation: "Reload the Package to keep editing.",
                             identifier: "readme.reloadRequired", notice: readme.writable ? nil : readme.warning)
             }
             if let warning = readme.warning, readme.writable {

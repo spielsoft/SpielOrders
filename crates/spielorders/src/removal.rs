@@ -6,19 +6,17 @@
 //! enumerates, reads, or rewrites a directory's children, and nothing here erases anything.
 
 use crate::{
-    Answer, Failure, Warning,
-    canonical::{CurrentPackageCandidate, HealthyOrder, Touched},
+    Answer, Failure,
+    canonical::{CurrentPackageCandidate, HealthyOrder},
+    change::PlannedAct,
     evidence::EvidenceFingerprint,
-    filesystem::{DestinationExpectation, replace_validated_file_expecting},
+    journal::{Journal, ManagedRecord, Subject, planned_location},
     metadata::{OrderDocument, PackageRoot},
-    mutation::{
-        CleanupFailure, CommitFailure, IndexRefresh, MutationReport, Never, OperationKind,
-        PlannedOperation,
-    },
+    mutation::{CommitFailure, MutationReport, OperationKind},
     operations::FailedOperation,
     order_edits::resolve_order,
-    ports::{Effects, FileSystem, FileSystemEntryKind, RenameOutcome},
-    readme::{Location, package_relative_path_text},
+    ports::{Effects, FileSystem, FileSystemEntryKind},
+    readme::Location,
 };
 use std::path::{Path, PathBuf};
 
@@ -43,7 +41,8 @@ pub struct OrderRemovalPlan {
     locator: LocatorOutcome,
     document: OrderDocument,
     evidence: EvidenceFingerprint,
-    pub(crate) operations: Vec<PlannedOperation>,
+    index: Location,
+    pub(crate) journal: Journal,
 }
 
 pub(crate) fn plan_order_removal<F: FileSystem>(
@@ -57,7 +56,6 @@ pub(crate) fn plan_order_removal<F: FileSystem>(
         let document = order.document.clone();
         let index = package.context.index.clone();
 
-        let mut operations = Vec::new();
         // A resolved Package always names its Removed Orders Directory, and the
         // Package load has already refused a configured path that is anything
         // other than absent or an ordinary root-child directory, so an unusable
@@ -89,7 +87,7 @@ pub(crate) fn plan_order_removal<F: FileSystem>(
         // The same projection the evidence re-observes, so plan-time and
         // commit-time answers cannot drift apart through two spellings of one rule.
         let destination = projected_destination(&source.absolute_path, &package)
-            .map(|destination| located(&root, destination))
+            .map(|destination| planned_location(&root, destination))
             .ok_or_else(|| Failure::OrderNotFound {
                 directory: source.clone().into(),
                 root: Some(root.clone()),
@@ -112,30 +110,9 @@ pub(crate) fn plan_order_removal<F: FileSystem>(
                 }
             }
         }
-        let locator = locator_outcome(removed_relative_depth + 1, order.package_root());
-        if creates {
-            operations.push(PlannedOperation::new(
-                OperationKind::CreateRemovedOrdersDirectory,
-                removed.clone(),
-            ));
-        }
-        operations.push(PlannedOperation::new(
-            OperationKind::MoveOrderDirectory,
-            destination.clone(),
-        ));
-        if matches!(locator, LocatorOutcome::Updated { .. }) {
-            operations.push(PlannedOperation::new(
-                OperationKind::ReplaceOrderRecord,
-                located(&root, order_record(&destination.absolute_path)),
-            ));
-        }
-        operations.push(PlannedOperation::new(
-            OperationKind::RefreshPackageIndex,
-            index,
-        ));
-
+        let locator = locator_outcome(removed_relative_depth + 1, order.locator());
         let evidence = removal_evidence(&package, &order);
-        Ok(OrderRemovalPlan {
+        let mut plan = OrderRemovalPlan {
             root,
             source,
             destination,
@@ -144,8 +121,11 @@ pub(crate) fn plan_order_removal<F: FileSystem>(
             locator,
             document,
             evidence,
-            operations,
-        })
+            journal: Journal::new(&package.context.root.absolute_path),
+            index,
+        };
+        plan.journal = plan.removal_journal();
+        Ok(plan)
     })
 }
 
@@ -214,7 +194,7 @@ fn removal_evidence(
 /// the same depth keeps the same locator.
 ///
 /// It takes the locator rather than the record, because a removal plans for an Order the
-/// Package load judged healthy and [`HealthyOrder::package_root`] is where that Order's
+/// Package load judged healthy and [`HealthyOrder::locator`] is where that Order's
 /// locator is already settled.
 fn locator_outcome(depth: usize, locator: &PackageRoot) -> LocatorOutcome {
     let projected = vec![".."; depth].join("/");
@@ -234,190 +214,125 @@ pub struct OrderRemovalResult {
 
 pub(crate) type OrderRemovalReport = MutationReport<OrderRemovalResult>;
 
+impl OrderRemovalPlan {
+    /// The commit removing this plan's Order: the Removed Orders Directory created where
+    /// it is absent, and the whole Order Directory moved into it by one rename. The record
+    /// is rewritten with its new locator only after the directory has left active scope,
+    /// as tidying up, so a failure there cannot damage the Package the caller still uses.
+    fn removal_journal(&self) -> Journal {
+        let managed = PlannedAct::Managed;
+        let mut journal = Journal::new(&self.root);
+        if self.creates_removed_orders_directory {
+            journal.create_directory(
+                self.removed_directory.absolute_path.clone(),
+                managed(OperationKind::CreateRemovedOrdersDirectory),
+            );
+        }
+        // One rename moves the complete tree. Nothing copies, enumerates, or rewrites a
+        // child, so README, managed metadata, and Supporting Material travel
+        // byte-identical.
+        journal.move_entry(
+            self.source.absolute_path.clone(),
+            self.destination.absolute_path.clone(),
+            managed(OperationKind::MoveOrderDirectory),
+            Subject::Order(self.source.absolute_path.clone()),
+        );
+        journal.commit_point();
+        if let Some(candidate) = self.relocated() {
+            // The record this plan confirmed is the one the rewrite is authorized to
+            // replace, and the copy it replaces is that record's own, carried there by the
+            // move. Its meaning is what is compared, projected the way the load projects
+            // it, so a record a person tidied by hand is still relocated.
+            let planned = ManagedRecord::order(
+                record_path(&self.destination.absolute_path),
+                self.document.clone(),
+            );
+            journal.replace(
+                planned.path().to_path_buf(),
+                candidate,
+                planned.expectation(),
+                managed(OperationKind::ReplaceOrderRecord),
+                Subject::Other,
+            );
+        }
+        journal.refreshing(self.index.clone());
+        journal
+    }
+
+    /// The record with the locator it needs in the Removed Orders Directory, where that
+    /// differs from the one it stores.
+    fn relocated(&self) -> Option<Vec<u8>> {
+        match &self.locator {
+            LocatorOutcome::Updated { to } => relocated_record(&self.document, to),
+            LocatorOutcome::Unchanged => None,
+        }
+    }
+}
+
+/// The journal committing `plan`, once the Order it was planned against is confirmed to
+/// still stand where it did, unchanged, in the same Package.
+pub(crate) fn confirmed<F: FileSystem>(
+    plan: &OrderRemovalPlan,
+    filesystem: &F,
+) -> Result<Journal, Failure> {
+    // The source must still be the ordinary directory this plan validated. Checked here
+    // rather than left to the resolution below, which canonicalizes: a link standing
+    // where the directory was would resolve to whatever it points at and then be
+    // disposed of in its place.
+    match filesystem.symlink_metadata(&plan.source.absolute_path) {
+        Ok(Some(FileSystemEntryKind::Directory)) => {}
+        _ => return Err(preconditions_changed(plan.source.clone())),
+    }
+
+    // Re-resolve the subject rather than settle for having found something there. A
+    // source that no longer resolves to a healthy Order of its own Package is neither
+    // this plan's Order nor identifiable as any other.
+    let (package, order) = match resolve_order(&plan.source.absolute_path, filesystem) {
+        Ok(resolved) => resolved,
+        Err(
+            Failure::OrderNotFound { .. }
+            | Failure::DamagedRecord { .. }
+            | Failure::DamagedOrder { .. },
+        ) => return Err(preconditions_changed(plan.source.clone())),
+        Err(failure) => return Err(failure),
+    };
+
+    // Immediately before the first effect, which is the lazy creation of the Removed
+    // Orders Directory or the move that follows it.
+    let outcome = plan.evidence.confirm(&removal_evidence(&package, &order));
+    if !outcome.is_unchanged() {
+        return Err(Failure::PlanEvidenceUnconfirmed { outcome });
+    }
+    // A record that needs a new locator and no longer relocates is an internal bug rather
+    // than a state of the Package, refused here, before anything moves.
+    if matches!(plan.locator, LocatorOutcome::Updated { .. }) && plan.relocated().is_none() {
+        let record = record_path(&plan.destination.absolute_path);
+        return Err(Failure::commit(
+            CommitFailure::new(planned_location(&plan.root, record)),
+            Vec::new(),
+        ));
+    }
+    Ok(plan.removal_journal())
+}
+
 pub(crate) fn commit_order_removal<E: Effects>(
     plan: OrderRemovalPlan,
     effects: &E,
 ) -> Answer<OrderRemovalReport> {
     let filesystem = effects.file_system();
     Answer::of(|| {
-        // The source must still be the ordinary directory this plan validated. Checked here
-        // rather than left to the resolution below, which canonicalizes: a link standing
-        // where the directory was would resolve to whatever it points at and then be
-        // disposed of in its place.
-        match filesystem.symlink_metadata(&plan.source.absolute_path) {
-            Ok(Some(FileSystemEntryKind::Directory)) => {}
-            _ => return Err(preconditions_changed(plan.source.clone())),
-        }
-
-        // Re-resolve the subject rather than settle for having found something there. A
-        // source that no longer resolves to a healthy Order of its own Package is neither
-        // this plan's Order nor identifiable as any other.
-        let (package, order) = match resolve_order(&plan.source.absolute_path, filesystem) {
-            Ok(resolved) => resolved,
-            Err(
-                Failure::OrderNotFound { .. }
-                | Failure::DamagedRecord { .. }
-                | Failure::DamagedOrder { .. },
-            ) => return Err(preconditions_changed(plan.source.clone())),
-            Err(failure) => return Err(failure),
-        };
-
-        // Immediately before the first effect, which is the lazy creation of the Removed
-        // Orders Directory or the move that follows it.
-        let outcome = plan.evidence.confirm(&removal_evidence(&package, &order));
-        if !outcome.is_unchanged() {
-            return Err(Failure::PlanEvidenceUnconfirmed { outcome });
-        }
-
-        let mut warnings = Vec::new();
-        let destination = plan.destination.clone();
-        // What this operation itself creates, and therefore the only thing its own
-        // rejection may undo. A directory that was already there is never recorded
-        // here and so is never a candidate.
-        let mut created = None;
-        if plan.creates_removed_orders_directory {
-            let removed = &plan.removed_directory;
-            if filesystem.create_directory(&removed.absolute_path).is_err() {
-                let failure = CommitFailure::new(removed.clone());
-                return Err(rejected(failure, Vec::new()));
-            }
-            created = Some(removed.clone());
-        }
-        // One rename moves the complete tree. Nothing copies, enumerates, or
-        // rewrites a child, so README, managed metadata, and Supporting Material
-        // travel byte-identical.
-        let (failure, error) =
-            match filesystem.rename_new(&plan.source.absolute_path, &destination.absolute_path) {
-                Ok(RenameOutcome::Renamed) => (None, None),
-                Ok(RenameOutcome::DestinationExists) => {
-                    (Some(CommitFailure::new(destination.clone())), None)
-                }
-                Err(error) => (Some(CommitFailure::new(destination.clone())), Some(error)),
-            };
-        if let Some(failure) = failure {
-            let cleanup_failures = undo_created_directory(&plan.root, created, filesystem);
-            let rejection = rejected(failure, cleanup_failures);
-            return Err(match error {
-                Some(error) => rejection.unless_unsupported(
-                    &plan.root,
-                    &plan.source.absolute_path,
-                    &error,
-                    filesystem,
-                ),
-                None => rejection,
-            });
-        }
-        // The locator is rewritten only after the directory has left active
-        // scope, so a failure here cannot damage the Package the caller still
-        // uses.
-        if let LocatorOutcome::Updated { to } = &plan.locator
-            && let Err(failure) = rewrite_locator(
-                &plan.root,
-                &destination.absolute_path,
-                &plan.document,
-                to,
-                filesystem,
-            )
-        {
-            warnings.push(Warning::LocatorUpdateFailed(failure));
-        }
-
-        let touched = Touched::orders([plan.source.absolute_path.clone()]);
-        let refresh = IndexRefresh::after_commit(&plan.root, &touched, filesystem);
-        warnings.extend(refresh.warning());
-
+        let committed = confirmed(&plan, filesystem)?.run(filesystem)?;
+        let refresh = committed.refresh(&plan.root, filesystem);
         let result = OrderRemovalResult {
-            final_location: destination,
+            final_location: plan.destination.clone(),
         };
         // The directory has already gone. A warning describes what could not be refreshed
         // afterwards, never a reason to retry the removal itself.
-        Ok(MutationReport::committed(result, warnings))
+        Ok(MutationReport::committed(
+            result,
+            committed.warnings(refresh),
+        ))
     })
-}
-
-/// Undoes the one Removed Orders Directory this operation created, after the removal
-/// that created it was rejected before anything of the Order moved into it.
-///
-/// It removes only that directory, and only while it is still the empty ordinary
-/// directory this operation created. A pre-existing directory is never a candidate,
-/// because `created` is `None` for one. Anything that arrived inside it in the meantime
-/// is evidence this operation did not create, so its presence retains the directory
-/// rather than being swept up with it — the whole point of undoing the creation is to
-/// leave the Package as the rejected removal found it, not to take something else away.
-fn undo_created_directory<F: FileSystem + FileSystem>(
-    _root: &Path,
-    created: Option<Location>,
-    filesystem: &F,
-) -> Vec<CleanupFailure> {
-    let Some(location) = created else {
-        return Vec::new();
-    };
-    let path = location.absolute_path.clone();
-    // Anything but the empty directory this operation created is not what it created,
-    // and this rollback does not remove it; what it cannot observe it cannot remove either.
-    let retained = || vec![CleanupFailure::new(location.clone())];
-    match filesystem.symlink_metadata(&path) {
-        Ok(Some(FileSystemEntryKind::Directory)) => {}
-        // Already gone: nothing this operation created is left to undo.
-        Ok(None) => return Vec::new(),
-        Ok(Some(_)) => return retained(),
-        Err(_) => return retained(),
-    }
-    // Emptiness is established before the removal rather than inferred from it, so an
-    // arrival this rollback can see is named as retained evidence instead of surfacing
-    // as an unexplained removal error. This narrows that window rather than closing it:
-    // something arriving inside it still makes the removal fail, which is reported as a
-    // failed cleanup naming a directory that really is still there.
-    match filesystem.read_directory(&path) {
-        Ok(entries) if entries.is_empty() => {}
-        Ok(_) => return retained(),
-        Err(_) => return retained(),
-    }
-    match filesystem.remove_directory(&path) {
-        Ok(()) => Vec::new(),
-        Err(_) => vec![CleanupFailure::new(location)],
-    }
-}
-
-fn rewrite_locator<F: FileSystem>(
-    root: &Path,
-    destination: &Path,
-    document: &OrderDocument,
-    locator: &str,
-    filesystem: &F,
-) -> Result<(), Failure> {
-    let record = order_record(destination);
-    let Some(candidate) = relocated_record(document, locator) else {
-        return Err(Failure::commit(
-            CommitFailure::new(located(root, record)),
-            Vec::new(),
-        ));
-    };
-    // The record this plan confirmed is the one the rewrite is authorized to replace,
-    // and the copy it replaces is that record's own, carried here by the move. This is
-    // the only guard over it: the Order has left the caller's view, and nothing looks
-    // at that record again. Meaning is what is compared, not bytes — the rule that
-    // sends a managed Order record replaced one at a time to `Equivalent` is in
-    // `docs/architecture/durable-writes.md`.
-    //
-    // Projected the way the load projects it, because `document` is the load's own
-    // projection rather than a raw parse: a record whose stored facts carry untrimmed
-    // text projects to the same Order, and comparing against the raw parse would
-    // refuse to relocate a record a person had tidied by hand.
-    let still_holds_the_planned_record = |current: &[u8]| {
-        OrderDocument::from_json_bytes(current)
-            .ok()
-            .and_then(|parsed| parsed.validate().ok())
-            .is_some_and(|projected| projected.order() == document)
-    };
-    let replacement = replace_validated_file_expecting(
-        &record,
-        &candidate,
-        DestinationExpectation::Equivalent(&still_holds_the_planned_record),
-        filesystem,
-        |_| Ok::<(), Never>(()),
-    );
-    replacement.map_err(|error| Failure::of_replacement(root, &record, error))
 }
 
 /// The plan's own confirmed record with its technical locator replaced, emitted as
@@ -427,10 +342,9 @@ fn rewrite_locator<F: FileSystem>(
 /// rather than an assembled one: the replaced value has to be readable back as a
 /// locator before anything is staged, which is asked of the field itself because the
 /// field carries that verdict. `None` therefore means the plan's own record stopped
-/// round-tripping, which is an internal bug rather than a state of the Package — and
-/// after a whole directory has already moved, reporting it is a better answer than
-/// ending the process.
-fn relocated_record(document: &OrderDocument, locator: &str) -> Option<Vec<u8>> {
+/// round-tripping, which is an internal bug rather than a state of the Package, and is
+/// refused before anything moves.
+pub(crate) fn relocated_record(document: &OrderDocument, locator: &str) -> Option<Vec<u8>> {
     let mut object = serde_json::to_value(document).ok()?.as_object().cloned()?;
     object.insert(
         "package_root".into(),
@@ -442,29 +356,12 @@ fn relocated_record(document: &OrderDocument, locator: &str) -> Option<Vec<u8>> 
     relocated.to_json_bytes().ok()
 }
 
-/// One planned path, as this Package locates it.
-///
-/// The Package-relative spelling holds by construction, as it does for a planned creation
-/// artifact: the source is a discovered Order Directory whose own `Location` the load
-/// already carries, the Removed Orders Directory is a configured root child the load has
-/// already confirmed has one, and the destination is that directory joined with the
-/// source's own basename or with this module's literal managed names.
-fn located(root: &Path, path: PathBuf) -> Location {
-    let relative = package_relative_path_text(root, &path)
-        .expect("a planned removal path has a Package-relative spelling");
-    Location::within_package(path, relative).expect("a planned removal path is normalized")
-}
-
 /// The managed Order record inside one Order Directory.
 ///
 /// One spelling for the operation this removal plans and the file it later replaces, so
 /// the path it reports and the path it writes cannot come apart.
-fn order_record(directory: &Path) -> PathBuf {
+fn record_path(directory: &Path) -> PathBuf {
     directory.join(".spielorders").join("order.json")
-}
-
-fn rejected(failure: CommitFailure, cleanup_failures: Vec<CleanupFailure>) -> Failure {
-    Failure::commit(failure, cleanup_failures)
 }
 
 fn preconditions_changed(location: Location) -> Failure {

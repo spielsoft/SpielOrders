@@ -50,8 +50,8 @@ extension DesktopModel {
         guard let readme, readme.draft.unsaved, !readme.draft.saving else { return }
         guard canBrowseRecords, readme.writable, let retainedFolder = folder else {
             guard !readme.refused else { return }
-            let explanation = "This README has text that can’t be written until the Package is reloaded. "
-                + "Choose File → Reload Package; it asks before discarding the text."
+            let explanation = "This README has text that can’t be saved until the Package is reloaded. "
+                + "Reload the Package to keep editing; it asks before discarding the text."
             readme.refuse(Notice(explanation, details: reloadReason?.details ?? ""))
             return
         }
@@ -89,8 +89,8 @@ extension DesktopModel {
                 } onCancel: { cancellation.request() }
                 readme.saved(saved)
                 if !saved.canEdit, readme.draft.unsaved {
-                    readme.refuse(Notice("The submitted text was saved. Later text is kept here; reload the Package "
-                        + "before continuing. Reload asks before discarding it.", details: saved.message))
+                    readme.refuse(Notice("The submitted text was saved. Later text is kept here. "
+                        + "Reload the Package to keep editing; it asks before discarding that text.", details: saved.message))
                 }
                 completed = true
             } catch {
@@ -120,7 +120,7 @@ extension DesktopModel {
         busy = true
         Task {
             let discard = await confirm("Discard unsaved README changes?",
-                                        "The text that could not be saved will be lost.",
+                                        "The text that couldn’t be saved will be lost.",
                                         identifier: "readme.revert", approve: "Revert", destructive: true)
             busy = false
             guard discard, self.readme === readme else { return }

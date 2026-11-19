@@ -69,7 +69,7 @@ import SwiftUI
             let panel = NSOpenPanel()
             panel.title = "Choose \(directory.rawValue)"
             panel.message = directory.help + " Choose an existing folder inside \(root.lastPathComponent)."
-            panel.prompt = "Choose Directory"
+            panel.prompt = "Choose Folder"
             panel.canChooseDirectories = true
             panel.canChooseFiles = false
             panel.canCreateDirectories = false
@@ -89,7 +89,7 @@ import SwiftUI
             }
             let alert = NSAlert()
             alert.messageText = "Choose a folder inside the Package"
-            alert.informativeText = "The \(directory.rawValue.lowercased()) must be inside \(root.lastPathComponent), not the Package folder itself. Choose another folder, or type a relative directory name in the setup form."
+            alert.informativeText = "The \(directory.rawValue.lowercased()) must be inside \(root.lastPathComponent), not the Package folder itself. Choose another folder, or type a folder name in the setup form."
             alert.addButton(withTitle: "Choose Again")
             alert.addButton(withTitle: "Cancel")
             alert.window.setAccessibilityIdentifier(directory.identifier + ".outside")
@@ -277,7 +277,7 @@ private struct PendingAlert {
         alert.window.setAccessibilityIdentifier(identifier + ".result")
         alert.addButton(withTitle: "OK").setAccessibilityIdentifier(identifier + ".dismiss")
         for choice in choices {
-            let button = alert.addButton(withTitle: choice == .details ? "Details…" : "Show in Finder")
+            let button = alert.addButton(withTitle: choice == .details ? "Details" : "Show in Finder")
             button.setAccessibilityIdentifier(identifier + (choice == .details ? ".details" : ".reveal"))
         }
         return alert
@@ -295,8 +295,8 @@ struct PackageOptions {
 }
 
 private enum SetupDirectory: String {
-    case orders = "Orders directory"
-    case removed = "Removed Orders directory"
+    case orders = "Orders folder"
+    case removed = "Removed Orders folder"
 
     var identifier: String {
         "package.initialize." + (self == .orders ? "ordersDirectory" : "removedDirectory")
@@ -304,8 +304,8 @@ private enum SetupDirectory: String {
 
     var help: String {
         switch self {
-        case .orders: "Contains the active Order folders that this Package browses and manages. Enter a relative name or choose an existing folder. Leave blank for the default."
-        case .removed: "Keeps removed Order folders recoverable inside this Package. This is separate from the macOS Trash. Enter a relative name or choose an existing folder. Leave blank for the default."
+        case .orders: "Holds one folder per Order. Enter a name, or choose a folder inside the Package. Leave blank for the default."
+        case .removed: "Keeps removed Orders recoverable. Separate from the macOS Trash. Leave blank for the default."
         }
     }
 }
@@ -322,22 +322,22 @@ private struct PackageSetup: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("New Package in “\(folder.lastPathComponent)”").font(.headline)
-            Text("Existing content is preserved. Leave directory names blank for the defaults.")
+            Text("Existing content is preserved. Leave folder names blank for the defaults.")
                 .foregroundStyle(.secondary)
             Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 10) {
                 GridRow {
-                    Text("Orders directory").help(SetupDirectory.orders.help)
-                    TextField("Default Orders directory", text: $orders)
-                        .accessibilityLabel("Orders directory")
+                    Text("Orders folder").help(SetupDirectory.orders.help)
+                    TextField("Default Orders folder", text: $orders)
+                        .accessibilityLabel("Orders folder")
                         .accessibilityIdentifier("package.initialize.ordersDirectory")
                         .help(SetupDirectory.orders.help).accessibilityHint(SetupDirectory.orders.help)
                         .focused($focus)
                     picker(.orders)
                 }
                 GridRow {
-                    Text("Removed Orders directory").help(SetupDirectory.removed.help)
-                    TextField("Default Removed Orders directory", text: $removed)
-                        .accessibilityLabel("Removed Orders directory")
+                    Text("Removed Orders folder").help(SetupDirectory.removed.help)
+                    TextField("Default Removed Orders folder", text: $removed)
+                        .accessibilityLabel("Removed Orders folder")
                         .accessibilityIdentifier("package.initialize.removedDirectory")
                         .help(SetupDirectory.removed.help).accessibilityHint(SetupDirectory.removed.help)
                     picker(.removed)

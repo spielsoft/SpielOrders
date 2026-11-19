@@ -68,6 +68,7 @@ fn the_kept_order_gains_only_what_it_lacks_and_the_other_is_removed() {
         "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
         Assignments::new()
             .assign("title", "Laser components")
+            .assign("currency", "USD")
             .introduce("project", "Clock"),
         vec![item("Lens")],
     );
@@ -262,6 +263,15 @@ fn interrupted_merge() {
         let failure = crate::commit(plan, &effects(&filesystem))
             .result
             .unwrap_err();
+        // A merge that stopped after it wrote is a failed commit naming what it left.
+        assert!(
+            matches!(
+                (&failure, cleanup_fails),
+                (crate::Failure::CommitFailed { .. }, false)
+                    | (crate::Failure::CommitFailedCleanupIncomplete { .. }, true)
+            ),
+            "{failure:?}"
+        );
         assert_eq!(read(other.join("second.txt")), "Second quote");
         assert_eq!(record(&kept).currency, None);
         if cleanup_fails {
@@ -303,7 +313,13 @@ fn concurrent_destination() {
         .once()
         .preceded_by(|outside| outside.write(&outside.call().path, b"Concurrent quote"))
         .proceeds();
-    assert!(crate::commit(plan, &effects(&filesystem)).result.is_err());
+    let failure = crate::commit(plan, &effects(&filesystem))
+        .result
+        .unwrap_err();
+    assert!(
+        matches!(failure, crate::Failure::CommitFailed { .. }),
+        "{failure:?}"
+    );
     assert_eq!(read(other.join("quote.txt")), "Original quote");
     assert_eq!(read(kept.join("quote.txt")), "Concurrent quote");
     assert_eq!(record(&kept).currency, None);
@@ -503,4 +519,323 @@ fn merged_directories_follow_the_volumes_name_aliases() {
         assert!(!earlier.exists());
         assert!(!later.exists());
     }
+}
+
+#[test]
+fn a_merged_order_that_could_not_be_removed_refuses_the_merge() {
+    let (_tree, root) = initialized_package("merge-unremovable");
+    let kept = created_order(
+        &root,
+        "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
+        Assignments::new().assign("title", "Kept"),
+    );
+    let other = created_order(
+        &root,
+        "11111111-1111-4111-8111-111111111111",
+        Assignments::new().assign("title", "Other"),
+    );
+    write(other.join("invoice.pdf"), "Invoice");
+    // An earlier removal of an Order with the same name holds the merged Order's place.
+    let earlier = root.join("Removed").join(other.file_name().unwrap());
+    fs::create_dir_all(&earlier).unwrap();
+    let before = snapshot(&root);
+
+    assert!(
+        crate::plan(&merge(&[&kept, &other]), &effects(&PlatformFileSystem))
+            .result
+            .is_err()
+    );
+    assert_eq!(snapshot(&root), before);
+    assert_eq!(read(other.join("invoice.pdf")), "Invoice");
+}
+
+#[test]
+fn items_priced_in_another_currency_refuse_the_merge() {
+    let (_tree, root) = initialized_package("merge-currency");
+    let kept = with_items(
+        &root,
+        "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
+        Assignments::new()
+            .assign("title", "Kept")
+            .assign("currency", "USD"),
+        vec![item("Lens")],
+    );
+    let euros = with_items(
+        &root,
+        "11111111-1111-4111-8111-111111111111",
+        Assignments::new()
+            .assign("title", "Euros")
+            .assign("currency", "EUR"),
+        vec![item("Mirror")],
+    );
+    let before = snapshot(&root);
+    assert!(matches!(
+        crate::plan(&merge(&[&kept, &euros]), &effects(&PlatformFileSystem)).result,
+        Err(crate::Failure::CurrencyDiffers { .. })
+    ));
+    assert_eq!(snapshot(&root), before);
+
+    // Adding no Item, another currency changes nothing the kept Order states.
+    let same = with_items(
+        &root,
+        "22222222-2222-4222-8222-222222222222",
+        Assignments::new()
+            .assign("title", "Same")
+            .assign("currency", "EUR"),
+        vec![item("Lens")],
+    );
+    committed(&merge(&[&kept, &same]), &effects(&PlatformFileSystem));
+    let result = record(&kept);
+    assert_eq!(result.currency.as_deref(), Some("USD"));
+    assert_eq!(result.items.len(), 1);
+}
+
+/// The refusal a merge of `orders` answers when currencies differ, located at the Order
+/// whose currency does.
+fn currency_refusal(orders: &[&PathBuf]) -> PathBuf {
+    match crate::plan(&merge(orders), &effects(&PlatformFileSystem)).result {
+        Err(crate::Failure::CurrencyDiffers { location }) => location.absolute_path.clone(),
+        other => panic!("refused as differing currencies: {other:?}"),
+    }
+}
+
+#[test]
+fn a_merge_never_labels_prices_that_were_unlabeled() {
+    let (_tree, root) = initialized_package("merge-unlabeled-prices");
+    let id = |n: u8| format!("{n:08x}-1111-4111-8111-111111111111");
+    let unlabeled = with_items(
+        &root,
+        &id(1),
+        Assignments::new().assign("title", "Unlabeled"),
+        vec![item("Lens")],
+    );
+    let dollars = with_items(
+        &root,
+        &id(2),
+        Assignments::new()
+            .assign("title", "Dollars")
+            .assign("currency", "USD"),
+        vec![item("Mirror")],
+    );
+    let before = snapshot(&root);
+    // Whichever side lacks the currency, and the refusal names the later Order.
+    assert_eq!(currency_refusal(&[&unlabeled, &dollars]), dollars);
+    assert_eq!(currency_refusal(&[&dollars, &unlabeled]), unlabeled);
+    assert_eq!(snapshot(&root), before);
+
+    // An Order bringing no Items never refuses and labels nothing.
+    let euros = with_items(
+        &root,
+        &id(3),
+        Assignments::new()
+            .assign("title", "Euros")
+            .assign("currency", "EUR"),
+        Vec::new(),
+    );
+    committed(&merge(&[&unlabeled, &euros]), &effects(&PlatformFileSystem));
+    assert_eq!(record(&unlabeled).currency, None);
+}
+
+#[test]
+fn a_result_that_states_a_currency_keeps_it_without_items() {
+    let (_tree, root) = initialized_package("merge-stated-currency");
+    let id = |n: u8| format!("{n:08x}-3333-4333-8333-333333333333");
+    let euros = with_items(
+        &root,
+        &id(1),
+        Assignments::new()
+            .assign("title", "Euros")
+            .assign("currency", "EUR"),
+        Vec::new(),
+    );
+    let dollars = with_items(
+        &root,
+        &id(2),
+        Assignments::new()
+            .assign("title", "Dollars")
+            .assign("currency", "USD"),
+        vec![item("Lens")],
+    );
+    let unlabeled = with_items(
+        &root,
+        &id(3),
+        Assignments::new().assign("title", "Unlabeled"),
+        vec![item("Mirror")],
+    );
+    let before = snapshot(&root);
+    assert_eq!(currency_refusal(&[&euros, &dollars]), dollars);
+    assert_eq!(currency_refusal(&[&euros, &unlabeled]), unlabeled);
+    assert_eq!(snapshot(&root), before);
+}
+
+#[test]
+fn a_result_with_no_items_takes_the_currency_of_the_first_order_that_brings_some() {
+    let (_tree, root) = initialized_package("merge-first-priced");
+    let id = |n: u8| format!("{n:08x}-2222-4222-8222-222222222222");
+    let empty = |n: u8| {
+        with_items(
+            &root,
+            &id(n),
+            Assignments::new().assign("title", format!("Empty {n}")),
+            Vec::new(),
+        )
+    };
+    let mirror = with_items(
+        &root,
+        &id(10),
+        Assignments::new().assign("title", "Mirror"),
+        vec![item("Mirror")],
+    );
+    let lens = with_items(
+        &root,
+        &id(11),
+        Assignments::new()
+            .assign("title", "Lens")
+            .assign("currency", "USD"),
+        vec![item("Lens")],
+    );
+    let first = empty(1);
+    // Either order refuses: the first Order bringing Items sets the result's currency.
+    assert_eq!(currency_refusal(&[&first, &mirror, &lens]), lens);
+    assert_eq!(currency_refusal(&[&first, &lens, &mirror]), mirror);
+
+    committed(&merge(&[&first, &lens]), &effects(&PlatformFileSystem));
+    assert_eq!(record(&first).currency.as_deref(), Some("USD"));
+    let second = empty(2);
+    committed(&merge(&[&second, &mirror]), &effects(&PlatformFileSystem));
+    assert_eq!(record(&second).currency, None);
+}
+
+#[test]
+fn an_order_gaining_a_project_takes_that_projects_group() {
+    let (_tree, root) = initialized_package("merge-group");
+    let kept = with_items(
+        &root,
+        "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
+        Assignments::new()
+            .assign("title", "Kept")
+            .introduce("order_group", "Vacuum"),
+        Vec::new(),
+    );
+    let other = with_items(
+        &root,
+        "11111111-1111-4111-8111-111111111111",
+        Assignments::new()
+            .assign("title", "Other")
+            .introduce("project", "Atoms")
+            .introduce("order_group", "Optics"),
+        Vec::new(),
+    );
+    committed(&merge(&[&kept, &other]), &effects(&PlatformFileSystem));
+    let result = record(&kept);
+    assert_eq!(result.project.as_deref(), Some("Atoms"));
+    assert_eq!(result.order_group.as_deref(), Some("Optics"));
+}
+
+#[test]
+fn repeated_lines_of_a_merged_order_are_all_kept() {
+    let (_tree, root) = initialized_package("merge-repeated-lines");
+    let kept = with_items(
+        &root,
+        "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
+        Assignments::new().assign("title", "Kept"),
+        vec![item("Lens")],
+    );
+    let other = with_items(
+        &root,
+        "11111111-1111-4111-8111-111111111111",
+        Assignments::new().assign("title", "Other"),
+        vec![item("Lens"), item("Shipping"), item("Shipping")],
+    );
+    committed(&merge(&[&kept, &other]), &effects(&PlatformFileSystem));
+    let descriptions = record(&kept)
+        .items
+        .iter()
+        .map(|item| item.description.to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(descriptions, ["Lens", "Shipping", "Shipping"]);
+}
+
+/// A merge plans what its commit then does: each merged Order's removal, creating the
+/// Removed Orders Directory once where there is none yet.
+#[test]
+fn a_merge_plans_each_removal_it_commits() {
+    let (_tree, root) = initialized_package("merge-plans-removals");
+    let kept = with_items(
+        &root,
+        "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
+        Assignments::new().assign("title", "Laser components"),
+        Vec::new(),
+    );
+    let others = [
+        ("11111111-1111-4111-8111-111111111111", "Laser parts"),
+        ("22222222-2222-4222-8222-222222222222", "Laser spares"),
+    ]
+    .map(|(id, title)| {
+        with_items(
+            &root,
+            id,
+            Assignments::new().assign("title", title),
+            Vec::new(),
+        )
+    });
+    let plan = planned(
+        &merge(&[&kept, &others[0], &others[1]]),
+        &effects(&PlatformFileSystem),
+    );
+    let kinds = crate::tests::support::operation_kinds(&plan);
+
+    assert_eq!(
+        kinds
+            .iter()
+            .filter(|kind| *kind == "create_removed_orders_directory")
+            .count(),
+        1,
+        "{kinds:?}"
+    );
+    assert_eq!(
+        kinds
+            .iter()
+            .filter(|kind| *kind == "move_order_directory")
+            .count(),
+        2,
+        "{kinds:?}"
+    );
+    assert_eq!(
+        kinds.last().map(String::as_str),
+        Some("refresh_package_index")
+    );
+}
+
+#[test]
+fn a_merge_whose_index_cannot_refresh_warns_once() {
+    use crate::tests::support::{Operation, ScriptedFileSystem};
+    let (_tree, root) = initialized_package("merge-refresh-once");
+    let kept = created_order(
+        &root,
+        "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
+        Assignments::new().assign("title", "Kept"),
+    );
+    let others = [
+        ("11111111-1111-4111-8111-111111111111", "Other"),
+        ("22222222-2222-4222-8222-222222222222", "Another"),
+    ]
+    .map(|(id, title)| created_order(&root, id, Assignments::new().assign("title", title)));
+    let plan = planned(
+        &merge(&[&kept, &others[0], &others[1]]),
+        &effects(&PlatformFileSystem),
+    );
+    let filesystem = ScriptedFileSystem::new()
+        .failing_ending_in(Operation::ReplaceFile, ".spielorders/index.json");
+
+    let report = crate::commit(plan, &effects(&filesystem)).result;
+
+    let Ok(crate::Report::CommittedWithWarning { warnings, .. }) = report else {
+        panic!("the merge commits whatever the refresh does: {report:?}")
+    };
+    assert!(
+        matches!(warnings.as_slice(), [crate::Warning::IndexRefreshFailed(_)]),
+        "{warnings:?}"
+    );
+    assert!(!others[0].exists() && !others[1].exists());
 }

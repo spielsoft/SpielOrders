@@ -2,6 +2,7 @@
 //! identity and historical semantics; Define the Rust CLI capability contract;
 //! Define integrity, validation, and repair boundaries.
 
+use crate::evidence::FactChange;
 use crate::tests::support::assert_reported_beside;
 use crate::tests::support::committed_order;
 use crate::tests::support::index_is_current;
@@ -11,73 +12,19 @@ use crate::tests::support::{
     created_order, created_vendor, edit_order, effects, failing_replacement, json, operations,
     order_at, package_tree, reusable, with_stage_cleanup_failure,
 };
+use crate::tests::support::{committed, edit_vendor, unconfirmed_facts};
 use crate::tests::support::{planned_order, planned_order_vendor, planned_reuse, reported};
-use crate::{Assignments, Change, OrderRef, Plan, Report};
+use crate::{Assignments, Change, InUse, OrderRef, Plan, Report, VendorRef};
 use std::ops::Deref;
 
 use crate::Coded;
 
 use crate::mutation::RejectedAssignmentReason;
-use crate::order_edits::OrderFactKind;
+use crate::order_facts::OrderFactKind;
 use crate::{Failure, Warning};
 use crate::{metadata::OrderDocument, metadata::OrderStatus};
 use std::fs;
 use std::path::{Path, PathBuf};
-
-#[test]
-fn an_editor_original_is_enforced_by_the_core_commit() {
-    let tree = package_tree("order-editor-original");
-    let directory = created_order(
-        tree.path(),
-        "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
-        Assignments::new().assign("title", "Original"),
-    );
-    let original = order_at(&directory, &PlatformFileSystem)
-        .result
-        .unwrap()
-        .order
-        .document
-        .clone();
-    let calendar = FixedCalendar::on(2026, 11, 4);
-    let external = crate::plan(
-        &edit_order(
-            directory.clone(),
-            Assignments::new().assign("title", "External"),
-        ),
-        &effects(&PlatformFileSystem).dated(&calendar),
-    )
-    .result
-    .unwrap();
-    assert!(matches!(
-        crate::commit(external, &effects(&PlatformFileSystem)).result,
-        Ok(Report::Committed { .. })
-    ));
-    let stale = crate::plan(
-        &Change::SaveOrder {
-            order: OrderRef::Directory(directory.clone()),
-            assignments: Assignments::new().assign("title", "Stale"),
-            items: Vec::new(),
-            original,
-        },
-        &effects(&PlatformFileSystem).dated(&calendar),
-    )
-    .result
-    .unwrap();
-    assert!(matches!(
-        crate::commit(stale, &effects(&PlatformFileSystem)).result,
-        Err(Failure::PreconditionsChanged { .. })
-    ));
-    assert_eq!(
-        order_at(&directory, &PlatformFileSystem)
-            .result
-            .unwrap()
-            .order
-            .document
-            .title
-            .deref(),
-        "External"
-    );
-}
 
 #[test]
 fn title_edit_plan_reports_complete_facts_and_writes_nothing() {
@@ -447,6 +394,9 @@ fn one_rejected_assignment_leaves_the_whole_order_untouched() {
     let basename_before = directory.file_name().unwrap().to_owned();
     let valid = ("title", "Laser mounts");
 
+    // One case per rejection family; the reasons each family names are proven in
+    // `rejected_assignments_name_every_offending_field_and_reason` and
+    // `a_value_the_record_cannot_hold_is_refused_by_name_while_planning_and_writes_nothing`.
     let cases: Vec<(&str, Assignments)> = vec![
         (
             "unknown field",
@@ -455,71 +405,16 @@ fn one_rejected_assignment_leaves_the_whole_order_untouched() {
                 .assign("received_on", "2026-09-01"),
         ),
         (
-            "immutable identity",
-            Assignments::new()
-                .assign(valid.0, valid.1)
-                .assign("order_id", "1c4d2e6f-3a5b-4c7d-8e9f-0a1b2c3d4e5f"),
-        ),
-        (
-            "managed technical locator",
-            Assignments::new()
-                .assign(valid.0, valid.1)
-                .assign("package_root", "../../.."),
-        ),
-        (
-            "managed technical version",
-            Assignments::new()
-                .assign(valid.0, valid.1)
-                .assign("schema_version", "2"),
-        ),
-        (
-            "ordered collection",
-            Assignments::new()
-                .assign(valid.0, valid.1)
-                .assign("items", "[]"),
-        ),
-        (
-            "duplicate assignment",
-            Assignments::new()
-                .assign(valid.0, valid.1)
-                .assign("currency", "USD")
-                .assign("currency", "EUR"),
-        ),
-        (
-            "introduce on a non-reusable field",
-            Assignments::new()
-                .assign("currency", "USD")
-                .introduce(valid.0, valid.1),
-        ),
-        (
             "blank required title",
             Assignments::new()
                 .assign("currency", "USD")
                 .assign("title", "   "),
         ),
         (
-            "blank required status",
-            Assignments::new()
-                .assign(valid.0, valid.1)
-                .assign("status", ""),
-        ),
-        (
             "invalid calendar date",
             Assignments::new()
                 .assign(valid.0, valid.1)
                 .assign("date_ordered", "2026-02-30"),
-        ),
-        (
-            "unknown status",
-            Assignments::new()
-                .assign(valid.0, valid.1)
-                .assign("status", "shipped"),
-        ),
-        (
-            "malformed currency",
-            Assignments::new()
-                .assign(valid.0, valid.1)
-                .assign("currency", "usd"),
         ),
         (
             "unresolved Vendor",
@@ -960,6 +855,62 @@ fn a_live_vendor_reference_can_be_assigned_and_cleared() {
     );
 }
 
+/// The Vendor an edit resolved is part of what it was authorized against: one renamed or
+/// deleted before the commit is named as the fact that moved, and the record is not
+/// written.
+#[test]
+fn an_edit_whose_vendor_is_renamed_or_deleted_after_planning_is_refused_naming_it() {
+    for (label, change) in [
+        ("renamed", FactChange::Differs),
+        ("deleted", FactChange::Vanished),
+    ] {
+        let tree = package_tree(&format!("order-edit-vendor-{label}"));
+        let root = tree.path();
+        let vendor = created_vendor(root, "Tarnwick", "e0990d31-06aa-42e9-97c8-088e3e894822");
+        let directory = created_order(
+            root,
+            "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
+            Assignments::new().assign("title", "Laser components"),
+        );
+        let plan = crate::plan(
+            &edit_order(
+                directory.clone(),
+                Assignments::new().assign("vendor", "Tarnwick"),
+            ),
+            &effects(&PlatformFileSystem).on(2026, 9, 1),
+        )
+        .result
+        .unwrap();
+        let vendor = VendorRef::Id(vendor);
+        committed(
+            &match change {
+                FactChange::Differs => edit_vendor(
+                    root,
+                    vendor,
+                    Assignments::new().assign("name", "Tarnwick Inc"),
+                ),
+                _ => Change::DeleteVendor {
+                    root: root.into(),
+                    vendor,
+                    in_use: InUse::Refuse,
+                },
+            },
+            &effects(&PlatformFileSystem),
+        );
+        let record = directory.join(".spielorders/order.json");
+        let before = fs::read(&record).unwrap();
+
+        let report = crate::commit(plan, &effects(&PlatformFileSystem)).result;
+
+        assert_eq!(
+            unconfirmed_facts(&report),
+            [("vendor_name", change)],
+            "{label}"
+        );
+        assert_eq!(fs::read(&record).unwrap(), before, "{label}");
+    }
+}
+
 #[test]
 fn a_no_op_assignment_set_reports_unchanged_without_replacing_canonical_bytes() {
     let (_tree, directory, _vendor) = fully_populated_order("order-edit-no-op");
@@ -1283,6 +1234,102 @@ fn planned_title_edit(directory: &Path) -> Plan {
     .expect("the edit can be planned")
 }
 
+#[test]
+fn an_edit_never_publishes_a_stage_that_no_longer_holds_its_candidate() {
+    use crate::tests::support::{Operation, ScriptedFileSystem};
+    let (_tree, directory, record) = order_ready_for_a_contended_edit("order-edit-changed-stage");
+    let before = fs::read(&record).unwrap();
+    let plan = planned_title_edit(&directory);
+    let filesystem = ScriptedFileSystem::new();
+    filesystem
+        .on(Operation::WriteNew)
+        .ending_in(ORDER_STAGE)
+        .once()
+        .followed_by(|outside| outside.write(&outside.call().path, b"another writer's stage"))
+        .proceeds();
+
+    let failure = crate::commit(plan, &effects(&filesystem))
+        .result
+        .expect_err("a changed stage is not the candidate the caller authorized");
+
+    assert_eq!(fs::read(&record).unwrap(), before);
+    let stage = directory.join(ORDER_STAGE);
+    assert_eq!(fs::read(&stage).unwrap(), b"another writer's stage");
+    assert!(
+        failure
+            .cleanup_failures()
+            .iter()
+            .any(|left| left.location.absolute_path == stage),
+        "the unowned stage stays visible beside the failure: {failure:?}"
+    );
+}
+
+#[test]
+fn an_edit_preserves_a_stage_its_cleanup_cannot_identify() {
+    use crate::ports::FileChangeEvidence;
+    use crate::tests::support::{Operation, ScriptedFileSystem};
+    let (_tree, directory, record) = order_ready_for_a_contended_edit("order-edit-unproven-stage");
+    let before = fs::read(&record).unwrap();
+    let plan = planned_title_edit(&directory);
+    let filesystem = ScriptedFileSystem::new();
+    filesystem
+        .on(Operation::ObserveFileChange)
+        .ending_in(ORDER_STAGE)
+        .reports_evidence(FileChangeEvidence::Uncertain);
+    filesystem
+        .on(Operation::SyncFile)
+        .ending_in(ORDER_STAGE)
+        .fails();
+
+    let failure = crate::commit(plan, &effects(&filesystem))
+        .result
+        .expect_err("the failed durability step cannot commit");
+
+    assert_eq!(fs::read(&record).unwrap(), before);
+    let stage = directory.join(ORDER_STAGE);
+    assert!(
+        stage.is_file(),
+        "unproven output is retained rather than guessed away"
+    );
+    assert!(
+        failure
+            .cleanup_failures()
+            .iter()
+            .any(|left| left.location.absolute_path == stage),
+        "the retained stage is named: {failure:?}"
+    );
+}
+
+#[test]
+fn an_edit_names_the_output_of_a_partly_failed_write() {
+    use crate::tests::support::{Operation, ScriptedFileSystem};
+    let (_tree, directory, record) = order_ready_for_a_contended_edit("order-edit-partial-stage");
+    let before = fs::read(&record).unwrap();
+    let plan = planned_title_edit(&directory);
+    let filesystem = ScriptedFileSystem::new();
+    filesystem
+        .on(Operation::WriteNew)
+        .ending_in(ORDER_STAGE)
+        .once()
+        .preceded_by(|outside| outside.write(&outside.call().path, b"{\"schema"))
+        .fails();
+
+    let failure = crate::commit(plan, &effects(&filesystem))
+        .result
+        .expect_err("a write that failed partway cannot commit");
+
+    assert_eq!(fs::read(&record).unwrap(), before);
+    let stage = directory.join(ORDER_STAGE);
+    assert_eq!(fs::read(&stage).unwrap(), b"{\"schema");
+    assert!(
+        failure
+            .cleanup_failures()
+            .iter()
+            .any(|left| left.location.absolute_path == stage),
+        "the failed write's retained output is named: {failure:?}"
+    );
+}
+
 /// A record rewritten between this edit's revalidation and its rename belongs to
 /// whoever wrote it. The window the capability's own precondition check cannot see is
 /// the one the destination expectation closes.
@@ -1596,63 +1643,6 @@ fn a_post_commit_index_refresh_failure_keeps_the_canonical_edit() {
 }
 
 #[test]
-fn a_refresh_load_failure_keeps_the_edit_and_reports_a_stale_index() {
-    let tree = package_tree("order-edit-refresh-unavailable");
-    let directory = created_order(
-        tree.path(),
-        "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
-        Assignments::new().assign("title", "Laser components"),
-    );
-    let plan = crate::plan(
-        &edit_order(
-            directory.clone(),
-            Assignments::new().assign("title", "Laser mounts"),
-        ),
-        &effects(&PlatformFileSystem).on(2026, 9, 1),
-    )
-    .result
-    .expect("the edit can be planned");
-
-    let report = crate::commit(
-        plan,
-        &effects(&failing_replacement(
-            ".spielorders/order.json",
-            ManagedFileBoundary::RefreshListing,
-        )),
-    )
-    .result;
-
-    let Ok(Report::CommittedWithWarning {
-        result, warnings, ..
-    }) = report
-    else {
-        panic!("a failed refresh load remains committed: {report:?}");
-    };
-    assert_eq!(
-        committed_order(&result).document.title.deref(),
-        "Laser mounts"
-    );
-    assert!(matches!(
-        warnings.as_slice(),
-        [Warning::IndexRefreshFailed(_)]
-    ));
-
-    let persisted = serde_json::from_slice::<OrderDocument>(
-        &fs::read(directory.join(".spielorders/order.json")).unwrap(),
-    )
-    .expect("the canonical Order parses");
-    assert_eq!(persisted.title.deref(), "Laser mounts");
-}
-
-#[test]
-fn order_edit_code_vocabularies_keep_their_stable_spellings() {
-    assert_eq!(
-        RejectedAssignmentReason::NotAReusableValue.code(),
-        "not_a_reusable_value"
-    );
-}
-
-#[test]
 fn a_directory_that_is_not_an_order_of_its_package_is_rejected() {
     let tree = package_tree("order-edit-not-an-order");
     let root = tree.path();
@@ -1755,13 +1745,25 @@ fn a_committed_report_without_a_refresh_carries_the_orders_real_readme() {
     )
     .result;
 
-    let Ok(Report::CommittedWithWarning { result, .. }) = report else {
+    let Ok(Report::CommittedWithWarning {
+        result, warnings, ..
+    }) = report
+    else {
         panic!("a failed refresh load remains committed: {report:?}");
     };
+    assert!(matches!(
+        warnings.as_slice(),
+        [Warning::IndexRefreshFailed(_)]
+    ));
     assert_eq!(
         committed_order(&result).document.title.deref(),
         "Laser mounts"
     );
+    let persisted = serde_json::from_slice::<OrderDocument>(
+        &fs::read(directory.join(".spielorders/order.json")).unwrap(),
+    )
+    .expect("the canonical Order parses");
+    assert_eq!(persisted.title.deref(), "Laser mounts");
     assert_eq!(
         committed_order(&result).readme_text.as_deref(),
         Some(readme),
@@ -1771,5 +1773,95 @@ fn a_committed_report_without_a_refresh_carries_the_orders_real_readme() {
     assert_eq!(
         fs::read_to_string(directory.join("README.md")).unwrap(),
         readme
+    );
+}
+
+/// A commit and a read meet the same broken Order Directory with the same failure,
+/// however it broke after the removal was planned.
+#[test]
+fn a_commit_and_a_read_refuse_a_broken_order_directory_alike() {
+    let unlocate = |directory: &Path| {
+        let record = directory.join(".spielorders/order.json");
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();
+        document.as_object_mut().unwrap().remove("package_root");
+        fs::write(&record, serde_json::to_vec(&document).unwrap()).unwrap();
+    };
+    let unrecord = |directory: &Path| {
+        fs::remove_file(directory.join(".spielorders/order.json")).unwrap();
+    };
+    let breaks: [&dyn Fn(&Path); 2] = [&unlocate, &unrecord];
+    for (case, broken) in breaks.into_iter().enumerate() {
+        let (_tree, root) =
+            crate::tests::support::initialized_package(&format!("broken-directory-{case}"));
+        let effects = effects(&PlatformFileSystem);
+        let directory = created_order(
+            &root,
+            "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
+            Assignments::new().assign("title", "Lenses"),
+        );
+        let plan = crate::plan(
+            &Change::RemoveOrder {
+                order: OrderRef::Directory(directory.clone()),
+            },
+            &effects,
+        )
+        .result
+        .expect("the removal is planned");
+        broken(&directory);
+
+        let committed = crate::commit(plan, &effects)
+            .result
+            .expect_err("the commit is refused");
+        let read = crate::reads::read_order(&OrderRef::Directory(directory), &effects)
+            .result
+            .expect_err("the read is refused");
+        assert_eq!(
+            std::mem::discriminant(&committed),
+            std::mem::discriminant(&read),
+            "case {case}: {committed:?} {read:?}"
+        );
+    }
+}
+
+#[test]
+fn records_replaced_together_are_each_staged_then_made_durable_by_one_full_sync() {
+    use crate::tests::support::{Sync, Syncs};
+    let tree = package_tree("order-edit-group-durability");
+    let root = tree.path();
+    let directory = created_order(
+        root,
+        "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
+        Assignments::new().assign("title", "Laser components"),
+    );
+    // A new Orderer is kept in the Vendor record, so the edit replaces both records.
+    let plan = crate::plan(
+        &edit_order(
+            directory.clone(),
+            Assignments::new().introduce("orderer", "Grace Hopper"),
+        ),
+        &effects(&PlatformFileSystem).on(2026, 9, 1),
+    )
+    .result
+    .unwrap();
+    let filesystem = Syncs::default();
+
+    let report = crate::commit(plan, &effects(&filesystem)).result;
+
+    assert!(matches!(report, Ok(Report::Committed { .. })), "{report:?}");
+    let order_stage = directory.join(".spielorders/.order.json.spielorders-stage");
+    let vendors_stage = fs::canonicalize(root)
+        .unwrap()
+        .join(".spielorders/.vendors.json.spielorders-stage");
+    let staged = filesystem.of(|path| path == order_stage || path == vendors_stage);
+    // Each stage is handed to the device, and one full sync then makes both durable
+    // before either record is taken over.
+    assert_eq!(
+        staged,
+        [
+            (Sync::Contents, order_stage),
+            (Sync::Contents, vendors_stage.clone()),
+            (Sync::Full, vendors_stage),
+        ]
     );
 }

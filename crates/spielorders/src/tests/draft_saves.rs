@@ -13,7 +13,7 @@ use crate::tests::support::{
 use crate::{Assignments, ChangeResult, Failure, Report, VendorRef, commit, plan};
 use crate::{
     answer::DraftFailure, metadata::Vendor, mutation::RejectedAssignment,
-    order_edits::OrderFactKind,
+    order_facts::OrderFactKind,
 };
 use crate::{metadata::OrderDocument, metadata::OrderStatus, mutation::RejectedAssignmentReason};
 use std::ops::Deref;
@@ -296,12 +296,6 @@ fn an_order_draft_with_faults_in_several_fields_and_rows_refuses_with_all_of_the
         ),
         "{located:#?}"
     );
-    let Failure::InvalidDraft(faults) = &refused else {
-        panic!("a draft refuses with every fault: {refused:?}");
-    };
-    assert_eq!(faults[0].row, None);
-    assert_eq!(faults[5].row, Some(2));
-    assert_eq!(faults[5].failure.code(), "invalid_assignments");
     assert_eq!(snapshot(&root), before, "a refused Save changes no file");
 }
 

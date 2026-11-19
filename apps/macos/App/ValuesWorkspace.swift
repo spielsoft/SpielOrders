@@ -1,11 +1,8 @@
 import SwiftUI
 import SpielOrdersKit
 
-/// One Order fact's values with the number of Orders using each, as the library lists them.
-///
-/// The table has no detail beside it, so it takes the content's width, and no search field:
-/// the library offers no search over these values. + adds a value, double-click renames one in
-/// place, and the row menu deletes or merges.
+/// One Order fact's values with the number of Orders using each, as the library lists them,
+/// beside the selected value's detail, which takes the spare width.
 struct ValuesWorkspace: View {
     @Bindable var model: DesktopModel
     let list: DesktopModel.ValueList
@@ -22,6 +19,22 @@ struct ValuesWorkspace: View {
     }
 
     var body: some View {
+        let rows = rows
+        WorkspaceSplit(content: ValueGrid(model: model, list: list, rows: rows, sortOrder: $sortOrder),
+                       detail: ValueDetail(model: model, kind: list.scope, rows: rows) { model.valueSelection = [$0] },
+                       layout: .values)
+    }
+}
+
+/// The values, with no search field: the library offers no search over them. + adds a value,
+/// double-click renames one in place, and the row menu deletes or merges.
+private struct ValueGrid: View {
+    @Bindable var model: DesktopModel
+    let list: DesktopModel.ValueList
+    let rows: [ValueRow]
+    @Binding var sortOrder: [KeyPathComparator<ValueRow>]
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ListCount(total: model.reusableValues[list.field]?.count ?? 0, noun: list.singular)
                 .padding(12)
@@ -29,27 +42,27 @@ struct ValuesWorkspace: View {
                 TableColumn("Name", value: \.name) { row in
                     ValueName(model: model, row: row, identifier: "\(list.key).row.\(row.name).name")
                 }
-                .width(min: 160, ideal: 320, max: 480)
+                .width(min: 80)
                 TableColumn("Orders", value: \.usage) { row in
                     Text(row.usage, format: .number)
                         .monospacedDigit()
                         .accessibleValue("Orders", value: String(row.usage),
                                          identifier: "\(list.key).row.\(row.name).orders")
                 }
-                .width(min: 60, ideal: 80, max: 120)
+                .width(72)
                 .alignment(.numeric)
             }
-            .tableStyle(.inset)
-            .font(.callout)
+            .tableStyle(.inset(alternatesRowBackgrounds: !rows.isEmpty))
             .disabled(!model.listsAvailable)
             .contextMenu(forSelectionType: ValueItem.self) { items in
-                ValueMenu(model: model, items: items, prefix: list.key)
+                ValueMenu(model: model, items: items, scope: list.scope, prefix: list.key)
             } primaryAction: { items in
                 if items.count == 1, let item = items.first { model.beginNaming(item) }
             }
+            .onDeleteCommand(perform: model.valueDeletion(model.valueSelection))
             .overlay {
                 if rows.isEmpty && !model.refreshingLookup {
-                    let hint = "Add one with +, or from an Order’s \(list.singular) field."
+                    let hint = "Add one with + or ⌘N, or from an Order’s \(list.singular) field."
                     ContentUnavailableView("No \(list.title)", systemImage: "tray", description: Text(hint))
                 }
             }

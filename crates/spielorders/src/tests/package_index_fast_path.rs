@@ -76,7 +76,7 @@ fn open(filesystem: &ScriptedFileSystem) -> crate::Package {
 }
 
 #[test]
-fn complete_projection() {
+fn a_current_index_projects_every_fact_of_the_package() {
     let filesystem = package();
     let package = open(&filesystem);
     assert_eq!(package.contents.index.state, PackageIndexState::Current);
@@ -111,33 +111,27 @@ fn complete_projection() {
     );
 }
 
+/// A later, equal, incomparable, or uncertain change observation does not prove the index
+/// newer than an input, so the changed input is read and shown as it now is.
 #[test]
-fn canonical_changes() {
-    changed_input(FileChangeEvidence::Comparable {
-        comparison_domain: 1,
-        sequence: 30,
-    });
-}
-
-#[test]
-fn equal_ticks_read_canonical_changes() {
-    changed_input(FileChangeEvidence::Comparable {
-        comparison_domain: 1,
-        sequence: 20,
-    });
-}
-
-#[test]
-fn incomparable_clocks_read_canonical_changes() {
-    changed_input(FileChangeEvidence::Comparable {
-        comparison_domain: 2,
-        sequence: 10,
-    });
-}
-
-#[test]
-fn uncertain_clocks_read_canonical_changes() {
-    changed_input(FileChangeEvidence::Uncertain);
+fn an_input_not_proven_older_than_the_index_is_read_canonically() {
+    for evidence in [
+        FileChangeEvidence::Comparable {
+            comparison_domain: 1,
+            sequence: 30,
+        },
+        FileChangeEvidence::Comparable {
+            comparison_domain: 1,
+            sequence: 20,
+        },
+        FileChangeEvidence::Comparable {
+            comparison_domain: 2,
+            sequence: 10,
+        },
+        FileChangeEvidence::Uncertain,
+    ] {
+        changed_input(evidence);
+    }
 }
 
 fn changed_input(evidence: FileChangeEvidence) {
@@ -182,7 +176,7 @@ fn changed_input(evidence: FileChangeEvidence) {
 }
 
 #[test]
-fn matching_content() {
+fn an_input_whose_content_matches_the_index_leaves_it_current() {
     for evidence in [None, Some(10), Some(20), Some(30)] {
         let filesystem = proven_package();
         if let Some(sequence) = evidence {
@@ -200,7 +194,7 @@ fn matching_content() {
 }
 
 #[test]
-fn readme_availability() {
+fn an_absent_readme_is_empty_and_an_unreadable_one_is_unknown() {
     let absent = package();
     absent.remove(README);
     let package = open(&absent);
@@ -238,7 +232,7 @@ fn readme_availability() {
 }
 
 #[test]
-fn unusable_records() {
+fn a_managed_input_of_the_wrong_kind_is_never_taken_from_the_index() {
     for kind in [
         FileSystemEntryKind::Directory,
         FileSystemEntryKind::SymbolicLink,
@@ -272,7 +266,7 @@ fn unusable_records() {
 }
 
 #[test]
-fn membership_changes() {
+fn a_removed_order_directory_makes_the_index_stale() {
     let filesystem = package();
     filesystem.remove(ORDER);
     let package = open(&filesystem);
@@ -287,7 +281,7 @@ fn membership_changes() {
 }
 
 #[test]
-fn supporting_material() {
+fn unreadable_supporting_material_and_package_readme_leave_orders_loadable() {
     let filesystem = package();
     let supporting = format!("{ORDER}/quote.pdf");
     filesystem.put_file(&supporting, b"Supporting content");
@@ -304,7 +298,7 @@ fn supporting_material() {
 }
 
 #[test]
-fn enumeration_order() {
+fn the_projection_does_not_depend_on_enumeration_order() {
     fn ordered(names: &[&str]) -> crate::Package {
         let filesystem = minimal_package();
         let mut later: OrderDocument = serde_json::from_slice(MINIMAL_ORDER).unwrap();
@@ -344,7 +338,7 @@ fn enumeration_order() {
 }
 
 #[test]
-fn record_evidence() {
+fn an_unreadable_or_invalid_record_is_damage_rather_than_an_index_fact() {
     for bytes in [
         Some(b"{ invalid".as_slice()),
         Some(b"\xff".as_slice()),
@@ -371,7 +365,7 @@ fn record_evidence() {
 }
 
 #[test]
-fn changed_reference() {
+fn a_record_whose_vendor_reference_changed_is_read_canonically() {
     let filesystem = package();
     let mut order: serde_json::Value = serde_json::from_slice(FULL_ORDER).unwrap();
     order["vendor_id"] = serde_json::Value::String("11111111-1111-4111-8111-111111111111".into());

@@ -72,22 +72,13 @@ import XCTest
              timeout: 10)
         XCTAssertEqual(title.value as? String, "Vacuum parts")
         XCTAssertEqual(try ordersDirectory(root).count, 1)
-        // The heading summarizes the Order; its folder shows beneath, aligned when created.
-        XCTAssertTrue(element("order.editor.summary", in: app).exists)
+        // The heading is the Title alone; the folder shows beneath, aligned when created.
+        XCTAssertFalse(element("order.editor.summary", in: app).exists)
         XCTAssertEqual(element("order.editor.directory", in: app).value as? String, try ordersDirectory(root).first)
         XCTAssertFalse(element("order.editor.align", in: app).exists)
+        // The library's Total sits in the Items footer.
         let total = element("order.editor.total", in: app)
         XCTAssertTrue(total.staticTexts.matching(NSPredicate(format: "value == %@", "7.50")).firstMatch.exists)
-        // Money shows two decimals, and every decimal a finer amount has.
-        let price = element("order.editor.items.row.0.unit_price", in: app)
-        XCTAssertEqual(price.value as? String, "2.50")
-        price.doubleClick()
-        app.typeKey("a", modifierFlags: .command)
-        app.typeText("0.125\t")
-        let finer = total.staticTexts.matching(NSPredicate(format: "value == %@", "0.375")).firstMatch
-        XCTAssertTrue(finer.waitForExistence(timeout: 10))
-        XCTAssertEqual(price.value as? String, "0.125")
-        XCTAssertEqual(element("order.editor.items.row.0.total", in: app).value as? String, "0.375")
     }
 
     func testRowUndo() throws {
@@ -256,11 +247,11 @@ import XCTest
         wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", ""), object: vendor)], timeout: 10)
         XCTAssertEqual(try ordersDirectory(root), [])
 
-        // Text that names no Vendor is refused where it was typed, and nothing is created.
+        // Text that names no Vendor is not kept: the field returns to its value.
         replace(vendor, with: "Nobody", in: app)
         app.typeKey(.tab, modifierFlags: [])
-        element("editor.create", in: app).click()
-        XCTAssertTrue(app.buttons["order.editor.vendor.problem"].waitForExistence(timeout: 10))
+        wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", ""), object: vendor)], timeout: 10)
+        XCTAssertFalse(app.buttons["order.editor.vendor.problem"].exists)
         XCTAssertEqual(try ordersDirectory(root), [])
 
         beginNewVendor(named: "Vacuum Supplier", in: app)
@@ -294,7 +285,7 @@ import XCTest
         // A group added from the field belongs to the Order's Project.
         let group = app.comboBoxes["order.editor.order_group"]
         replace(group, with: "Cooling", in: app)
-        group.textFields["New Group “Cooling”…"].click()
+        group.textFields["New Order Group “Cooling”…"].click()
         app.sheets.buttons["order.editor.addValue.confirm"].click()
         wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Cooling"), object: group)], timeout: 10)
         showDestination("projects", in: app)
@@ -321,6 +312,46 @@ import XCTest
         XCTAssertTrue(app.buttons["vendor.sheet.create"].exists)
         XCTAssertEqual(element("vendor.sheet.contacts.row.0.name", in: app).value as? String, "Blair")
         XCTAssertEqual(try Data(contentsOf: vendorsFile), originalVendors)
+    }
+
+    func testItemsKeepReturnInNewOrder() throws {
+        let root = try makePackage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = launch(root)
+        newOrder(in: app)
+        let title = element("order.editor.title", in: app)
+        XCTAssertTrue(title.waitForExistence(timeout: 10))
+        replace(title, with: "Optics", in: app)
+        element("order.editor.items.add", in: app).click()
+        app.typeText("CAT-1")
+        app.typeKey(.escape, modifierFlags: [])
+        // Return edits the selected Item rather than creating the Order.
+        app.typeKey(.return, modifierFlags: [])
+        app.typeText("CAT-2")
+        app.typeKey(.tab, modifierFlags: [])
+        XCTAssertEqual(element("order.editor.items.row.0.catalog_number", in: app).value as? String, "CAT-2")
+        XCTAssertTrue(app.buttons["editor.create"].exists)
+        XCTAssertEqual(try ordersDirectory(root), [])
+    }
+
+    func testDeleteKeyAfterRemovingItem() throws {
+        let root = try makePackage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try addOrder(in: root, title: "Bench optics", items: [("Lens", "1", "1")])
+        let app = launch(root)
+        app.tables["orders.table"].staticTexts.matching(NSPredicate(format: "value == %@", "Bench optics")).firstMatch.click()
+        let title = element("order.editor.title", in: app)
+        XCTAssertTrue(title.waitForExistence(timeout: 10))
+        let description = element("order.editor.items.row.0.description", in: app)
+        XCTAssertTrue(description.waitForExistence(timeout: 10))
+        description.click()
+        element("order.editor.items.remove", in: app).click()
+        XCTAssertTrue(description.waitForNonExistence(timeout: 10))
+        // The keyboard is nowhere after −, so Delete removes nothing more.
+        app.typeKey(.delete, modifierFlags: [])
+        XCTAssertFalse(element("order.editor.title", in: app).waitForNonExistence(timeout: 2))
+        XCTAssertEqual(title.value as? String, "Bench optics")
+        XCTAssertEqual(try ordersDirectory(root).count, 1)
     }
 
     func testNestedCancellation() throws {
@@ -394,6 +425,19 @@ import XCTest
         XCTAssertTrue(cancel.waitForExistence(timeout: 5))
         cancel.click()
         XCTAssertEqual(title.value as? String, "Keep this Order")
+        XCTAssertTrue(title.isEnabled)
+        XCTAssertEqual(try ordersDirectory(root), [])
+
+        // A Vendor sheet with nothing typed closes without asking; the Order draft still asks.
+        beginNewVendor(named: "Untouched supplier", in: app)
+        XCTAssertTrue(name.waitForExistence(timeout: 10))
+        app.typeKey("q", modifierFlags: .command)
+        XCTAssertTrue(name.waitForNonExistence(timeout: 5))
+        let answer = app.sheets.buttons["draft.unsaved.confirm"]
+        XCTAssertTrue(answer.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["draft.unsaved.save"].exists)
+        answer.click()
+        XCTAssertTrue(app.wait(for: .notRunning, timeout: 10))
         XCTAssertEqual(try ordersDirectory(root), [])
     }
 
@@ -419,34 +463,6 @@ import XCTest
         XCTAssertTrue(cancel.waitForExistence(timeout: 5))
         cancel.click()
         XCTAssertEqual(title.value as? String, "Hidden draft")
-        XCTAssertEqual(try ordersDirectory(root), [])
-    }
-
-    func testUntouchedSheet() throws {
-        let root = try makePackage()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let app = launch(root)
-        newOrder(in: app)
-        let title = element("order.editor.title", in: app)
-        XCTAssertTrue(title.waitForExistence(timeout: 10))
-        replace(title, with: "Uncreated Order", in: app)
-        let vendorName = element("vendor.sheet.name", in: app)
-        for discard in [false, true] {
-            beginNewVendor(named: "Untouched supplier", in: app)
-            XCTAssertTrue(vendorName.waitForExistence(timeout: 10))
-            app.typeKey("q", modifierFlags: .command)
-            XCTAssertTrue(vendorName.waitForNonExistence(timeout: 5))
-            let answer = app.sheets.buttons[discard ? "draft.unsaved.confirm" : "draft.unsaved.cancel"]
-            XCTAssertTrue(answer.waitForExistence(timeout: 5))
-            XCTAssertFalse(app.buttons["draft.unsaved.save"].exists)
-            answer.click()
-            if !discard {
-                XCTAssertEqual(title.value as? String, "Uncreated Order")
-                XCTAssertTrue(title.isEnabled)
-                XCTAssertEqual(try ordersDirectory(root), [])
-            }
-        }
-        XCTAssertTrue(app.wait(for: .notRunning, timeout: 10))
         XCTAssertEqual(try ordersDirectory(root), [])
     }
 

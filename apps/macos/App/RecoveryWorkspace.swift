@@ -32,7 +32,7 @@ struct RecoveryWorkspace: View {
                         .font(.title2)
                 }
                 if model.reloadReason != nil {
-                    ReloadBadge(model: model, explanation: "Reload the Package before continuing.",
+                    ReloadBadge(model: model, explanation: "Reload the Package to keep editing.",
                                 identifier: "diagnosis.reloadRequired")
                 }
                 Spacer()
@@ -62,10 +62,13 @@ struct RecoveryWorkspace: View {
                 }
             }
             if let diagnosis = model.diagnosis {
-                Text(diagnosis.isValid ? "No integrity errors in this scope." : "This scope contains damaged metadata.")
+                Text(verdict(diagnosis))
                     .accessibilityIdentifier("diagnosis.verdict")
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
+                        if !diagnosis.orders.isEmpty {
+                            affectedOrders(diagnosis.orders)
+                        }
                         ForEach(diagnosis.findings) { finding in
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("\(finding.severity): \(finding.code)").font(.headline)
@@ -105,13 +108,41 @@ struct RecoveryWorkspace: View {
         .accessibilityIdentifier("diagnosis.workspace")
     }
 
+    /// What the diagnosis found in the scope it covers: one Order, or the Package's own files.
+    private func verdict(_ diagnosis: PackageDiagnosis) -> String {
+        switch (model.diagnosticDirectory != nil, diagnosis.isValid) {
+        case (true, true): "This Order has no integrity errors."
+        case (true, false): "This Order is damaged."
+        case (false, true): diagnosis.orders.isEmpty ? "The Package has no integrity errors."
+            : "The Package’s own files have no integrity errors."
+        case (false, false): "The Package’s own files are damaged."
+        }
+    }
+
+    /// The Orders the Package's findings concern, each opening its own diagnosis.
+    private func affectedOrders(_ orders: [URL]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Orders That Need Attention").font(.headline)
+            ForEach(orders, id: \.self) { order in
+                HStack {
+                    Text(order.lastPathComponent)
+                    Button("Diagnose Order") { model.showDiagnosis(directory: order) }
+                        .disabled(model.busy)
+                        .accessibilityIdentifier("diagnosis.order.\(order.lastPathComponent)")
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("diagnosis.orders")
+    }
+
     private func repairEditor(_ editor: RecoveryEditor) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Divider()
             Text(editor.action.title).font(.title3)
             Text(editor.repair.path)
             if editor.action.code == SPIELORDERS_REPAIR_ACTION_ADOPT_NEW_ORDER_IDENTITY {
-                Text("This directory receives a new identity. Confirm that the other conflicting Order is the one that should retain the existing identity. No files are combined or discarded.")
+                Text("This Order gets a new ID. Confirm that the other Order with the same ID is the one that should keep it. No files are combined or discarded.")
             }
             ForEach(editor.action.fields, id: \.self) { field in
                 let value = Binding(get: { editor.values[field] ?? "" }, set: { editor.values[field] = $0 })

@@ -3,19 +3,39 @@ import SwiftUI
 
 /// A problem or consequence the app shows where it occurs: one line for its tooltip and
 /// popover, and the library's full result for Details.
-struct Notice: Equatable {
+struct Notice: Hashable {
     let summary: String
     let details: String
+    /// The Order Directory the problem is located in, or nil for one located elsewhere.
+    var order: URL?
 
     init(_ summary: String, details: String = "") {
         self.summary = summary
         self.details = details
     }
 
+    /// `problem` as the record it is located in shows it.
+    init(_ problem: Problem) {
+        self.init(problem.statement, details: problem.details)
+        order = problem.order
+    }
+
     /// The library's notices, one per line, without blanks or repeats.
     static func list(_ notices: [String]) -> [Notice] {
         var seen = Set<String>()
         return notices.filter { !$0.isEmpty && seen.insert($0).inserted }.map { Notice($0) }
+    }
+
+    /// `problems` as a list for the whole Package shows them, each naming the Order it is
+    /// located in, without repeats.
+    static func list(_ problems: [Problem]) -> [Notice] {
+        var seen = Set<Notice>()
+        return problems.map { problem in
+            guard let order = problem.order else { return Notice(problem) }
+            var notice = Notice("\(order.lastPathComponent): \(problem.statement)", details: problem.details)
+            notice.order = order
+            return notice
+        }.filter { seen.insert($0).inserted }
     }
 }
 
@@ -41,7 +61,7 @@ extension DesktopModel {
 
     /// Shows what listing `destination` reported on its sidebar row. The Orders row also
     /// carries the Package's own findings.
-    func showListing(_ notices: [String], of destination: Destination, session: PackageSession) async {
+    func showListing(_ notices: [Problem], of destination: Destination, session: PackageSession) async {
         guard destination != .orders else {
             warnings[.orders] = Notice.list(await session.findings + notices)
             return
@@ -52,10 +72,9 @@ extension DesktopModel {
 
     /// Replaces the Orders and Vendors rows' warnings. A notice both listings report, such as
     /// a damaged Order, marks Orders only.
-    func showWarnings(orders: [String], vendors: [String]) {
-        let ordering = Notice.list(orders)
-        warnings[.orders] = ordering
-        warnings[.vendors] = Notice.list(vendors).filter { !ordering.contains($0) }
+    func showWarnings(orders: [Notice], vendors: [Notice]) {
+        warnings[.orders] = orders
+        warnings[.vendors] = vendors.filter { !orders.contains($0) }
     }
 
     /// Retains committed warnings after refreshing the lists, separately from successes.
@@ -94,7 +113,7 @@ struct FeedbackDetails: View {
                     }
                 }
             }
-            .accessibilityLabel("Diagnostic details")
+            .accessibilityLabel("Diagnostic Details")
             .accessibilityIdentifier("feedback.contents")
             HStack {
                 Spacer()
@@ -140,7 +159,7 @@ struct OperationReview: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityIdentifier(identifier + ".details")
-            }.accessibilityLabel("Proposed changes")
+            }.accessibilityLabel("Proposed Changes")
             HStack {
                 Spacer()
                 Button("Cancel") { complete(false) }.keyboardShortcut(.cancelAction)

@@ -10,7 +10,7 @@ use crate::tests::support::{
     Answer, EditPoint, FixedUuid, Operation, PlatformFileSystem, QueuedUuids, ScriptedFileSystem,
     TemporaryTree, adopted_order, adoption, another_writer_replacing, diagnosed_handle,
     diagnosed_order, diagnosed_package, effects, findings, initialized_package, operation_kinds,
-    order_record, order_scope, package_scope, repair, valid,
+    order_scope, package_scope, record_path, repair, valid,
 };
 use crate::{Assignments, Change, Plan, Report};
 use std::ops::Deref;
@@ -102,7 +102,7 @@ fn valid_replacement_with(package_root: &str, order_id: &str) -> Vec<u8> {
 
 fn damage_shape(directory: &Path) {
     fs::write(
-        order_record(directory),
+        record_path(directory),
         br#"{"schema_version":1,"nope":true}"#,
     )
     .unwrap();
@@ -177,7 +177,7 @@ fn a_confirmed_valid_replacement_restores_the_scope_and_touches_nothing_else() {
 
     assert_eq!(
         operation_path(&plan, "replace_managed_artifact"),
-        order_record(&directory)
+        record_path(&directory)
     );
     assert_eq!(
         operation_kinds(&plan),
@@ -185,7 +185,7 @@ fn a_confirmed_valid_replacement_restores_the_scope_and_touches_nothing_else() {
     );
     // A dry run performs none of it.
     assert_eq!(
-        fs::read(order_record(&directory)).unwrap(),
+        fs::read(record_path(&directory)).unwrap(),
         br#"{"schema_version":1,"nope":true}"#
     );
 
@@ -205,7 +205,7 @@ fn a_confirmed_valid_replacement_restores_the_scope_and_touches_nothing_else() {
     assert!(findings(remaining).next().is_none());
 
     let repaired = serde_json::from_slice::<crate::metadata::OrderDocument>(
-        &fs::read(order_record(&directory)).unwrap(),
+        &fs::read(record_path(&directory)).unwrap(),
     )
     .expect("the repaired record parses");
     assert_eq!(repaired.title.deref(), "Repaired components");
@@ -320,7 +320,7 @@ fn a_replacement_that_is_still_invalid_is_refused_before_any_write() {
     let (_tree, root, directory) = package_with_order("repair-invalid-replacement");
     damage_shape(&directory);
     let handle = diagnosed_handle(&directory, DiagnosticCode::ManagedArtifactInvalidShape);
-    let before = fs::read(order_record(&directory)).unwrap();
+    let before = fs::read(record_path(&directory)).unwrap();
     let index_before = fs::read(root.join(".spielorders/index.json")).unwrap();
 
     // Each candidate falls short of a fully valid record in a different way. A repair
@@ -361,7 +361,7 @@ fn a_replacement_that_is_still_invalid_is_refused_before_any_write() {
     }
 
     assert_eq!(
-        fs::read(order_record(&directory)).unwrap(),
+        fs::read(record_path(&directory)).unwrap(),
         before,
         "a refused replacement writes nothing"
     );
@@ -409,7 +409,7 @@ fn a_replacement_that_would_leave_the_package_damaged_is_refused_before_any_writ
         adopted_order(&root, "2026_08_23_Vacuum_fittings", OTHER_ORDER_ID);
         damage_shape(&directory);
         let handle = diagnosed_handle(&directory, DiagnosticCode::ManagedArtifactInvalidShape);
-        let before = fs::read(order_record(&directory)).unwrap();
+        let before = fs::read(record_path(&directory)).unwrap();
         let index_before = fs::read(root.join(".spielorders/index.json")).unwrap();
 
         let error = crate::plan(
@@ -434,7 +434,7 @@ fn a_replacement_that_would_leave_the_package_damaged_is_refused_before_any_writ
             "{label} is refused by the name of the constraint it broke: {error:?}"
         );
         assert_eq!(
-            fs::read(order_record(&directory)).unwrap(),
+            fs::read(record_path(&directory)).unwrap(),
             before,
             "{label} writes nothing"
         );
@@ -475,7 +475,7 @@ fn a_destination_changed_after_diagnosis_is_preserved_rather_than_replaced() {
     // replacement was authorized against the damaged bytes, not against theirs.
     let theirs = someone_elses_record();
     let filesystem =
-        another_writer_replacing(&order_record(&directory), &theirs, EditPoint::StagingWrite);
+        another_writer_replacing(&record_path(&directory), &theirs, EditPoint::StagingWrite);
 
     let report = crate::commit(plan, &effects(&filesystem).minting(QueuedUuids::of(&[]))).result;
 
@@ -484,7 +484,7 @@ fn a_destination_changed_after_diagnosis_is_preserved_rather_than_replaced() {
         panic!("a changed destination is refused: {report:?}");
     };
     assert_eq!(
-        fs::read(order_record(&directory)).unwrap(),
+        fs::read(record_path(&directory)).unwrap(),
         theirs,
         "the other writer's record survives"
     );
@@ -516,6 +516,70 @@ fn stage_valid_candidate(directory: &Path) -> Vec<u8> {
 }
 
 #[test]
+fn promoting_a_valid_stage_preserves_its_json_spelling() {
+    let (_tree, _root, directory) = package_with_order("repair-compact-promotion");
+    let canonical = promoted_candidate("../..");
+    let document: serde_json::Value = serde_json::from_slice(&canonical).unwrap();
+    let compact = serde_json::to_vec(&document).unwrap();
+    assert_ne!(compact, canonical);
+    stage_candidate(&directory, compact.clone());
+    let handle = diagnosed_handle(&directory, DiagnosticCode::StagingArtifactPresent);
+    let plan = crate::plan(
+        &repair(
+            order_scope(directory.clone()),
+            &handle,
+            RepairAction::PromoteStagingCandidate,
+            Assignments::new(),
+        ),
+        &effects(&PlatformFileSystem),
+    )
+    .result
+    .expect("valid JSON formatting does not change the candidate's meaning");
+
+    let report = crate::commit(plan, &effects(&PlatformFileSystem)).result;
+
+    assert!(matches!(report, Ok(Report::Committed { .. })), "{report:?}");
+    assert_eq!(fs::read(record_path(&directory)).unwrap(), compact);
+    assert!(!directory.join(STAGE).exists());
+}
+
+#[test]
+fn a_promotion_never_publishes_a_candidate_changed_while_becoming_durable() {
+    let (_tree, _root, directory) = package_with_order("repair-stage-before-publication");
+    stage_valid_candidate(&directory);
+    let handle = diagnosed_handle(&directory, DiagnosticCode::StagingArtifactPresent);
+    let plan = crate::plan(
+        &repair(
+            order_scope(directory.clone()),
+            &handle,
+            RepairAction::PromoteStagingCandidate,
+            Assignments::new(),
+        ),
+        &effects(&PlatformFileSystem),
+    )
+    .result
+    .unwrap();
+    let before = fs::read(record_path(&directory)).unwrap();
+    let filesystem = ScriptedFileSystem::new();
+    filesystem
+        .on(Operation::SyncFile)
+        .ending_in(STAGE)
+        .once()
+        .preceded_by(|outside| outside.write(&outside.call().path, b"unconfirmed stage"))
+        .proceeds();
+
+    crate::commit(plan, &effects(&filesystem))
+        .result
+        .expect_err("the promoted bytes must be the confirmed candidate");
+
+    assert_eq!(fs::read(record_path(&directory)).unwrap(), before);
+    assert_eq!(
+        fs::read(directory.join(STAGE)).unwrap(),
+        b"unconfirmed stage"
+    );
+}
+
+#[test]
 fn promoting_the_diagnosed_candidate_completes_its_interrupted_replacement() {
     let (_tree, _root, directory) = package_with_order("repair-promotion");
     stage_valid_candidate(&directory);
@@ -536,7 +600,7 @@ fn promoting_the_diagnosed_candidate_completes_its_interrupted_replacement() {
 
     assert_eq!(
         operation_path(&plan, "promote_staging_candidate"),
-        order_record(&directory),
+        record_path(&directory),
         "and the destination it belongs to, which it never has to choose"
     );
     assert_eq!(
@@ -556,7 +620,7 @@ fn promoting_the_diagnosed_candidate_completes_its_interrupted_replacement() {
         panic!("an exact validated promotion commits: {report:?}");
     };
     let promoted = serde_json::from_slice::<crate::metadata::OrderDocument>(
-        &fs::read(order_record(&directory)).unwrap(),
+        &fs::read(record_path(&directory)).unwrap(),
     )
     .expect("the promoted record parses");
     assert_eq!(promoted.title.deref(), "Promoted components");
@@ -593,7 +657,7 @@ fn an_invalid_staging_candidate_is_never_promoted() {
         let (_tree, _root, directory) = package_with_order("repair-invalid-stage");
         fs::write(directory.join(STAGE), &candidate).unwrap();
         let handle = diagnosed_handle(&directory, DiagnosticCode::StagingArtifactPresent);
-        let record_before = fs::read(order_record(&directory)).unwrap();
+        let record_before = fs::read(record_path(&directory)).unwrap();
 
         let error = crate::plan(
             &repair(
@@ -613,7 +677,7 @@ fn an_invalid_staging_candidate_is_never_promoted() {
             "a {label} candidate is refused: {error:?}"
         );
         // Both the canonical record and the abandoned evidence survive untouched.
-        assert_eq!(fs::read(order_record(&directory)).unwrap(), record_before);
+        assert_eq!(fs::read(record_path(&directory)).unwrap(), record_before);
         assert_eq!(fs::read(directory.join(STAGE)).unwrap(), candidate);
     }
 }
@@ -628,7 +692,7 @@ fn a_staged_candidate_that_would_leave_the_package_damaged_is_never_promoted() {
     let candidate = valid_replacement_with("../..", OTHER_ORDER_ID);
     fs::write(directory.join(STAGE), &candidate).unwrap();
     let handle = diagnosed_handle(&directory, DiagnosticCode::StagingArtifactPresent);
-    let before = fs::read(order_record(&directory)).unwrap();
+    let before = fs::read(record_path(&directory)).unwrap();
 
     let error = crate::plan(
         &repair(
@@ -652,7 +716,7 @@ fn a_staged_candidate_that_would_leave_the_package_damaged_is_never_promoted() {
         ),
         "the refusal names the Package constraint it broke: {error:?}"
     );
-    assert_eq!(fs::read(order_record(&directory)).unwrap(), before);
+    assert_eq!(fs::read(record_path(&directory)).unwrap(), before);
     assert_eq!(
         fs::read(directory.join(STAGE)).unwrap(),
         candidate,
@@ -676,7 +740,7 @@ fn a_candidate_that_changed_after_planning_is_not_promoted() {
     )
     .result
     .unwrap();
-    let record_before = fs::read(order_record(&directory)).unwrap();
+    let record_before = fs::read(record_path(&directory)).unwrap();
 
     // Someone rewrites the stage between planning and commit. It is no longer the
     // candidate that was diagnosed and validated.
@@ -695,7 +759,7 @@ fn a_candidate_that_changed_after_planning_is_not_promoted() {
         matches!(rejection, Failure::EvidenceChanged { .. }),
         "a changed stage is a changed-evidence rejection: {rejection:?}"
     );
-    assert_eq!(fs::read(order_record(&directory)).unwrap(), record_before);
+    assert_eq!(fs::read(record_path(&directory)).unwrap(), record_before);
     assert_eq!(fs::read(directory.join(STAGE)).unwrap(), b"{ not json");
 }
 
@@ -720,7 +784,7 @@ fn a_promotion_whose_destination_changed_after_diagnosis_preserves_it() {
     // an interrupted write is not licence to discard work that arrived since.
     let theirs = someone_elses_record();
     let filesystem = another_writer_replacing(
-        &order_record(&directory),
+        &record_path(&directory),
         &theirs,
         EditPoint::ReadEndingIn(STAGE),
     );
@@ -732,7 +796,7 @@ fn a_promotion_whose_destination_changed_after_diagnosis_preserves_it() {
         panic!("a changed destination is refused: {report:?}");
     };
     assert_eq!(
-        fs::read(order_record(&directory)).unwrap(),
+        fs::read(record_path(&directory)).unwrap(),
         theirs,
         "the other writer's record survives"
     );
@@ -748,7 +812,7 @@ fn a_promotion_whose_destination_changed_after_diagnosis_preserves_it() {
 /// destination that does not exist.
 fn stage_beside_a_missing_record(directory: &Path) -> Vec<u8> {
     let staged = stage_valid_candidate(directory);
-    fs::remove_file(order_record(directory)).unwrap();
+    fs::remove_file(record_path(directory)).unwrap();
     staged
 }
 
@@ -785,7 +849,7 @@ fn a_candidate_beside_a_missing_record_is_promoted_into_place() {
             .expect("the scope rediagnoses")
     ));
     let promoted = serde_json::from_slice::<crate::metadata::OrderDocument>(
-        &fs::read(order_record(&directory)).unwrap(),
+        &fs::read(record_path(&directory)).unwrap(),
     )
     .expect("the promoted record parses");
     assert_eq!(promoted.title.deref(), "Promoted components");
@@ -814,7 +878,7 @@ fn a_record_that_appeared_where_the_diagnosis_found_none_is_not_overwritten() {
     // this promotion was authorized against.
     let theirs = someone_elses_record();
     let filesystem = another_writer_replacing(
-        &order_record(&directory),
+        &record_path(&directory),
         &theirs,
         EditPoint::ReadEndingIn(STAGE),
     );
@@ -825,7 +889,7 @@ fn a_record_that_appeared_where_the_diagnosis_found_none_is_not_overwritten() {
     let Err(_rejection) = report else {
         panic!("a destination that stopped being empty is refused: {report:?}");
     };
-    assert_eq!(fs::read(order_record(&directory)).unwrap(), theirs);
+    assert_eq!(fs::read(record_path(&directory)).unwrap(), theirs);
     assert_eq!(fs::read(directory.join(STAGE)).unwrap(), staged);
 }
 
@@ -840,7 +904,7 @@ fn a_handle_whose_condition_changed_since_diagnosis_is_rejected() {
     // longer exists, so acting on it would be acting on outdated evidence — and a
     // capability that quietly fell back to whichever case is currently first would
     // repair something the user never confirmed.
-    fs::write(order_record(&directory), valid_replacement()).unwrap();
+    fs::write(record_path(&directory), valid_replacement()).unwrap();
     stage_valid_candidate(&directory);
     let standing = diagnosed_order(&directory, &PlatformFileSystem)
         .result
@@ -852,7 +916,7 @@ fn a_handle_whose_condition_changed_since_diagnosis_is_rejected() {
             .any(|case| case.code == DiagnosticCode::StagingArtifactPresent),
         "a different case is standing when the stale handle is presented"
     );
-    let before = fs::read(order_record(&directory)).unwrap();
+    let before = fs::read(record_path(&directory)).unwrap();
     let stage_before = fs::read(directory.join(STAGE)).unwrap();
     let index_before = fs::read(root.join(".spielorders/index.json")).unwrap();
 
@@ -872,7 +936,7 @@ fn a_handle_whose_condition_changed_since_diagnosis_is_rejected() {
         matches!(error, Failure::UnknownCase { .. }),
         "a stale handle names no current case: {error:?}"
     );
-    assert_eq!(fs::read(order_record(&directory)).unwrap(), before);
+    assert_eq!(fs::read(record_path(&directory)).unwrap(), before);
     assert_eq!(
         fs::read(directory.join(STAGE)).unwrap(),
         stage_before,
@@ -990,7 +1054,7 @@ fn a_confirmation_naming_a_different_case_applies_nothing() {
     // The promoted record is the candidate's, not the replacement's: one call carried
     // out one case and never touched the other's resolution.
     let promoted = serde_json::from_slice::<crate::metadata::OrderDocument>(
-        &fs::read(order_record(&directory)).unwrap(),
+        &fs::read(record_path(&directory)).unwrap(),
     )
     .expect("the promoted record parses");
     assert_eq!(promoted.title.deref(), "Promoted components");
@@ -1033,7 +1097,7 @@ fn an_injected_replacement_failure_preserves_the_prior_canonical_bytes() {
         let (_tree, _root, directory) = package_with_order("repair-replace-failure");
         damage_shape(&directory);
         let handle = diagnosed_handle(&directory, DiagnosticCode::ManagedArtifactInvalidShape);
-        let before = fs::read(order_record(&directory)).unwrap();
+        let before = fs::read(record_path(&directory)).unwrap();
         let plan = crate::plan(
             &repair(
                 order_scope(directory.clone()),
@@ -1057,7 +1121,7 @@ fn an_injected_replacement_failure_preserves_the_prior_canonical_bytes() {
             panic!("an injected {boundary:?} failure rejects: {report:?}");
         };
         assert_eq!(
-            fs::read(order_record(&directory)).unwrap(),
+            fs::read(record_path(&directory)).unwrap(),
             before,
             "the prior canonical bytes survive an injected {boundary:?} failure"
         );
@@ -1070,7 +1134,7 @@ fn an_injected_promotion_failure_preserves_both_the_record_and_the_candidate() {
     let (_tree, _root, directory) = package_with_order("repair-promote-failure");
     let staged = stage_valid_candidate(&directory);
     let handle = diagnosed_handle(&directory, DiagnosticCode::StagingArtifactPresent);
-    let before = fs::read(order_record(&directory)).unwrap();
+    let before = fs::read(record_path(&directory)).unwrap();
     let plan = crate::plan(
         &repair(
             order_scope(directory.clone()),
@@ -1092,7 +1156,7 @@ fn an_injected_promotion_failure_preserves_both_the_record_and_the_candidate() {
     let Err(_rejection) = report else {
         panic!("an injected promotion failure rejects: {report:?}");
     };
-    assert_eq!(fs::read(order_record(&directory)).unwrap(), before);
+    assert_eq!(fs::read(record_path(&directory)).unwrap(), before);
     assert_eq!(
         fs::read(directory.join(STAGE)).unwrap(),
         staged,
@@ -1136,7 +1200,7 @@ fn a_post_repair_index_failure_stays_committed_with_a_warning() {
         .expect("the scope rediagnoses");
     assert!(valid(remaining));
     let repaired = serde_json::from_slice::<crate::metadata::OrderDocument>(
-        &fs::read(order_record(&directory)).unwrap(),
+        &fs::read(record_path(&directory)).unwrap(),
     )
     .expect("the repaired record parses");
     assert_eq!(repaired.title.deref(), "Repaired components");
@@ -1176,7 +1240,7 @@ fn a_repair_that_cannot_be_rediagnosed_still_reports_itself_committed() {
         "got {warnings:?}"
     );
     let repaired = serde_json::from_slice::<crate::metadata::OrderDocument>(
-        &fs::read(order_record(&directory)).unwrap(),
+        &fs::read(record_path(&directory)).unwrap(),
     )
     .expect("the repaired record parses");
     assert_eq!(repaired.title.deref(), "Repaired components");
@@ -1209,7 +1273,7 @@ fn a_confirmation_is_rejected_once_its_evidence_moved_though_the_condition_still
         "the same condition is still standing at the same path: {:?}",
         standing.cases
     );
-    let record_before = fs::read(order_record(&directory)).unwrap();
+    let record_before = fs::read(record_path(&directory)).unwrap();
 
     let error = crate::plan(
         &repair(
@@ -1228,7 +1292,7 @@ fn a_confirmation_is_rejected_once_its_evidence_moved_though_the_condition_still
         "a confirmation naming evidence that has moved names no current case: {error:?}"
     );
     assert_eq!(
-        fs::read(order_record(&directory)).unwrap(),
+        fs::read(record_path(&directory)).unwrap(),
         record_before,
         "the candidate the user never confirmed was not promoted"
     );
@@ -1242,6 +1306,53 @@ fn a_confirmation_is_rejected_once_its_evidence_moved_though_the_condition_still
 // ---------------------------------------------------------------------------
 // Package scope
 // ---------------------------------------------------------------------------
+
+/// A removed Order record that cannot be read might name any Vendor, so a Vendor aggregate
+/// repair is refused rather than judged as though it named none.
+#[test]
+fn a_vendor_aggregate_repair_is_refused_while_a_removed_order_is_unreadable() {
+    let (_tree, root) = initialized_package("package-repair-unreadable-removed");
+    crate::tests::support::created_vendor(&root, "Tarnwick", VENDOR_ID);
+    let order = crate::tests::support::created_order(
+        &root,
+        ORDER_ID,
+        Assignments::new()
+            .assign("title", "Lenses")
+            .assign("vendor", "Tarnwick"),
+    );
+    crate::tests::support::committed(
+        &Change::RemoveOrder {
+            order: crate::OrderRef::Directory(order.clone()),
+        },
+        &effects(&PlatformFileSystem),
+    );
+    let record = record_path(&root.join("Removed").join(order.file_name().unwrap()));
+    fs::write(root.join(VENDORS_STAGE), vendor_aggregate("Tarnwick")).unwrap();
+    let handle = package_handle(&root, DiagnosticCode::StagingArtifactPresent);
+    let filesystem = ScriptedFileSystem::new().failing(Operation::Read, &record);
+
+    let refusal = crate::plan(
+        &repair(
+            package_scope(&root),
+            &handle,
+            RepairAction::PromoteStagingCandidate,
+            Assignments::new(),
+        ),
+        &effects(&filesystem),
+    )
+    .result
+    .expect_err("an unreadable removed Order refuses the repair");
+    let Failure::RemovedOrderUnreadable(read) = &refusal else {
+        panic!("refused as an unreadable removed Order: {refusal:?}")
+    };
+    let Failure::PackageOperationFailed(failure) = read.as_ref() else {
+        panic!("the repair refuses as a failed operation: {refusal:?}")
+    };
+    assert_eq!(
+        crate::tests::support::failed_path(&failure.path),
+        record.as_path()
+    );
+}
 
 const VENDORS: &str = ".spielorders/vendors.json";
 const VENDORS_STAGE: &str = ".spielorders/.vendors.json.spielorders-stage";
@@ -1392,83 +1503,6 @@ fn promoting_a_validated_candidate_completes_the_interrupted_write() {
     );
 }
 
-/// A promotion that landed stays committed when the derived index cannot be replaced
-/// afterwards, so a caller is never told to retry a repair that already happened.
-#[test]
-fn a_promotion_whose_index_refresh_fails_is_committed_with_a_warning() {
-    let (_tree, root) = package_with_a_leftover_vendor_stage("package-repair-refresh-failure");
-    let handle = package_handle(&root, DiagnosticCode::StagingArtifactPresent);
-    let plan = crate::plan(
-        &repair(
-            package_scope(root.clone()),
-            &handle,
-            RepairAction::PromoteStagingCandidate,
-            Assignments::new(),
-        ),
-        &effects(&PlatformFileSystem),
-    )
-    .result
-    .expect("the diagnosed candidate can be promoted");
-    let filesystem = ScriptedFileSystem::new();
-    filesystem
-        .on(Operation::ReplaceFile)
-        .ending_in(".spielorders/index.json")
-        .once()
-        .fails();
-
-    let report = crate::commit(plan, &effects(&filesystem).minting(QueuedUuids::of(&[]))).result;
-
-    let Ok(Report::CommittedWithWarning { warnings, .. }) = report else {
-        panic!("the promotion is committed with a warning: {report:?}");
-    };
-    assert!(
-        matches!(warnings.as_slice(), [Warning::IndexRefreshFailed(_)]),
-        "{warnings:?}"
-    );
-    assert_eq!(
-        fs::read(root.join(VENDORS)).unwrap(),
-        vendor_aggregate("Tarnwick"),
-        "the promotion really landed"
-    );
-}
-
-/// A candidate this build cannot read as the artifact it would become is never promoted.
-/// The adapter may not judge which candidate is safe, so the judgement is here — and it
-/// is made per artifact kind.
-#[test]
-fn a_candidate_that_is_not_the_artifact_it_would_become_is_never_promoted() {
-    let (_tree, root) = initialized_package("package-repair-invalid-candidate");
-    fs::write(
-        root.join(VENDORS_STAGE),
-        b"{\n  \"schema_version\": 1,\n  \"vendors\": \"nope\"\n}\n",
-    )
-    .unwrap();
-    let before = fs::read(root.join(VENDORS)).unwrap();
-    let handle = package_handle(&root, DiagnosticCode::StagingArtifactPresent);
-
-    let refusal = crate::plan(
-        &repair(
-            package_scope(root.clone()),
-            &handle,
-            RepairAction::PromoteStagingCandidate,
-            Assignments::new(),
-        ),
-        &effects(&PlatformFileSystem),
-    )
-    .result
-    .expect_err("a candidate that is not a Vendor aggregate is refused");
-
-    assert!(
-        matches!(refusal, Failure::InvalidCandidate { .. }),
-        "{refusal:?}"
-    );
-    assert_eq!(
-        fs::read(root.join(VENDORS)).unwrap(),
-        before,
-        "and nothing is written"
-    );
-}
-
 /// A confirmed replacement is accepted only as a complete, valid artifact, and one that
 /// would leave this Package's Vendor set untrustworthy is refused before anything is
 /// written.
@@ -1568,55 +1602,6 @@ fn a_destination_that_changed_after_the_diagnosis_is_refused_and_their_bytes_sur
     );
 }
 
-/// A handle from a diagnosis taken before the Package changed no longer names a case.
-#[test]
-fn a_handle_from_a_stale_diagnosis_is_refused_rather_than_resolved() {
-    let (_tree, root) = package_with_a_leftover_vendor_stage("package-repair-stale");
-    let handle = package_handle(&root, DiagnosticCode::StagingArtifactPresent);
-    fs::write(root.join(VENDORS_STAGE), vendor_aggregate("Nethermoor")).unwrap();
-
-    let refusal = crate::plan(
-        &repair(
-            package_scope(root.clone()),
-            &handle,
-            RepairAction::PromoteStagingCandidate,
-            Assignments::new(),
-        ),
-        &effects(&PlatformFileSystem),
-    )
-    .result
-    .expect_err("a handle naming evidence that has moved is refused");
-
-    assert!(
-        matches!(refusal, Failure::UnknownCase { .. }),
-        "{refusal:?}"
-    );
-}
-
-/// An action the diagnosed case did not offer is refused rather than attempted.
-#[test]
-fn an_action_the_case_did_not_offer_is_refused() {
-    let (_tree, root) = package_with_a_leftover_vendor_stage("package-repair-unauthorized");
-    let handle = package_handle(&root, DiagnosticCode::StagingArtifactPresent);
-
-    let refusal = crate::plan(
-        &repair(
-            package_scope(root.clone()),
-            &handle,
-            RepairAction::ClearVendorReference,
-            Assignments::new(),
-        ),
-        &effects(&PlatformFileSystem),
-    )
-    .result
-    .expect_err("the case authorizes one action and this is not it");
-
-    assert!(
-        matches!(refusal, Failure::UnauthorizedAction { .. }),
-        "{refusal:?}"
-    );
-}
-
 /// A promotion of the one staging candidate diagnosed in this Package's own scope.
 fn promote_package_stage(root: &Path) -> crate::Answer<Plan> {
     crate::plan(
@@ -1699,7 +1684,7 @@ fn a_case_from_one_scope_is_unknown_to_the_other() {
     fs::write(root.join(VENDORS_STAGE), vendor_aggregate("Tarnwick")).unwrap();
     let order_case = diagnosed_handle(&directory, DiagnosticCode::StagingArtifactPresent);
     let package_case = package_handle(&root, DiagnosticCode::StagingArtifactPresent);
-    let record_before = fs::read(order_record(&directory)).unwrap();
+    let record_before = fs::read(record_path(&directory)).unwrap();
     let vendors_before = fs::read(root.join(VENDORS)).unwrap();
 
     for (scope, handle) in [
@@ -1722,11 +1707,100 @@ fn a_case_from_one_scope_is_unknown_to_the_other() {
             "{scope:?}: {error:?}"
         );
     }
-    assert_eq!(fs::read(order_record(&directory)).unwrap(), record_before);
+    assert_eq!(fs::read(record_path(&directory)).unwrap(), record_before);
     assert_eq!(fs::read(directory.join(STAGE)).unwrap(), order_stage);
     assert_eq!(fs::read(root.join(VENDORS)).unwrap(), vendors_before);
     assert_eq!(
         fs::read(root.join(VENDORS_STAGE)).unwrap(),
         vendor_aggregate("Tarnwick")
     );
+}
+
+/// A Vendor aggregate is judged against the Vendor References the Package's Orders carry,
+/// removed ones and ones this build cannot read included: a repair never takes away a
+/// Vendor an Order resolves.
+#[test]
+fn a_vendor_aggregate_repair_never_unresolves_an_orders_vendor() {
+    for (removed, unsupported) in [(false, false), (true, false), (false, true)] {
+        let (_tree, root) = initialized_package("package-repair-vendor-reference");
+        crate::tests::support::created_vendor(&root, "Tarnwick", VENDOR_ID);
+        let order = crate::tests::support::created_order(
+            &root,
+            ORDER_ID,
+            Assignments::new().assign("title", "Lenses"),
+        );
+        let effects = effects(&PlatformFileSystem);
+        crate::tests::support::committed(
+            &crate::tests::support::edit_order(
+                order.clone(),
+                Assignments::new().assign("vendor", "Tarnwick"),
+            ),
+            &effects,
+        );
+        if removed {
+            crate::tests::support::committed(
+                &Change::RemoveOrder {
+                    order: crate::OrderRef::Directory(order.clone()),
+                },
+                &effects,
+            );
+        }
+        if unsupported {
+            let record = fs::read_to_string(record_path(&order)).unwrap();
+            let future = record.replacen("\"schema_version\": 1", "\"schema_version\": 2", 1);
+            assert_ne!(future, record);
+            fs::write(record_path(&order), future).unwrap();
+        }
+        let empty = b"{\n  \"schema_version\": 1,\n  \"vendors\": []\n}\n";
+        fs::write(root.join(VENDORS_STAGE), empty).unwrap();
+        let handle = package_handle(&root, DiagnosticCode::StagingArtifactPresent);
+
+        let refusal = crate::plan(
+            &repair(
+                package_scope(&root),
+                &handle,
+                RepairAction::PromoteStagingCandidate,
+                Assignments::new(),
+            ),
+            &effects,
+        )
+        .result
+        .expect_err("a stage dropping a referenced Vendor is refused");
+        assert!(
+            matches!(
+                refusal,
+                Failure::CandidateDamagesPackage {
+                    constraint: PackageConstraint::VendorReferenceUnresolved,
+                    ..
+                }
+            ),
+            "removed {removed}, unsupported {unsupported}: {refusal:?}"
+        );
+    }
+}
+
+#[test]
+fn a_promoted_candidate_is_made_durable_before_it_becomes_the_record() {
+    use crate::tests::support::{Sync, Syncs};
+    let (_tree, _root, directory) = package_with_order("repair-promotion-durable");
+    stage_valid_candidate(&directory);
+    let handle = diagnosed_handle(&directory, DiagnosticCode::StagingArtifactPresent);
+    let plan = crate::plan(
+        &repair(
+            order_scope(directory.clone()),
+            &handle,
+            RepairAction::PromoteStagingCandidate,
+            Assignments::new(),
+        ),
+        &effects(&PlatformFileSystem),
+    )
+    .result
+    .unwrap();
+    let filesystem = Syncs::default();
+
+    let report = crate::commit(plan, &effects(&filesystem).minting(QueuedUuids::of(&[]))).result;
+
+    assert!(matches!(report, Ok(Report::Committed { .. })), "{report:?}");
+    let stage = directory.join(STAGE);
+    assert_eq!(filesystem.of(|path| path == stage), [(Sync::Full, stage)]);
 }

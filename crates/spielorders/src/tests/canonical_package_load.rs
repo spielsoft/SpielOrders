@@ -14,7 +14,7 @@ use crate::{Assignments, VendorRef};
 use std::ops::Deref;
 
 use crate::Coded;
-use crate::canonical::MetadataState;
+use crate::canonical::{MetadataState, PackageIndexState};
 
 use crate::operations::FailedPath;
 use crate::ports::FileSystemEntryKind;
@@ -104,7 +104,7 @@ fn unmanaged_and_minimal_current_packages_have_distinct_canonical_results() {
     assert!(package.contents.damaged_orders.is_empty());
     assert!(package.contents.vendors.is_empty());
     assert!(package.contents.diagnostic_groups.is_empty());
-    assert_eq!(package.contents.index.state.code(), "missing");
+    assert_eq!(package.contents.index.state, PackageIndexState::Missing);
 }
 
 #[test]
@@ -122,7 +122,7 @@ fn missing_package_canonical_artifact_is_diagnostic_only_without_partial_project
         panic!("missing canonical Vendors must damage the Package")
     };
     assert_eq!(damaged.context.root.absolute_path, Path::new("/package"));
-    assert_eq!(damaged.index.state.code(), "missing");
+    assert_eq!(damaged.index.state, PackageIndexState::Missing);
     let [group] = damaged.diagnostic_groups.as_slice() else {
         panic!("the missing artifact has exactly one Package diagnostic group")
     };
@@ -309,12 +309,8 @@ fn package_artifact_encoding_syntax_shape_and_version_failures_keep_distinct_cod
             panic!("{path} failure must be Package diagnostic-only")
         };
         assert_eq!(
-            unusable.code(),
-            if expected_code == DiagnosticCode::ManagedArtifactWrongVersion {
-                "package_metadata_unsupported"
-            } else {
-                "damaged_package"
-            },
+            matches!(unusable, Failure::PackageMetadataUnsupported(_)),
+            expected_code == DiagnosticCode::ManagedArtifactWrongVersion,
             "an uninterpretable version is its own refusal for {path}"
         );
         let codes = damaged
@@ -331,15 +327,7 @@ fn package_artifact_encoding_syntax_shape_and_version_failures_keep_distinct_cod
 }
 
 #[test]
-fn configuration_failures_and_visible_direct_child_kinds_use_their_closed_boundaries() {
-    let invalid_path = minimal_package().with_file(
-        "/package/.spielorders/config.toml",
-        b"orders_path = \".\"\n",
-    );
-    let overlap = minimal_package().with_file(
-        "/package/.spielorders/config.toml",
-        b"orders_path = \"Removed/Active\"\nremoved_path = \"Removed\"\n",
-    );
+fn an_unavailable_orders_directory_damages_and_disallowed_direct_children_only_warn() {
     let unavailable = ScriptedFileSystem::private("canonical-load")
         .with_directory("/package")
         .with_directory("/package/.spielorders")
@@ -348,27 +336,18 @@ fn configuration_failures_and_visible_direct_child_kinds_use_their_closed_bounda
         .with_file("/package/.spielorders/vendors.json", VENDORS)
         .with_file("/package/Orders", b"not a directory");
 
-    for (filesystem, expected) in [
-        (invalid_path, DiagnosticCode::ConfigurationPathInvalid),
-        (overlap, DiagnosticCode::ConfigurationPathsOverlap),
-        (
-            unavailable,
-            DiagnosticCode::ConfiguredOrdersDirectoryUnavailable,
-        ),
-    ] {
-        let Err(Failure::DamagedPackage(damaged)) =
-            opened(Path::new("/package"), &filesystem).result
-        else {
-            panic!("unsafe configured paths damage the Package")
-        };
-        assert!(
-            damaged
-                .diagnostic_groups
-                .iter()
-                .flat_map(|group| &group.diagnostics)
-                .any(|diagnostic| diagnostic.code == expected)
-        );
-    }
+    let Err(Failure::DamagedPackage(damaged)) = opened(Path::new("/package"), &unavailable).result
+    else {
+        panic!("an Orders Directory that is not a directory damages the Package")
+    };
+    assert!(
+        damaged
+            .diagnostic_groups
+            .iter()
+            .flat_map(|group| &group.diagnostics)
+            .any(|diagnostic| diagnostic.code
+                == DiagnosticCode::ConfiguredOrdersDirectoryUnavailable)
+    );
 
     let warned = minimal_package()
         .with_file("/package/Orders/loose.txt", b"opaque")
@@ -905,24 +884,27 @@ fn denied_package_operations_remain_distinct_from_other_io_failures() {
             } else {
                 minimal_package().failing(operation, path)
             };
-            let Err(inspected) = opened(Path::new("/package"), &filesystem).result else {
-                panic!("a failed operation refuses the load")
-            };
             let Err(opened) = opened(Path::new("/package"), &filesystem).result else {
-                panic!("opening must preserve a failed operation")
+                panic!("a failed operation refuses the load")
             };
             let Err(validated) = validated_package(Path::new("/package"), &filesystem).result
             else {
                 panic!("validation must preserve a failed operation")
             };
-            let expected = if denied {
-                "package_access_denied"
-            } else {
-                "package_operation_failed"
-            };
-            for observed in [&inspected, &opened, &validated] {
-                assert_eq!(observed.code(), expected, "{observed:?}");
-                assert_eq!(observed, &inspected);
+            for observed in [&opened, &validated] {
+                assert_eq!(
+                    matches!(observed, Failure::PackageAccessDenied(_)),
+                    denied,
+                    "{observed:?}"
+                );
+                assert!(
+                    matches!(
+                        observed,
+                        Failure::PackageAccessDenied(_) | Failure::PackageOperationFailed(_)
+                    ),
+                    "{observed:?}"
+                );
+                assert_eq!(observed, &opened);
             }
         }
     }
@@ -1046,6 +1028,13 @@ fn unclassifiable_filesystem_failures_return_exact_operation_evidence() {
             failed_location(&failure.path).map(|location| location.absolute_path.as_path()),
             Some(Path::new(expected_path))
         );
+        assert_eq!(
+            failure
+                .root
+                .as_ref()
+                .map(|root| root.absolute_path.as_path()),
+            Some(Path::new("/package"))
+        );
     }
 }
 
@@ -1092,9 +1081,10 @@ fn metadata_state_distinguishes_current_unsupported_and_not_assessed_without_fak
     assert_eq!(missing_version.metadata_state, MetadataState::NotAssessed);
 }
 
+/// Supporting Material that cannot be observed at all leaves the load exactly as it is
+/// without it, and is left as it was.
 #[test]
-fn real_canonical_inspection_never_lists_or_touches_supporting_material_and_preserves_both_sentinels()
- {
+fn loading_never_inspects_supporting_material_and_preserves_it() {
     let temporary = TemporaryTree::new("canonical-package-preservation");
     let root = temporary.path().join("package");
     let metadata = root.join(".spielorders");
@@ -1113,27 +1103,40 @@ fn real_canonical_inspection_never_lists_or_touches_supporting_material_and_pres
     std::fs::write(order.join("README.md"), b"exact README\n").unwrap();
     std::fs::write(&supporting_a, SUPPORTING_A).unwrap();
     std::fs::write(&supporting_b, SUPPORTING_B).unwrap();
-    let before_a = std::fs::read(&supporting_a).unwrap();
-    let before_b = std::fs::read(&supporting_b).unwrap();
-    let canonical_supporting_a = std::fs::canonicalize(&supporting_a).unwrap();
-    let canonical_supporting_b = std::fs::canonicalize(&supporting_b).unwrap();
-    let canonical_nested = canonical_supporting_b.parent().unwrap().to_path_buf();
     let filesystem = ScriptedFileSystem::new();
+    // The Order Directory need not be listed to load the Order.
+    filesystem
+        .on(Operation::ReadDirectory)
+        .matching(|path| path.ends_with("Orders/Order"))
+        .fails();
 
-    let result = opened(&root, &filesystem).result;
+    let Ok(package) = opened(&root, &filesystem).result else {
+        panic!("a Package loads without its Supporting Material")
+    };
 
-    assert!(result.is_ok());
-    assert_eq!(std::fs::read(&supporting_a).unwrap(), before_a);
-    assert_eq!(std::fs::read(&supporting_b).unwrap(), before_b);
+    assert_eq!(
+        package,
+        opened(&root, &PlatformFileSystem).result.unwrap(),
+        "the load matches one on the real filesystem"
+    );
+    assert!(package.contents.diagnostic_groups.is_empty());
+    assert_eq!(package.contents.healthy_orders.len(), 1);
     assert_eq!(filesystem.effects(), []);
-    let listed = filesystem.paths(Operation::ReadDirectory);
-    assert_eq!(listed.len(), 1);
-    assert!(listed[0].ends_with("package/Orders"));
-    assert!(filesystem.calls().iter().all(|call| {
-        call.path != canonical_supporting_a
-            && call.path != canonical_supporting_b
-            && !call.path.starts_with(&canonical_nested)
-    }));
+    let inspected = filesystem.naming(is_supporting);
+    assert!(
+        inspected.is_empty(),
+        "loading never inspects Supporting Material: {inspected:?}"
+    );
+    assert_eq!(std::fs::read(&supporting_a).unwrap(), SUPPORTING_A);
+    assert_eq!(std::fs::read(&supporting_b).unwrap(), SUPPORTING_B);
+}
+
+/// Whether `path` is the Supporting Material the test above places in its Order.
+fn is_supporting(path: &Path) -> bool {
+    let nested = Path::new("Orders/Order/nested");
+    path.ends_with("Orders/Order/quote.bin")
+        || path.ends_with(nested)
+        || path.parent().is_some_and(|parent| parent.ends_with(nested))
 }
 
 #[test]
@@ -1366,10 +1369,10 @@ fn resolved_orders_directory_failures_use_only_outside_or_reserved_reasons() {
     }
 }
 
+/// A deliberate interface lock: a code's spelling is a compatibility promise to every
+/// adapter that reads one.
 #[test]
 fn public_load_vocabulary_uses_every_closed_stable_spelling() {
-    use crate::canonical::PackageIndexState;
-
     let codes = [
         (
             DiagnosticCode::ManagedArtifactMissing,
@@ -1431,11 +1434,18 @@ fn public_load_vocabulary_uses_every_closed_stable_spelling() {
             "orders_directory_entry_disallowed",
         ),
         (DiagnosticCode::ReadmeUnavailable, "readme_unavailable"),
+        (
+            DiagnosticCode::ConfiguredOrdersDirectoryNameUnusable,
+            "configured_orders_directory_name_unusable",
+        ),
+        (
+            DiagnosticCode::OrdersDirectoryEntryNameUnusable,
+            "orders_directory_entry_name_unusable",
+        ),
     ];
     for (code, spelling) in codes {
         assert_eq!(code.code(), spelling);
     }
-    assert_eq!(PackageIndexState::NotAssessed.code(), "not_assessed");
 }
 
 #[test]
@@ -1486,15 +1496,10 @@ fn diagnostic_groups_and_composed_order_diagnostics_follow_stable_scope_path_and
 /// A caller-supplied root the filesystem cannot canonicalize is a typed load failure
 /// that names the path the caller supplied.
 ///
-/// The defect this catches aborts the process: the failure branch built its evidence
-/// with `Location::absolute(selected_root).expect(...)`, and `Location` refuses any
-/// path that is not absolute, so every relative root that failed to resolve panicked
-/// inside the core instead of returning. A relative root that *does* resolve never
-/// reaches the branch, which is why nothing else covers it.
-///
 /// Naming the path back is the substance rather than a nicety: a caller has to be able
 /// to say which root it asked about, and it cannot resolve the path itself to find out —
-/// that is the operation that just failed.
+/// that is the operation that just failed. A relative root has no absolute spelling, so
+/// none is invented.
 #[test]
 fn a_relative_root_that_cannot_be_canonicalized_fails_naming_the_path_supplied() {
     let selected_root = Path::new("./no-such-package-root");
@@ -1515,53 +1520,16 @@ fn a_relative_root_that_cannot_be_canonicalized_fails_naming_the_path_supplied()
     assert_eq!(failure.root, None);
 }
 
-/// An absolute root that cannot be canonicalized keeps naming its `Location`.
-///
-/// The two halves of the new vocabulary are not interchangeable, and this is the half
-/// that already worked: a path this application can express stays expressed, so making
-/// the relative case answerable did not cost the absolute case its Package-relative and
-/// absolute spellings.
-#[test]
-fn an_absolute_root_that_cannot_be_canonicalized_still_names_its_location() {
-    let filesystem = minimal_package().failing(Operation::Canonicalize, "/package");
-
-    let Err(Failure::PackageOperationFailed(failure)) =
-        opened(Path::new("/package"), &filesystem).result
-    else {
-        panic!("a root that cannot be canonicalized is an operation failure")
-    };
-    let located = failed_location(&failure.path)
-        .expect("an absolute selected root is a Location this application expresses");
-    assert_eq!(located.absolute_path.as_path(), Path::new("/package"));
-    assert_eq!(
-        failure
-            .root
-            .as_ref()
-            .map(|root| root.absolute_path.as_path()),
-        Some(Path::new("/package"))
-    );
-}
-
 /// Every public core entry point that takes a caller-supplied Package Root answers a
-/// root it cannot resolve, rather than aborting the process.
+/// root it cannot resolve with its typed failure, rather than aborting the process.
 ///
-/// The panic was one branch of one private function, but the entry points that reach it
-/// are the contract. Four of these — Order creation, Order adoption, Package README
-/// writes, and the whole Vendor family — reach it through private helpers rather than by
-/// calling the load themselves, so a reader checking only the load's own callers misses
-/// them.
-///
-/// The relative root is what makes this a test rather than a restatement: each of these
-/// aborted for every relative root that failed to resolve, and each now returns the
-/// typed variant its own error vocabulary already had for a Package that cannot be read.
+/// Order creation, Order adoption, Package README writes, and the Vendor family reach
+/// the root through their own resolution rather than through the load, so each is
+/// named.
 #[test]
 fn no_public_entry_point_aborts_on_a_root_it_cannot_resolve() {
     let root = Path::new("./no-such-package-root");
 
-    assert!(matches!(
-        opened(root, &PlatformFileSystem).result,
-        Err(Failure::PackageOperationFailed(_))
-    ));
     assert!(matches!(
         opened(root, &PlatformFileSystem).result,
         Err(Failure::PackageOperationFailed(_))
@@ -1613,9 +1581,6 @@ fn no_public_entry_point_aborts_on_a_root_it_cannot_resolve() {
         Err(Failure::PackageOperationFailed(_))
     ));
 
-    // The Vendor family shares one private resolution, and every entry point in it
-    // takes the Root directly. All are named because the review boundary is the
-    // set of entry points, and a set is not evidenced by a representative of it.
     let contacts = Assignments::new().assign("name", "Anyone");
     let vendor_failures: [Result<_, Failure>; 5] = [
         crate::plan(

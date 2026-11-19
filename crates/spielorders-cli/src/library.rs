@@ -143,11 +143,12 @@ impl Calls {
             .extend(entries(spielorders_package_findings(package).as_deref()));
     }
 
-    /// Whether any call so far warned.
-    pub(crate) fn warned(&self) -> bool {
+    /// How many warnings the calls so far reported.
+    pub(crate) fn warnings(&self) -> usize {
         self.findings
             .iter()
-            .any(|finding| finding["severity"] == "warning")
+            .filter(|finding| finding["severity"] == "warning")
+            .count()
     }
 
     pub(crate) fn answered(self, data: Value) -> Answer {
@@ -165,7 +166,27 @@ impl Calls {
                 .and_then(|code| constant(SPIELORDERS_FAMILY_FAILURE, code))
                 .is_some()
         });
+        let assignments = named(SPIELORDERS_FAILURE_INVALID_ASSIGNMENTS);
         let (code, detail) = match failure {
+            // Every refused assignment of the set is the detail, in one shape whoever
+            // refused it.
+            Some(at) if listed[at]["code"] == assignments => {
+                let (refused, others): (Vec<_>, Vec<_>) = listed
+                    .into_iter()
+                    .partition(|entry| entry["code"] == assignments);
+                listed = others;
+                let detail = refused
+                    .iter()
+                    .map(|entry| {
+                        rejected_assignment(
+                            entry["field"].as_str().unwrap_or_default(),
+                            entry["reason"].clone(),
+                            entry["position"].as_i64(),
+                        )
+                    })
+                    .collect();
+                (assignments, Value::Array(detail))
+            }
             Some(at) => {
                 let mut entry = listed.remove(at);
                 let code = entry["code"].take();
@@ -385,9 +406,25 @@ pub(crate) fn resolution_name(field: SpielordersConstant) -> &'static str {
     }
 }
 
-pub(crate) fn diagnosis(diagnosis: &SpielordersDiagnosis) -> Value {
+/// A diagnosis as every command that reports one answers it: its validity, its findings,
+/// and each case's actions, each with the exact command line that applies it to the
+/// Package at `root` or to the Order Directory the case belongs to.
+pub(crate) fn diagnosis(diagnosis: &SpielordersDiagnosis, root: &Path) -> Value {
     let cases: Vec<Value> = (0..spielorders_diagnosis_case_count(diagnosis))
         .map(|case| {
+            let order = spielorders_diagnosis_case_order(diagnosis, case).as_path();
+            let applies = if order.as_os_str().is_empty() {
+                format!(
+                    "spielorders repair --root {}",
+                    shell_word(&root.to_string_lossy())
+                )
+            } else {
+                format!(
+                    "spielorders order repair --root {}",
+                    shell_word(&order.to_string_lossy())
+                )
+            };
+            let handle = shell_word(&case_handle(diagnosis, case));
             let actions: Vec<Value> = (0..spielorders_diagnosis_action_count(diagnosis, case))
                 .map(|action| {
                     let required: Vec<Value> =
@@ -398,9 +435,20 @@ pub(crate) fn diagnosis(diagnosis: &SpielordersDiagnosis) -> Value {
                                 )))
                             })
                             .collect();
+                    let name = named(spielorders_diagnosis_action(diagnosis, case, action));
+                    let values: String = required
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(|value| format!(" {value}="))
+                        .collect();
+                    let command = format!(
+                        "{applies} case={handle} action={}{values}",
+                        name.as_str().unwrap_or_default()
+                    );
                     json!({
-                        "action": named(spielorders_diagnosis_action(diagnosis, case, action)),
+                        "action": name,
                         "required_values": required,
+                        "command": command,
                     })
                 })
                 .collect();
@@ -442,4 +490,29 @@ pub(crate) fn search(search: &SpielordersSearch) -> Value {
         "files": files,
         "provider_diagnostics": said,
     })
+}
+
+/// One refused assignment as an `invalid_assignments` refusal lists it: the field, why, and
+/// the one-based position of the row it was assigned on, if any.
+pub(crate) fn rejected_assignment(field: &str, reason: Value, position: Option<i64>) -> Value {
+    let mut entry = json!({ "field": field, "reason": reason });
+    if let Some(position) = position {
+        entry["position"] = json!(position);
+    }
+    entry
+}
+
+/// `value` as one shell word: as it is where a shell gives none of its characters a
+/// meaning, and single-quoted otherwise.
+fn shell_word(value: &str) -> String {
+    const UNRESERVED: &str = "@%+=:,./-_";
+    if !value.is_empty()
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || UNRESERVED.contains(character))
+    {
+        value.to_owned()
+    } else {
+        format!("'{}'", value.replace('\'', r"'\''"))
+    }
 }

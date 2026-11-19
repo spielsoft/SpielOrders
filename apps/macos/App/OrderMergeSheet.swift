@@ -32,7 +32,7 @@ struct OrderMergeSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             Text("Merge \(orders.count) Orders")
                 .font(.headline)
                 .accessibilityAddTraits(.isHeader)
@@ -245,7 +245,7 @@ struct PlanningFailure: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(failure.summary)
-                .foregroundStyle(.red)
+                .foregroundStyle(.problemText)
                 .accessibilityIdentifier(identifier + ".problem")
             DisclosureGroup("Details") {
                 ScrollView {

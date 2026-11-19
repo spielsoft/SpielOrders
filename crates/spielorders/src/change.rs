@@ -6,34 +6,33 @@
 //! boundaries; Durable managed-file writes.
 
 use crate::{
-    Answer, Coded, Failure, Warning,
+    Answer, Failure, Warning,
     adoption::{
-        OrderAdoptionInput, OrderAdoptionPlan, OrderAdoptionResult, OrderItemInput,
-        commit_order_adoption, plan_order_adoption,
+        OrderAdoptionPlan, OrderAdoptionResult, adoption_set, commit_order_adoption,
+        plan_order_adoption,
     },
     agent_setup::{AgentSetupPlan, commit_agent_setup, plan_agent_setup},
     alignment::{
         OrderAlignmentPlan, OrderAlignmentResult, commit_order_alignment, plan_order_alignment,
     },
     batch::{Batch, BatchPlan, BatchResult, commit_batch},
-    canonical::{
-        PackageIndexRebuildPlan, commit_package_index_rebuild, plan_package_index_rebuild,
-    },
+    canonical::{PackageIndexRebuildPlan, commit_index_rebuild, plan_index_rebuild},
     creation::{
-        OrderCreationInput, OrderCreationPlan, OrderCreationResult, commit_order_creation,
+        OrderCreationPlan, OrderCreationResult, commit_order_creation, creation_set,
         plan_order_creation,
     },
     initialization::{
         InitializationOptions, PackageInitializationPlan, commit_package_initialization,
         plan_package_initialization,
     },
+    journal::CreationAct,
     metadata::{OrderDocument, Vendor},
     mutation::{MutationReport, OperationKind, PlannedOperation},
     operations::refuse_linked_root,
-    order_edits::{OrderEditPlan, OrderEditResult, commit_order_edit, plan_order_save},
+    order_edits::{OrderEditPlan, OrderEditResult, commit_order_edit, plan_order_edit},
+    order_facts::OrderFacts,
     order_merge::{OrderMergePlan, OrderMergeResult, commit_order_merge, plan_order_merge},
     order_reads::read_order,
-    package::ReusableValues,
     ports::Effects,
     readme::Location,
     readme_writes::{
@@ -44,15 +43,15 @@ use crate::{
     repair::{RepairPlan, RepairScope, commit_repair, plan_repair},
     repair_cases::{RepairAction, RepairResolution},
     restoration::{OrderRestorePlan, OrderRestoreResult, commit_order_restore, plan_order_restore},
-    search::ReusableValueKind,
     value_changes::{
         InUse, ValueChangePlan, ValueChangeResult, ValueRequest, commit_value_change,
         plan_value_change,
     },
+    values::ReusableValueKind,
     vendor_reads::read_vendor,
     vendors::{
         VendorMutationPlan, VendorMutationResult, commit_vendor_mutation, plan_vendor_creation,
-        plan_vendor_delete, plan_vendor_hide, plan_vendor_save, plan_vendor_unhide,
+        plan_vendor_delete, plan_vendor_edit, plan_vendor_hide, plan_vendor_unhide,
     },
 };
 use std::path::{Path, PathBuf};
@@ -350,7 +349,7 @@ impl Change {
 pub struct Plan(PlanKind);
 
 #[derive(Clone, Debug, PartialEq)]
-enum PlanKind {
+pub(crate) enum PlanKind {
     InitializePackage(PackageInitializationPlan),
     ProvisionAgent(Box<AgentSetupPlan>),
     RebuildIndex(Box<PackageIndexRebuildPlan>),
@@ -427,10 +426,19 @@ impl Report {
     }
 }
 
-fn planned(operations: &[PlannedOperation]) -> Vec<(String, &Location)> {
+/// One filesystem act committing a plan performs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlannedAct {
+    /// A managed act on a Package's records, directories, or stages.
+    Managed(OperationKind),
+    /// An act of an exclusive creation batch.
+    Creation(CreationAct),
+}
+
+fn planned(operations: &[PlannedOperation]) -> Vec<(PlannedAct, &Location)> {
     operations
         .iter()
-        .map(|operation| (operation.kind.code().to_owned(), &operation.location))
+        .map(|operation| (PlannedAct::Managed(operation.kind), &operation.location))
         .collect()
 }
 
@@ -446,59 +454,31 @@ macro_rules! variants {
 }
 
 impl Plan {
-    fn of(plan: impl Into<PlanKind>) -> Self {
+    pub(crate) fn of(plan: impl Into<PlanKind>) -> Self {
         Self(plan.into())
     }
 
-    /// Each filesystem operation committing this plan performs: the name of its kind, and
-    /// the path it acts on.
-    pub(crate) fn operations(&self) -> Vec<(String, &Location)> {
+    /// Each filesystem operation committing this plan performs: what it does, and the
+    /// path it acts on.
+    pub(crate) fn operations(&self) -> Vec<(PlannedAct, &Location)> {
         match &self.0 {
-            PlanKind::InitializePackage(plan) => plan
-                .batch
-                .operations
-                .iter()
-                .map(|operation| {
-                    (
-                        format!(
-                            "{}_{}",
-                            operation.kind.code(),
-                            operation.destination_kind.code()
-                        ),
-                        &operation.location,
-                    )
-                })
-                .collect(),
+            PlanKind::InitializePackage(plan) => plan.journal.operations(),
             PlanKind::RebuildIndex(plan) => planned(&plan.operations),
-            PlanKind::ProvisionAgent(plan) => plan
-                .batch
-                .operations
-                .iter()
-                .map(|operation| {
-                    (
-                        format!(
-                            "{}_{}",
-                            operation.kind.code(),
-                            operation.destination_kind.code()
-                        ),
-                        &operation.location,
-                    )
-                })
-                .collect(),
-            PlanKind::CreateOrder(plan) => planned(&plan.operations),
-            PlanKind::AdoptOrder(plan) => planned(&plan.operations),
-            PlanKind::EditOrder(plan) => planned(&plan.operations),
+            PlanKind::ProvisionAgent(plan) => plan.journal.operations(),
+            PlanKind::CreateOrder(plan) => plan.journal.operations(),
+            PlanKind::AdoptOrder(plan) => plan.journal.operations(),
+            PlanKind::EditOrder(plan) => plan.journal.operations(),
             PlanKind::AlignOrder(plan) => planned(&plan.operations),
-            PlanKind::RemoveOrder(plan) => planned(&plan.operations),
-            PlanKind::MergeOrders(plan) => planned(&plan.operations),
-            PlanKind::Batch(plan) => planned(&plan.operations),
-            PlanKind::RestoreOrder(plan) => planned(&plan.operations),
-            PlanKind::Vendor(plan) => planned(&plan.operations),
-            PlanKind::Values(plan) => planned(&plan.operations),
-            PlanKind::WriteReadme(plan) => planned(&plan.operations),
+            PlanKind::RemoveOrder(plan) => plan.journal.operations(),
+            PlanKind::MergeOrders(plan) => plan.journal.operations(),
+            PlanKind::Batch(plan) => plan.journal.operations(),
+            PlanKind::RestoreOrder(plan) => plan.journal.operations(),
+            PlanKind::Vendor(plan) => plan.journal.operations(),
+            PlanKind::Values(plan) => plan.journal.operations(),
+            PlanKind::WriteReadme(plan) => plan.journal.operations(),
             PlanKind::Repair(plan) => match &**plan {
-                RepairPlan::Artifact(plan) => planned(&plan.operations),
-                RepairPlan::Semantic(plan) => planned(&plan.operations),
+                RepairPlan::Artifact(plan) => plan.journal.operations(),
+                RepairPlan::Semantic(plan) => plan.journal.operations(),
             },
         }
     }
@@ -511,13 +491,15 @@ impl Plan {
             _ => self
                 .operations()
                 .iter()
-                .filter(|(kind, _)| {
-                    [
-                        OperationKind::ReplaceOrderRecord.code(),
-                        OperationKind::WriteOrderRecord.code(),
-                        OperationKind::CommitOrderRecord.code(),
-                    ]
-                    .contains(&kind.as_str())
+                .filter(|(act, _)| {
+                    matches!(
+                        act,
+                        PlannedAct::Managed(
+                            OperationKind::ReplaceOrderRecord
+                                | OperationKind::WriteOrderRecord
+                                | OperationKind::CommitOrderRecord
+                        )
+                    )
                 })
                 .count(),
         }
@@ -526,11 +508,7 @@ impl Plan {
     /// For each operation in [`Self::operations`] order, whether it acts on a directory.
     pub(crate) fn operation_directories(&self) -> Vec<bool> {
         match &self.0 {
-            PlanKind::MergeOrders(plan) => plan
-                .operations
-                .iter()
-                .map(|operation| operation.directory)
-                .collect(),
+            PlanKind::MergeOrders(plan) => plan.journal.directories(),
             _ => vec![false; self.operations().len()],
         }
     }
@@ -542,26 +520,32 @@ impl Plan {
         }
     }
 
-    /// The Order record saving this plan writes, the Vendor it references, and how it
-    /// spells its reusable values; `None` for a plan that writes no Order record.
-    pub(crate) fn order_record(
-        &self,
-    ) -> Option<(&OrderDocument, Option<&Vendor>, &ReusableValues)> {
+    /// The Order facts saving this plan writes: its record, the Vendor it references, and
+    /// how it spells its reusable values; `None` for a plan that writes no Order record.
+    pub(crate) fn order_record(&self) -> Option<&OrderFacts> {
         match &self.0 {
-            PlanKind::CreateOrder(plan) => Some((
-                &plan.facts.document,
-                plan.vendor.as_ref(),
-                &plan.reusable_values,
-            )),
-            PlanKind::AdoptOrder(plan) => {
-                Some((&plan.document, plan.vendor.as_ref(), &plan.reusable_values))
-            }
-            PlanKind::EditOrder(plan) => Some((
-                &plan.facts.document,
-                plan.vendor.as_ref(),
-                &plan.reusable_values,
-            )),
+            PlanKind::CreateOrder(plan) => Some(&plan.facts),
+            PlanKind::AdoptOrder(plan) => Some(&plan.facts),
+            PlanKind::EditOrder(plan) => Some(&plan.facts),
             _ => None,
+        }
+    }
+
+    /// A merge's record before and after, read as the changes it makes: the kept Order's
+    /// facts and Items, or the kept Vendor's facts and Contacts.
+    pub(crate) fn merged(&self) -> Option<Merged<'_>> {
+        match &self.0 {
+            PlanKind::MergeOrders(plan) => Some(Merged::Order(plan.records())),
+            PlanKind::Values(plan) => plan.kept_vendor().map(Merged::Vendor),
+            _ => None,
+        }
+    }
+
+    /// Each Vendor a Vendor merge or deletion removes; empty for any other plan.
+    pub(crate) fn removed_vendors(&self) -> Vec<&Vendor> {
+        match &self.0 {
+            PlanKind::Values(plan) => plan.removed_vendors(),
+            _ => Vec::new(),
         }
     }
 
@@ -572,6 +556,12 @@ impl Plan {
             _ => None,
         }
     }
+}
+
+/// A merged record before and after the merge fills it.
+pub(crate) enum Merged<'a> {
+    Order([(&'a OrderDocument, Option<&'a Vendor>); 2]),
+    Vendor([&'a Vendor; 2]),
 }
 
 variants!(PlanKind, PlanKind {
@@ -635,44 +625,35 @@ pub fn plan<E: Effects>(change: &Change, effects: &E) -> Answer<Plan> {
             );
             plan_package_initialization(root, &options, filesystem).map(Plan::of)
         }
-        Change::RebuildIndex { root } => plan_package_index_rebuild(root, filesystem).map(Plan::of),
+        Change::RebuildIndex { root } => plan_index_rebuild(root, filesystem).map(Plan::of),
         Change::ProvisionAgent { root } => plan_agent_setup(root, filesystem).map(Plan::of),
         Change::CreateOrder {
             root,
             assignments,
             items,
-        } => {
-            let input = if items.is_empty() {
-                OrderCreationInput::from_assignments(assignments)
-            } else {
-                OrderCreationInput::from_draft(assignments, items)
-            };
-            settled(input, |input| {
-                plan_order_creation(root, &input, &today, filesystem).map(Plan::of)
-            })
-        }
+        } => plan_order_creation(root, &creation_set(assignments), items, &today, filesystem)
+            .map(Plan::of),
         Change::AdoptOrder {
             root,
             directory,
             assignments,
             items,
-        } => {
-            let input = OrderAdoptionInput::from_assignments(assignments).and_then(|input| {
-                items.iter().try_fold(input, |input, item| {
-                    Ok(input.item(OrderItemInput::from_assignments(item)?))
-                })
-            });
-            settled(input, |input| {
-                plan_order_adoption(root, directory, &input, filesystem).map(Plan::of)
-            })
-        }
+        } => plan_order_adoption(
+            root,
+            directory,
+            &adoption_set(assignments),
+            items,
+            &today,
+            filesystem,
+        )
+        .map(Plan::of),
         Change::SaveOrder {
             order,
             assignments,
             items,
             original,
         } => settled(order.healthy_directory(filesystem), |directory| {
-            plan_order_save(&directory, assignments, items, &today, filesystem)
+            plan_order_edit(&directory, assignments, items, &today, filesystem)
                 .map(|plan| Plan::of(plan.require_original(Some(original))))
         }),
         Change::AlignOrder { order } => settled(order.healthy_directory(filesystem), |directory| {
@@ -780,6 +761,7 @@ pub fn plan<E: Effects>(change: &Change, effects: &E) -> Answer<Plan> {
                 project: project.clone(),
                 values: vec![value.clone()],
                 with: to.clone(),
+                existing: false,
             },
             filesystem,
         )
@@ -797,6 +779,7 @@ pub fn plan<E: Effects>(change: &Change, effects: &E) -> Answer<Plan> {
                 project: project.clone(),
                 values: values.clone(),
                 with: keep.clone(),
+                existing: true,
             },
             filesystem,
         )
@@ -823,7 +806,7 @@ pub fn plan<E: Effects>(change: &Change, effects: &E) -> Answer<Plan> {
             assignments,
             contacts,
             original,
-        } => plan_vendor_save(
+        } => plan_vendor_edit(
             root,
             original.vendor_id.as_str(),
             assignments,
@@ -879,7 +862,7 @@ pub fn commit<E: Effects>(plan: Plan, effects: &E) -> Answer<Report> {
     match plan.0 {
         PlanKind::InitializePackage(plan) => commit_package_initialization(plan, filesystem)
             .map(|report| Report::with(report, |()| ChangeResult::InitializePackage)),
-        PlanKind::RebuildIndex(plan) => commit_package_index_rebuild(*plan, filesystem)
+        PlanKind::RebuildIndex(plan) => commit_index_rebuild(*plan, filesystem)
             .map(|report| Report::with(report, |()| ChangeResult::RebuildIndex)),
         PlanKind::ProvisionAgent(plan) => commit_agent_setup(*plan, filesystem)
             .map(|report| Report::with(report, |()| ChangeResult::ProvisionAgent)),

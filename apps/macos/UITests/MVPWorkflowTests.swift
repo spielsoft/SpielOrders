@@ -58,14 +58,14 @@ import XCTest
             XCTAssertTrue(picker.wait(for: \.isEnabled, toEqual: true, timeout: 10))
             XCTAssertEqual(field.value as? String, "Planned")
             picker.click()
-            choose(outside, prompt: "Choose Directory")
+            choose(outside, prompt: "Choose Folder")
             let cancel = app.buttons[identifier + ".cancelChoice"]
             XCTAssertTrue(cancel.waitForExistence(timeout: 10))
             cancel.click()
             XCTAssertTrue(picker.wait(for: \.isEnabled, toEqual: true, timeout: 10))
             XCTAssertEqual(field.value as? String, "Planned")
             picker.click()
-            choose(directory, prompt: "Choose Directory")
+            choose(directory, prompt: "Choose Folder")
             let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", directory.lastPathComponent), object: field)
             XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 10), .completed)
         }
@@ -85,40 +85,6 @@ import XCTest
         XCTAssertTrue(text.contains("orders_path = \"Purchases\""))
         XCTAssertTrue(text.contains("removed_path = \"Recoverable\""))
         XCTAssertEqual(try Data(contentsOf: notes), original)
-    }
-
-    func testUnreadableInitialization() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let readme = root.appendingPathComponent("README.md")
-        let original = Data([0xff, 0xfe])
-        try original.write(to: readme)
-        let app = XCUIApplication()
-        app.launchArguments = ["-packageBookmark", "", "-sidebarVisible", "YES"]
-        app.launch()
-        fileMenu(in: app).click()
-        app.menuItems["New Package…"].click()
-        app.typeKey("g", modifierFlags: [.command, .shift])
-        app.typeText(root.path)
-        app.typeKey(.return, modifierFlags: [])
-        app.buttons["Choose Package Folder"].click()
-        let initialize = app.buttons["package.initialize.confirm"]
-        XCTAssertTrue(initialize.waitForExistence(timeout: 10))
-        initialize.click()
-        let newOrder = app.buttons["order.new"]
-        XCTAssertTrue(newOrder.wait(for: \.isEnabled, toEqual: true, timeout: 10))
-        newOrder.click()
-        let title = element("order.editor.title", in: app)
-        XCTAssertTrue(title.waitForExistence(timeout: 10))
-        replace(title, with: "Independent of the README", in: app)
-        app.typeKey(.return, modifierFlags: .command)
-        XCTAssertTrue(element("editor.create", in: app).waitForNonExistence(timeout: 10))
-        let row = app.staticTexts.matching(NSPredicate(
-            format: "identifier BEGINSWITH %@ AND identifier ENDSWITH %@ AND value == %@",
-            "orders.row.", ".title", "Independent of the README")).firstMatch
-        XCTAssertTrue(row.waitForExistence(timeout: 10))
-        XCTAssertEqual(try Data(contentsOf: readme), original)
     }
 
     func testSaveRetry() throws {

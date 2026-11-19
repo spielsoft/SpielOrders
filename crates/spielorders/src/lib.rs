@@ -16,18 +16,20 @@ mod canonical;
 mod change;
 mod code;
 mod creation;
-mod creation_batch;
 mod diagnosis;
 mod digest;
 mod drafting;
 mod evidence;
 mod filesystem;
 mod initialization;
+mod integrity;
+mod journal;
 mod metadata;
 mod mutation;
 mod operations;
 mod order;
 mod order_edits;
+mod order_facts;
 mod order_merge;
 mod order_reads;
 mod package;
@@ -63,10 +65,6 @@ pub(crate) use change::{
 };
 pub(crate) use code::Coded;
 pub(crate) use diagnosis::Diagnosis;
-pub(crate) use drafting::{
-    NEW_ORDER_TITLE, draft_date_ordered, draft_item_total, draft_order_total, new_order_defaults,
-    new_vendor_name,
-};
 pub(crate) use order_reads::OrderRead;
 pub(crate) use readme::ReadmeRead;
 pub(crate) use reads::{diagnose, open, read_order, read_readme, read_vendor, validate};
@@ -87,12 +85,12 @@ pub(crate) mod model {
         readme::{Diagnostic, DiagnosticEvidence, Location, Severity},
         repair_cases::RepairAction,
         search::{
-            CaseSensitivity, OrderFact, OrderListEntry, ReusableValueKind, SearchQuery, VendorFact,
-            VendorVisibility,
+            CaseSensitivity, OrderFact, OrderListEntry, SearchQuery, VendorFact, VendorVisibility,
         },
         supporting_material::{
             Completeness, PartialReason, ProviderAnswer, ProviderDiagnostic, ProviderHit,
             ProviderUnavailableReason,
         },
+        values::ReusableValueKind,
     };
 }

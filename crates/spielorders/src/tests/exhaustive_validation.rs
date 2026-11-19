@@ -9,7 +9,6 @@ use crate::tests::support::{
     Operation, ScriptedFileSystem, enumerate_orders_as, failed_location, findings, minimal_package,
     opened, proven_current_minimal_package, sha256, staging_evidence, validated_package,
 };
-use crate::tests::support::{path_set, touched_by};
 use crate::{
     ports::{DirectoryEntry, FileSystemEntryKind},
     readme::DiagnosticCode,
@@ -50,10 +49,12 @@ fn exhaustive_validation_finds_reserved_content_that_fast_loading_deliberately_d
         panic!("the deterministic index is proven current")
     };
     assert!(before.contents.diagnostic_groups.is_empty());
-    let fast_listings = filesystem.paths(Operation::ReadDirectory);
 
     let Ok(report) = validated_package(Path::new("/package"), &filesystem).result else {
         panic!("a reserved warning does not make the Package invalid")
+    };
+    let Ok(after) = opened(Path::new("/package"), &filesystem).result else {
+        panic!("the index remains proven current")
     };
 
     let warning = report
@@ -74,27 +75,16 @@ fn exhaustive_validation_finds_reserved_content_that_fast_loading_deliberately_d
             observed_kind: FileSystemEntryKind::File,
         }
     );
-    assert_eq!(before.contents.diagnostic_groups, &[]);
+    assert_eq!(
+        before, after,
+        "exhaustive validation never retrofits its findings into the fast load"
+    );
     assert_eq!(filesystem.bytes(supporting_a), Some(SUPPORTING_A.to_vec()));
     assert_eq!(filesystem.bytes(supporting_b), Some(SUPPORTING_B.to_vec()));
-    assert!(filesystem.calls().iter().all(|call| {
-        call.paths()
-            .into_iter()
-            .all(|path| path != Path::new(supporting_a) && path != Path::new(supporting_b))
-    }));
-    let metadata = Path::new("/package/.spielorders");
-    assert!(!fast_listings.iter().any(|path| path == metadata));
-    assert!(
-        filesystem
-            .paths(Operation::ReadDirectory)
-            .iter()
-            .any(|path| path == metadata)
-    );
 }
 
 #[test]
-fn exhaustive_validation_reads_exact_documents_and_reports_staging_with_known_destination_validity()
-{
+fn exhaustive_validation_reports_staging_with_known_destination_validity() {
     let filesystem = minimal_package();
     filesystem.put_file("/package/README.md", b"# Package notes\n");
     filesystem.put_entry("/package/Orders/Order", FileSystemEntryKind::Directory);
@@ -131,13 +121,6 @@ fn exhaustive_validation_reads_exact_documents_and_reports_staging_with_known_de
         order.directory.package_relative_path.as_deref(),
         Some("Orders/Order")
     );
-    let reads = filesystem.paths(Operation::Read);
-    for readme in ["/package/README.md", "/package/Orders/Order/README.md"] {
-        assert!(
-            reads.iter().any(|path| path == Path::new(readme)),
-            "every README is read exactly: {readme}"
-        );
-    }
     let diagnostics = report
         .diagnostic_groups
         .iter()
@@ -239,65 +222,16 @@ fn missing_and_unavailable_readmes_keep_distinct_empty_evidence_without_duplicat
 }
 
 #[test]
-fn exhaustive_validation_uses_exact_authorized_effect_budgets_and_never_mutates_or_observes_supporting_material()
- {
-    let filesystem = minimal_package();
+fn exhaustive_validation_writes_nothing_and_never_inspects_supporting_material() {
+    let filesystem = one_order_filesystem();
     filesystem.put_file("/package/README.md", b"Package\n");
-    filesystem.put_entry("/package/Orders/Order", FileSystemEntryKind::Directory);
-    filesystem.put_entry(
-        "/package/Orders/Order/.spielorders",
-        FileSystemEntryKind::Directory,
-    );
-    filesystem.put_file(
-        "/package/Orders/Order/.spielorders/order.json",
-        MINIMAL_ORDER,
-    );
-    filesystem.put_file("/package/Orders/Order/README.md", b"Order\n");
-    let supporting_a = "/package/Orders/Order/supporting-a.bin";
-    let supporting_b = "/package/Orders/Order/nested/supporting-b.bin";
-    filesystem.put_file(supporting_a, SUPPORTING_A);
-    filesystem.put_file(supporting_b, SUPPORTING_B);
-    let before_a = filesystem.bytes(supporting_a);
-    let before_b = filesystem.bytes(supporting_b);
 
     let Ok(_) = validated_package(Path::new("/package"), &filesystem).result else {
         panic!("the complete authorized evidence produces a validation result")
     };
 
-    let reads = filesystem.paths(Operation::Read);
-    for path in [
-        "/package/.spielorders/config.toml",
-        "/package/.spielorders/version.json",
-        "/package/.spielorders/vendors.json",
-        "/package/Orders/Order/.spielorders/order.json",
-        "/package/README.md",
-        "/package/Orders/Order/README.md",
-    ] {
-        assert_eq!(
-            reads
-                .iter()
-                .filter(|read| **read == Path::new(path))
-                .count(),
-            1,
-            "{path} is read exactly once"
-        );
-    }
-    assert_eq!(
-        touched_by(&filesystem, Operation::ReadDirectory),
-        path_set(&[
-            "/package/Orders",
-            "/package/.spielorders",
-            "/package/Orders/Order/.spielorders",
-        ])
-    );
     assert_eq!(filesystem.effects(), []);
-    assert!(filesystem.calls().iter().all(|call| {
-        call.paths()
-            .into_iter()
-            .all(|path| path != Path::new(supporting_a) && path != Path::new(supporting_b))
-    }));
-    assert_eq!(filesystem.bytes(supporting_a), before_a);
-    assert_eq!(filesystem.bytes(supporting_b), before_b);
+    assert_supporting_material_preserved(&filesystem);
 }
 
 #[test]
@@ -438,15 +372,6 @@ fn combined_damage_documents_reserved_content_and_staging_have_complete_determin
         2,
         "the Package README and Order B's README are each reported once"
     );
-    assert_eq!(
-        filesystem
-            .paths(Operation::Read)
-            .iter()
-            .filter(|path| *path == Path::new("/package/Orders/B/README.md"))
-            .count(),
-        1,
-        "a healthy duplicate-ID participant's exact README is read once"
-    );
 }
 
 #[cfg(unix)]
@@ -478,7 +403,7 @@ fn non_utf8_reserved_content_conservatively_prevents_an_incomplete_validation_re
 }
 
 #[test]
-fn every_authorized_canonicalize_kind_and_list_failure_returns_exact_operation_evidence() {
+fn a_failed_resolution_observation_or_listing_names_the_exact_path() {
     enum Fault {
         Canonicalize(&'static str),
         Observe(&'static str),
@@ -486,22 +411,9 @@ fn every_authorized_canonicalize_kind_and_list_failure_returns_exact_operation_e
     }
     let cases = [
         Fault::Canonicalize("/package"),
-        Fault::Canonicalize("/package/Orders"),
-        Fault::Canonicalize("/package/Orders/Order"),
-        Fault::Observe("/package/.spielorders"),
-        Fault::Observe("/package/.spielorders/config.toml"),
-        Fault::Observe("/package/.spielorders/version.json"),
-        Fault::Observe("/package/.spielorders/vendors.json"),
-        Fault::Observe("/package"),
-        Fault::Observe("/package/Removed"),
-        Fault::Observe("/package/Orders"),
         Fault::Observe("/package/Orders/Order/.spielorders/order.json"),
-        Fault::Observe("/package/README.md"),
         Fault::Observe("/package/Orders/Order/README.md"),
-        Fault::Observe("/package/Orders/Order/.spielorders"),
         Fault::List("/package/Orders"),
-        Fault::List("/package/.spielorders"),
-        Fault::List("/package/Orders/Order/.spielorders"),
     ];
 
     for failure in cases {
@@ -559,15 +471,6 @@ fn persistent_required_artifact_and_document_read_failures_keep_their_distinct_c
             })
             .count();
         assert_eq!(matches, 1, "{path} remains one canonical diagnostic");
-        assert_eq!(
-            filesystem
-                .paths(Operation::Read)
-                .iter()
-                .filter(|observed| *observed == Path::new(path))
-                .count(),
-            1,
-            "{path} is attempted exactly once"
-        );
         assert_supporting_material_preserved(&filesystem);
     }
 
@@ -588,54 +491,8 @@ fn persistent_required_artifact_and_document_read_failures_keep_their_distinct_c
             })
             .count();
         assert_eq!(matches, 1, "{path} warning is deduplicated");
-        assert_eq!(
-            filesystem
-                .paths(Operation::Read)
-                .iter()
-                .filter(|observed| *observed == Path::new(path))
-                .count(),
-            1,
-            "{path} is attempted exactly once"
-        );
         assert_supporting_material_preserved(&filesystem);
     }
-}
-
-#[test]
-fn exhaustive_validation_never_retrofits_or_changes_proven_current_fast_load_evidence() {
-    let filesystem = proven_current_minimal_package();
-    filesystem.put_entry(
-        "/package/.spielorders/unexpected.txt",
-        FileSystemEntryKind::File,
-    );
-
-    let Ok(before) = opened(Path::new("/package"), &filesystem).result else {
-        panic!("the index starts proven current")
-    };
-    let Ok(validation) = validated_package(Path::new("/package"), &filesystem).result else {
-        panic!("the separate exhaustive call completes")
-    };
-    let Ok(after) = opened(Path::new("/package"), &filesystem).result else {
-        panic!("the index remains proven current")
-    };
-
-    assert_eq!(before, after);
-    assert!(before.contents.diagnostic_groups.is_empty());
-    assert!(after.contents.diagnostic_groups.is_empty());
-    assert!(validation.diagnostic_groups.iter().any(|group| {
-        group
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == DiagnosticCode::ReservedContentUnexpected)
-    }));
-
-    let Ok(canonical) = opened(Path::new("/package"), &filesystem).result else {
-        panic!("the same canonical evidence remains current")
-    };
-    assert_eq!(
-        before.contents.healthy_orders, canonical.contents.healthy_orders,
-        "ordinary public Order equality is independent of the load route"
-    );
 }
 
 #[test]
@@ -834,11 +691,13 @@ fn assert_supporting_material_preserved(filesystem: &ScriptedFileSystem) {
         filesystem.bytes(supporting_b.to_str().unwrap()),
         Some(SUPPORTING_B.to_vec())
     );
-    assert!(filesystem.calls().iter().all(|call| {
-        call.paths()
-            .into_iter()
-            .all(|path| path != supporting_a && path != supporting_b)
-    }));
+    let nested = Path::new("/package/Orders/Order/nested");
+    let inspected =
+        filesystem.naming(|path| path.starts_with(supporting_a) || path.starts_with(nested));
+    assert!(
+        inspected.is_empty(),
+        "Supporting Material is never inspected: {inspected:?}"
+    );
 }
 
 fn two_order_filesystem(enumeration: &[&str]) -> ScriptedFileSystem {

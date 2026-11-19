@@ -234,3 +234,79 @@ fn an_order_without_a_readme_is_proven_by_its_directory() {
     );
     assert!(!index_is_current(&root));
 }
+
+#[test]
+fn order_directories_swapped_by_hand_are_read_rather_than_the_index() {
+    let (_tree, root) = initialized_package("index-swapped-directories");
+    let lenses = created_order(
+        &root,
+        "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
+        Assignments::new().assign("title", "Lenses"),
+    );
+    let mounts = created_order(
+        &root,
+        "11111111-1111-4111-8111-111111111111",
+        Assignments::new().assign("title", "Mounts"),
+    );
+    assert!(index_is_current(&root));
+    // Renaming moves the folders, not the records inside them, so the records keep their
+    // status-change times.
+    let aside = root.join("Orders/aside");
+    std::fs::rename(&lenses, &aside).unwrap();
+    std::fs::rename(&mounts, &lenses).unwrap();
+    std::fs::rename(&aside, &mounts).unwrap();
+
+    let package = opened(&root, &PlatformFileSystem).result.unwrap();
+    for order in &package.contents.healthy_orders {
+        let held = order.paths.directory.absolute_path.as_path();
+        let expected = if held == lenses { "Mounts" } else { "Lenses" };
+        assert_eq!(&*order.document.title, expected);
+    }
+    assert!(!index_is_current(&root));
+}
+
+#[test]
+fn an_order_metadata_directory_replaced_by_a_link_is_read_rather_than_the_index() {
+    let (_tree, root) = initialized_package("index-linked-metadata");
+    let order = created_order(
+        &root,
+        "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
+        Assignments::new().assign("title", "Lenses"),
+    );
+    assert!(index_is_current(&root));
+    // Moving the metadata directory away keeps its record's status-change time, and the
+    // link leads to exactly the bytes the index was written from.
+    let elsewhere = root.join("aside");
+    std::fs::rename(order.join(".spielorders"), &elsewhere).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, order.join(".spielorders")).unwrap();
+
+    let package = opened(&root, &PlatformFileSystem).result.unwrap();
+    assert!(package.contents.healthy_orders.is_empty());
+    assert_eq!(package.contents.damaged_orders.len(), 1);
+    assert!(!index_is_current(&root));
+}
+
+#[test]
+fn a_rebuild_planned_before_a_record_changed_is_refused() {
+    let (_tree, root) = initialized_package("index-rebuild-after-change");
+    let order = created_order(
+        &root,
+        "8b6e3f0a-8ec5-4d47-95e1-412652a56d16",
+        Assignments::new().assign("title", "Lenses"),
+    );
+    let plan = crate::plan(&rebuild_index(&root), &effects(&PlatformFileSystem))
+        .result
+        .unwrap();
+    std::fs::write(order.join("README.md"), "Edited by hand\n").unwrap();
+
+    assert!(
+        crate::commit(plan, &effects(&PlatformFileSystem))
+            .result
+            .is_err()
+    );
+    let package = opened(&root, &PlatformFileSystem).result.unwrap();
+    assert_eq!(
+        package.contents.healthy_orders[0].readme_text.as_deref(),
+        Some("Edited by hand\n")
+    );
+}

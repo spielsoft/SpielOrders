@@ -21,8 +21,13 @@ struct RemovalOutcome: Sendable {
 }
 
 extension PackageSession {
-    func refreshAfterCommit(_ previous: LibraryHandle<SpielordersPackage>) -> [LibraryEntry] {
+    func refreshAfterCommit(_ previous: LibraryHandle<SpielordersPackage>,
+                            report: UnsafeMutablePointer<SpielordersReport>? = nil) -> [LibraryEntry] {
         package = nil
+        if let report, let left = spielorders_report_package(report) {
+            package = LibraryHandle(left, free: spielorders_package_free)
+            return []
+        }
         var refreshed: UnsafeMutablePointer<SpielordersPackage>?
         var outcome: UnsafeMutablePointer<SpielordersEntries>?
         let result = spielorders_package_open(spielorders_package_root(previous.pointer), 0, &refreshed, &outcome)
@@ -90,7 +95,7 @@ extension PackageSession {
             guard let report else { throw LibraryFailure(result: SPIELORDERS_RESULT_INTERNAL, entries: []) }
             let restored = URL(fileURLWithFileSystemRepresentation: spielorders_report_final_path(report),
                                isDirectory: true, relativeTo: nil)
-            warnings += refreshAfterCommit(package)
+            warnings += refreshAfterCommit(package, report: report)
             let requiresReopen = self.package == nil
             var messages = ["Order restored to \(restored.path)."]
             if requiresReopen { messages.append("Reload the Package before continuing.") }

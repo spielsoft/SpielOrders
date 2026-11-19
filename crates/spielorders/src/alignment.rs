@@ -9,12 +9,13 @@ use crate::{
     canonical::{CurrentPackageCandidate, HealthyOrder, Touched},
     creation::{normalize_filename_component, projected_order_basename},
     evidence::EvidenceFingerprint,
+    journal::planned_location,
     metadata::{OrderDocument, Vendor, VendorId},
     mutation::{CommitFailure, IndexRefresh, MutationReport, OperationKind, PlannedOperation},
     operations::FailedOperation,
     order_edits::resolve_order,
     ports::{FileSystem, FileSystemEntryKind, RenameOutcome},
-    readme::{Location, package_relative_path_text},
+    readme::Location,
 };
 use std::path::{Path, PathBuf};
 
@@ -56,7 +57,7 @@ pub(crate) fn plan_order_alignment<F: FileSystem>(
                 root: Some(root.clone()),
             })?
             .to_path_buf();
-        let destination = located(&root, parent.join(&basename));
+        let destination = planned_location(&root, parent.join(&basename));
         let index = package.context.index.clone();
 
         let operations = if source.absolute_path == destination.absolute_path {
@@ -300,7 +301,7 @@ pub(crate) fn commit_order_alignment<F: FileSystem + FileSystem>(
             Ok(RenameOutcome::Renamed) => {}
             Ok(RenameOutcome::DestinationExists) => {
                 return Err(Failure::DestinationCollision {
-                    root: located(&plan.root, plan.root.clone()),
+                    root: planned_location(&plan.root, plan.root.clone()),
                     location: plan.destination.clone(),
                     found: None,
                 });
@@ -343,18 +344,6 @@ fn order_at(package: &CurrentPackageCandidate, plan: &OrderAlignmentPlan) -> Opt
         .iter()
         .find(|candidate| candidate.document.order_id == plan.document.order_id)
         .cloned()
-}
-
-/// One planned path, as this Package locates it.
-///
-/// The Package-relative spelling holds by construction, as it does for a planned creation
-/// artifact: the source is a discovered Order Directory, whose own `Location` the load
-/// already carries, and the destination is that directory's parent joined with a
-/// projected basename `normalize_filename_component` has already stripped of separators.
-fn located(root: &Path, path: PathBuf) -> Location {
-    let relative = package_relative_path_text(root, &path)
-        .expect("a planned alignment path has a Package-relative spelling");
-    Location::within_package(path, relative).expect("a planned alignment path is normalized")
 }
 
 fn preconditions_changed(location: Location) -> Failure {

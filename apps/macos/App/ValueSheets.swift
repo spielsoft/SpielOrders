@@ -39,7 +39,7 @@ struct MergeSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             Text(title)
                 .font(.headline)
                 .accessibilityAddTraits(.isHeader)
@@ -104,7 +104,7 @@ struct VendorMergeSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             Text(title)
                 .font(.headline)
                 .accessibilityAddTraits(.isHeader)
@@ -192,7 +192,7 @@ struct ReplacementSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             Text(title)
                 .font(.headline)
                 .accessibilityAddTraits(.isHeader)
@@ -216,7 +216,7 @@ struct ReplacementSheet: View {
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier(identifier + ".choiceRequired")
             } else if let failure {
-                Text(failure.summary).foregroundStyle(.red)
+                Text(failure.summary).foregroundStyle(.problemText)
                     .accessibilityIdentifier(identifier + ".problem")
                 DisclosureGroup("Details") {
                     ScrollView { Text(failure.details).textSelection(.enabled) }

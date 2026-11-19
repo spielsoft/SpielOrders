@@ -1,18 +1,17 @@
 //! An opened Package, and the reads that start from one.
 
 use crate::interface::{
-    OptionalText, PathBytes, SPIELORDERS_FAMILY_INDEX_REASON, SPIELORDERS_FAMILY_INDEX_STATE,
-    SPIELORDERS_PACKAGE_STATE_DAMAGED, SPIELORDERS_PACKAGE_STATE_HEALTHY,
+    OptionalText, PathBytes, SPIELORDERS_PACKAGE_STATE_DAMAGED, SPIELORDERS_PACKAGE_STATE_HEALTHY,
     SPIELORDERS_RESULT_BAD_ARGUMENT, SPIELORDERS_RESULT_REFUSED, SPIELORDERS_VENDOR_SELECTOR_ID,
     SPIELORDERS_VENDOR_SELECTOR_NAME, SpielordersConstant, SpielordersEntries, SpielordersOrder,
     SpielordersReadme, SpielordersResult, SpielordersVendor, Text,
     call::{Session, deliver, fallible, quietly, settle},
+    codes,
     entries::{EMPTY, Entry, Subject},
-    library::member,
     records::{ReadmeScope, path_text},
 };
 use crate::{
-    Coded, Failure, OrderRef, Scope, VendorRef,
+    Failure, OrderRef, Scope, VendorRef,
     diagnosis::package_root_of,
     model::{DamagedPackageProjection, PackageIndexRecord},
     ports::FileSystem,
@@ -26,10 +25,12 @@ use std::{
 /// reads, drafts, and plans refuse as SPIELORDERS_FAILURE_DAMAGED_PACKAGE, and its
 /// diagnosis, validation, README read, and repair work.
 #[repr(C)]
+#[derive(Clone)]
 pub struct SpielordersPackage {
     data: Box<SpielordersPackageData>,
 }
 
+#[derive(Clone)]
 pub(crate) struct SpielordersPackageData {
     opened: Opened,
     root: PathBuf,
@@ -39,6 +40,7 @@ pub(crate) struct SpielordersPackageData {
     index: PackageIndexRecord,
 }
 
+#[derive(Clone)]
 enum Opened {
     Healthy(Box<crate::Package>),
     Damaged(Failure),
@@ -74,6 +76,34 @@ impl SpielordersPackage {
         &self.data.root
     }
 
+    /// Refuses, as SPIELORDERS_FAILURE_ORDER_NOT_FOUND, an Order Directory outside this
+    /// Package. A directory the filesystem cannot resolve is left for the call to report.
+    pub(crate) fn holds(
+        &self,
+        directory: &Path,
+        session: &Session,
+        entries: &mut Vec<Entry>,
+    ) -> Result<(), SpielordersResult> {
+        let Ok(resolved) = crate::ports::FileSystem::canonicalize(session, directory) else {
+            return Ok(());
+        };
+        if resolved != self.data.root && resolved.starts_with(&self.data.root) {
+            // A descendant can belong to a nested Package. Use the same owning-root
+            // lookup as diagnosis, including for a damaged Order with no usable locator.
+            // If it cannot resolve ownership, the actual read reports that failure.
+            match package_root_of(&resolved, session) {
+                Ok(root) if root != self.data.root => {}
+                _ => return Ok(()),
+            }
+        }
+        let failure = crate::Failure::OrderNotFound {
+            directory: crate::operations::FailedPath::of(&resolved),
+            root: Some(self.data.root.clone()),
+        };
+        Entry::failures(&failure, Subject::Order, entries);
+        Err(crate::interface::SPIELORDERS_RESULT_REFUSED)
+    }
+
     pub(crate) fn material_directory(&self) -> &std::ffi::CStr {
         &self.data.material_directory
     }
@@ -102,7 +132,7 @@ fn damaged_findings(package: &DamagedPackageProjection) -> Vec<Entry> {
         .collect()
 }
 
-fn open(
+pub(crate) fn open(
     root: &Path,
     session: &Session,
     entries: &mut Vec<Entry>,
@@ -167,6 +197,7 @@ pub extern "C" fn spielorders_package_open(
     package: &mut Option<Box<SpielordersPackage>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(package, None);
     fallible(outcome, |entries| {
         let session = Session::new(token);
         deliver(open(root.as_path(), &session, entries), package)
@@ -183,6 +214,7 @@ pub extern "C" fn spielorders_package_open_from_order(
     package: &mut Option<Box<SpielordersPackage>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(package, None);
     fallible(outcome, |entries| {
         let session = Session::new(token);
         let read = crate::read_order(
@@ -247,20 +279,23 @@ pub extern "C" fn spielorders_package_index_state(
     package: &SpielordersPackage,
 ) -> SpielordersConstant {
     quietly(SpielordersConstant::NONE, || {
-        member(
-            SPIELORDERS_FAMILY_INDEX_STATE,
-            package.data.index.state.code(),
-        )
-        .unwrap_or(SpielordersConstant::NONE)
+        codes::index_state(package.data.index.state)
     })
 }
 
-fn index_reasons(index: &PackageIndexRecord) -> Vec<&'static str> {
+fn index_reasons(index: &PackageIndexRecord) -> Vec<SpielordersConstant> {
     index
         .stale_reasons
         .iter()
-        .map(Coded::code)
-        .chain(index.malformed_reasons.iter().map(Coded::code))
+        .copied()
+        .map(codes::stale_reason)
+        .chain(
+            index
+                .malformed_reasons
+                .iter()
+                .copied()
+                .map(codes::malformed_reason),
+        )
         .collect()
 }
 
@@ -283,14 +318,14 @@ pub extern "C" fn spielorders_package_index_reason(
         usize::try_from(index)
             .ok()
             .and_then(|index| index_reasons(&package.data.index).get(index).copied())
-            .and_then(|reason| member(SPIELORDERS_FAMILY_INDEX_REASON, reason))
             .unwrap_or(SpielordersConstant::NONE)
     })
 }
 
-/// Reads the healthy Order at `order_directory`, with the findings local to it: from
-/// `package` as opened while nothing has written to the Package since, otherwise afresh.
-/// The read is the evidence a draft of it saves against.
+/// Reads afresh the healthy Order at `order_directory`, one Order Directory of `package`,
+/// with the findings local to it. A directory outside `package` refuses
+/// SPIELORDERS_FAILURE_ORDER_NOT_FOUND. The read is the evidence a draft of it saves
+/// against.
 #[unsafe(no_mangle)]
 pub extern "C" fn spielorders_package_read_order(
     package: &SpielordersPackage,
@@ -299,16 +334,23 @@ pub extern "C" fn spielorders_package_read_order(
     order: &mut Option<Box<SpielordersOrder>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(order, None);
     fallible(outcome, |entries| {
         let directory = OrderRef::Directory(order_directory.as_path().to_path_buf());
         let result = package.healthy(entries).and_then(|_| {
             let session = Session::new(token);
+            package.holds(order_directory.as_path(), &session, entries)?;
             let answer = crate::read_order(&directory, &session);
             settle(answer, &session, Subject::Order, entries)
         });
         if let Ok(read) = &result {
-            entries.extend(read.diagnostics.iter().map(Entry::finding));
-            entries.extend(read.readme.diagnostics.iter().map(Entry::finding));
+            // The README's own diagnostics are among the Order's wherever the load read it.
+            let readme = read
+                .readme
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| !read.diagnostics.contains(diagnostic));
+            entries.extend(read.diagnostics.iter().chain(readme).map(Entry::finding));
         }
         deliver(result.map(SpielordersOrder::of), order)
     })
@@ -325,6 +367,7 @@ pub extern "C" fn spielorders_package_read_vendor(
     vendor: &mut Option<Box<SpielordersVendor>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(vendor, None);
     fallible(outcome, |entries| {
         let Some(text) = text.to_str() else {
             return deliver(Err(SPIELORDERS_RESULT_BAD_ARGUMENT), vendor);
@@ -354,6 +397,7 @@ pub extern "C" fn spielorders_package_read_readme(
     readme: &mut Option<Box<SpielordersReadme>>,
     outcome: Option<&mut Option<Box<SpielordersEntries>>>,
 ) -> SpielordersResult {
+    crate::interface::call::put(readme, None);
     fallible(outcome, |entries| {
         let session = Session::new(token);
         let root = package.root().to_path_buf();
@@ -379,8 +423,8 @@ pub extern "C" fn spielorders_package_free(package: Option<Box<SpielordersPackag
     quietly((), || drop(package));
 }
 
-/// The query text, or BAD_ARGUMENT when it is not UTF-8.
-pub(crate) fn query(text: OptionalText<'_>) -> Result<String, SpielordersResult> {
+/// The text, or "" for NULL; BAD_ARGUMENT when it is not UTF-8.
+pub(crate) fn text_or_empty(text: OptionalText<'_>) -> Result<String, SpielordersResult> {
     match text.as_c_str() {
         None => Ok(String::new()),
         Some(text) => text

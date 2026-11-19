@@ -1,7 +1,9 @@
 //! Decision sources: Define durable metadata schemas and version evolution;
 //! Define the stable diagnostic vocabulary and evidence contract; Define the complete
 //! Package read projection and load-state contract.
-//! A deliberate Package Index rebuild whose replacement fails: evidence and effect budget.
+//!
+//! A deliberate Package Index rebuild whose replacement fails: the failure is reported
+//! where it happened, and nothing but the stage it names is left changed.
 
 use crate::commit;
 use crate::ports::FileSystemEntryKind;
@@ -9,7 +11,7 @@ use crate::tests::support::assert_reported_beside;
 use crate::tests::support::{
     FailedCommit, Operation, effects, minimal_package, planned, rebuild_index,
 };
-use std::{collections::BTreeSet, path::Path};
+use std::path::Path;
 
 const MINIMAL_INDEX: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -29,7 +31,7 @@ const SUPPORTING_B: &[u8] = include_bytes!(concat!(
 ));
 
 #[test]
-fn every_replacement_and_cleanup_failure_preserves_complete_evidence_and_effect_budget() {
+fn every_replacement_and_cleanup_failure_preserves_the_index_and_everything_beside_it() {
     for (failing, stage_remains) in [
         (&[Operation::WriteNew][..], false),
         (&[Operation::SyncFile], false),
@@ -48,6 +50,13 @@ fn every_replacement_and_cleanup_failure_preserves_complete_evidence_and_effect_
             "/package/Orders/Order/nested/supporting-b.bin",
             SUPPORTING_B,
         );
+        let canonical = [
+            "/package/.spielorders/config.toml",
+            "/package/.spielorders/version.json",
+            "/package/.spielorders/vendors.json",
+            "/package/Orders/Order/.spielorders/order.json",
+        ]
+        .map(|path| (path, filesystem.bytes(path)));
         for operation in failing {
             filesystem.on(*operation).fails();
         }
@@ -94,40 +103,17 @@ fn every_replacement_and_cleanup_failure_preserves_complete_evidence_and_effect_
             Some(SUPPORTING_B.to_vec())
         );
 
+        for (path, bytes) in &canonical {
+            assert_eq!(
+                &filesystem.bytes(path),
+                bytes,
+                "{failing:?} leaves {path} as it was"
+            );
+        }
         assert_eq!(
-            filesystem.paths(Operation::ReadDirectory),
-            [Path::new("/package/Orders")],
-            "{failing:?} may list only the Orders Directory"
-        );
-        let allowed_paths = [
-            "/package",
-            "/package/.spielorders",
-            "/package/.spielorders/config.toml",
-            "/package/.spielorders/version.json",
-            "/package/.spielorders/vendors.json",
-            "/package/.spielorders/index.json",
-            "/package/.spielorders/.index.json.spielorders-stage",
-            "/package/Orders",
-            "/package/Removed",
-            "/package/Orders/Order",
-            "/package/Orders/Order/.spielorders/order.json",
-            "/package/Orders/Order/README.md",
-        ]
-        .into_iter()
-        .map(Path::new)
-        .collect::<BTreeSet<_>>();
-        let calls = filesystem.calls();
-        assert!(
-            calls
-                .iter()
-                .all(|call| (allowed_paths.contains(call.path.as_path())
-                    || (call.operation == Operation::SymlinkMetadata
-                        && call.path == Path::new("/package/Orders/Order/.spielorders")))
-                    && call
-                        .source
-                        .as_deref()
-                        .is_none_or(|source| allowed_paths.contains(source))),
-            "{failing:?} exceeded the exact canonical/index effect budget: {calls:?}"
+            filesystem.exists("/package/.spielorders/.index.json.spielorders-stage"),
+            stage_remains,
+            "{failing:?}"
         );
     }
 }

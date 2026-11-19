@@ -9,8 +9,8 @@ use crate::Failure;
 use crate::tests::support::{
     FixedCalendar, PlatformFileSystem, TemporaryTree, adopted_order, adoption, align_order,
     create_order, create_vendor, created_vendor, current_readme, diagnosed_handle, diagnosed_order,
-    diagnosed_package, edit_order, effects, initialized_package, opened, order_at, order_record,
-    order_scope, package_scope, rebuild_index, remove_order, repair, set_vendor_hidden, snapshot,
+    diagnosed_package, edit_order, effects, initialized_package, opened, order_at, order_scope,
+    package_scope, rebuild_index, record_path, remove_order, repair, set_vendor_hidden, snapshot,
     valid, validated_package, vendor_named, write_readme,
 };
 use crate::{Assignments, VendorRef};
@@ -48,13 +48,13 @@ fn package_declaring(version: u64) -> Prepared {
     let order = adopted_order(&root, "2026_08_22_Laser_components", ORDER_ID);
     fs::write(order.join("README.md"), "# Laser components\n").unwrap();
     let unresolved = adopted_order(&root, "2026_08_23_Optics", UNRESOLVED_ORDER_ID);
-    let text = fs::read_to_string(order_record(&unresolved))
+    let text = fs::read_to_string(record_path(&unresolved))
         .unwrap()
         .replace(
             "\"items\": []",
             &format!("\"vendor_id\": \"{ABSENT_VENDOR}\",\n  \"items\": []"),
         );
-    fs::write(order_record(&unresolved), text).unwrap();
+    fs::write(record_path(&unresolved), text).unwrap();
     let handle = diagnosed_handle(&unresolved, DiagnosticCode::VendorReferenceUnresolved);
     let candidate = root.join("Orders/2026_08_24_Legacy");
     fs::create_dir(&candidate).unwrap();
@@ -113,11 +113,15 @@ fn names_the_version_among(findings: &[Diagnostic], version: u64) -> bool {
     })
 }
 
-fn refused<T>(result: Result<T, Failure>) -> &'static str {
+fn refused<T>(result: Result<T, Failure>) -> Failure {
     match result {
         Ok(_) => panic!("the capability refuses a Package at an unsupported version"),
-        Err(error) => error.code(),
+        Err(error) => error,
     }
+}
+
+fn unsupported(failure: &Failure) -> bool {
+    matches!(failure, Failure::PackageMetadataUnsupported(_))
 }
 
 /// Every load reports the Package as diagnostic-only and names the version it declares.
@@ -164,11 +168,8 @@ fn validation_and_repair_diagnose_another_version_and_repair_nothing() {
             "version {version}: no repair interprets an unsupported version: {:?}",
             diagnosis.cases
         );
-        assert_eq!(
-            refused(diagnosed_order(&prepared.order, &PlatformFileSystem).result),
-            "package_metadata_unsupported",
-            "version {version}"
-        );
+        let failure = refused(diagnosed_order(&prepared.order, &PlatformFileSystem).result);
+        assert!(unsupported(&failure), "version {version}: {failure:?}");
 
         for (label, code) in [
             (
@@ -202,28 +203,25 @@ fn validation_and_repair_diagnose_another_version_and_repair_nothing() {
                 ),
             ),
         ] {
-            assert_eq!(
-                code, "package_metadata_unsupported",
-                "version {version}: {label}"
-            );
+            assert!(unsupported(&code), "version {version}: {label}: {code:?}");
         }
         // The staged version-1 marker a current Package offered to promote would rewrite
         // the version this Package declares, so it is no longer offered.
-        assert_eq!(
-            refused(
-                crate::plan(
-                    &repair(
-                        package_scope(PathBuf::from(root)),
-                        String::from(&prepared.staged_marker_handle),
-                        RepairAction::PromoteStagingCandidate,
-                        Assignments::new()
-                    ),
-                    &effects(&PlatformFileSystem)
-                )
-                .result
-            ),
-            "unknown_case",
-            "version {version}"
+        let failure = refused(
+            crate::plan(
+                &repair(
+                    package_scope(PathBuf::from(root)),
+                    String::from(&prepared.staged_marker_handle),
+                    RepairAction::PromoteStagingCandidate,
+                    Assignments::new(),
+                ),
+                &effects(&PlatformFileSystem),
+            )
+            .result,
+        );
+        assert!(
+            matches!(failure, Failure::UnknownCase { .. }),
+            "version {version}: {failure:?}"
         );
 
         assert_eq!(
@@ -367,10 +365,7 @@ fn every_read_and_mutation_refuses_another_version() {
                 refused(crate::plan(&rebuild_index(PathBuf::from(root)), &effects(fs)).result),
             ),
         ] {
-            assert_eq!(
-                code, "package_metadata_unsupported",
-                "version {version}: {label}"
-            );
+            assert!(unsupported(&code), "version {version}: {label}: {code:?}");
         }
 
         assert_eq!(

@@ -18,15 +18,52 @@
         "path": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace/README.md"
       },
       {
+        "kind": "create_removed_orders_directory",
+        "path": "<PACKAGE_ROOT>/Removed"
+      },
+      {
         "kind": "move_order_directory",
-        "path": "<PACKAGE_ROOT>/Orders/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace"
+        "path": "<PACKAGE_ROOT>/Removed/2026_08_21_Nethermoor_Mirror_mounts_Ada_Lovelace"
       },
       {
         "kind": "refresh_package_index",
         "path": "<PACKAGE_ROOT>/.spielorders/index.json"
       }
     ],
-    "changes": [],
+    "changes": [
+      {
+        "kind": "row_added",
+        "field": null,
+        "position": 3,
+        "before": null,
+        "after": null,
+        "reuse": null
+      },
+      {
+        "kind": "fact",
+        "field": "description",
+        "position": 3,
+        "before": null,
+        "after": "Post holder",
+        "reuse": null
+      },
+      {
+        "kind": "fact",
+        "field": "quantity",
+        "position": 3,
+        "before": null,
+        "after": "6",
+        "reuse": null
+      },
+      {
+        "kind": "fact",
+        "field": "unit_price",
+        "position": 3,
+        "before": null,
+        "after": "12.25",
+        "reuse": null
+      }
+    ],
     "order": {
       "title": "Laser components",
       "date_ordered": "2026-08-22",
@@ -80,17 +117,6 @@
     "final_path": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace"
   },
   "diagnostics": [
-    {
-      "code": "index_refresh_failed",
-      "severity": "warning",
-      "message": "Index refresh failed",
-      "field": null,
-      "reason": null,
-      "position": null,
-      "path": ".spielorders/index.json",
-      "before": null,
-      "after": null
-    },
     {
       "code": "index_refresh_failed",
       "severity": "warning",

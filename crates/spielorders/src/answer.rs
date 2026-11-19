@@ -13,7 +13,7 @@ use crate::{
     metadata::OrderId,
     mutation::{CleanupFailure, CommitFailure, RejectedAssignment},
     operations::{FailedPath, OperationFailedProjection},
-    order_edits::OrderFactKind,
+    order_facts::OrderFactKind,
     paths::{ConfiguredPath, ConfiguredPathFailure},
     ports::FileSystemEntryKind,
     readme::{Diagnostic, Location, ReadmeUnavailableReason, RootedLocation},
@@ -79,8 +79,18 @@ pub enum Failure {
     PackageAccessDenied(Box<OperationFailedProjection>),
     /// A filesystem operation failed for any other reason.
     PackageOperationFailed(Box<OperationFailedProjection>),
+    /// An entry of the Removed Orders Directory could not be read, so a change to which
+    /// Vendors exist cannot tell whether that removed Order names one. The failure is the
+    /// denied or failed read, naming the entry, which must be fixed or moved out.
+    RemovedOrderUnreadable(Box<Failure>),
     /// The filesystem holding the Package cannot perform an operation a change needs.
     FilesystemUnsupported(Box<OperationFailedProjection>),
+    /// The filesystem cannot perform an operation a commit needed after it had begun, and
+    /// the commit could not prove the entries named its own to undo them.
+    FilesystemUnsupportedCleanupIncomplete {
+        failure: Box<OperationFailedProjection>,
+        cleanup_failures: Vec<CleanupFailure>,
+    },
 
     // A validation verdict: some finding carries error severity. The detail is the
     // diagnosis that found it.
@@ -174,6 +184,10 @@ pub enum Failure {
     /// A value is required and blank.
     BlankValue {
         field: String,
+    },
+    /// A merged Order would add Items priced in a currency other than the result's.
+    CurrencyDiffers {
+        location: crate::readme::Location,
     },
     /// An Order of the Package already carries the Order ID of the Order being restored.
     OrderIdentityInUse {
@@ -379,92 +393,6 @@ pub enum Failure {
     Unsupported(ProviderUnavailable),
 }
 
-impl Failure {
-    /// The stable code a caller branches on: one code per condition, whichever capability
-    /// met it.
-    pub(crate) fn code(&self) -> &'static str {
-        match self {
-            Self::RootIsALink { .. } => "root_is_a_link",
-            Self::UnmanagedPackage(..) => "unmanaged_package",
-            Self::PackageMetadataUnsupported(..) => "package_metadata_unsupported",
-            Self::DamagedPackage(..) => "damaged_package",
-            Self::PackageAccessDenied(..) => "package_access_denied",
-            Self::PackageOperationFailed(..) => "package_operation_failed",
-            Self::FilesystemUnsupported(..) => "filesystem_unsupported",
-            Self::PackageInvalid(..) => "package_invalid",
-            Self::OrderInvalid(..) => "order_invalid",
-            Self::Cancelled => "cancelled",
-            Self::NotAnOrderDirectory { .. } => "not_an_order_directory",
-            Self::OrderNotFound { .. } => "order_not_found",
-            Self::DamagedRecord { .. } => "damaged_record",
-            Self::LocatorUnusable { .. } => "locator_unusable",
-            Self::LocatorReachesNoPackageHoldingThisOrder { .. } => {
-                "locator_reaches_no_package_holding_this_order"
-            }
-            Self::DamagedOrder { .. } => "damaged_order",
-            Self::UnknownVendor { .. } => "unknown_vendor",
-            Self::PackageHasNoVendors { .. } => "package_has_no_vendors",
-            Self::UnknownVendorId { .. } => "unknown_vendor_id",
-            Self::UnresolvedVendor { .. } => "unresolved_vendor",
-            Self::VendorNameInUse { .. } => "vendor_name_in_use",
-            Self::VendorReferenced { .. } => "vendor_referenced",
-            Self::UnknownValue { .. } => "unknown_value",
-            Self::NotBatchable => "not_batchable",
-            Self::ValueInUse { .. } => "value_in_use",
-            Self::BlankValue { .. } => "blank_value",
-            Self::OrderIdentityInUse { .. } => "order_identity_in_use",
-            Self::MissingRequiredName { .. } => "missing_required_name",
-            Self::InvalidAggregate => "invalid_aggregate",
-            Self::InvalidAssignments(..) => "invalid_assignments",
-            Self::MissingRequiredFacts { .. } => "missing_required_facts",
-            Self::MissingRequiredItemFacts { .. } => "missing_required_item_facts",
-            Self::InvalidFactValue { .. } => "invalid_fact_value",
-            Self::InvalidFacts => "invalid_facts",
-            Self::UnconfirmedReusableValue { .. } => "unconfirmed_reusable_value",
-            Self::InvalidDraft(..) => "invalid_draft",
-            Self::EmptyProjectedComponent => "empty_projected_component",
-            Self::DestinationCollision { .. } => "destination_collision",
-            Self::StagingCollision { .. } => "staging_collision",
-            Self::NotDirectChild { .. } => "not_direct_child",
-            Self::HiddenCandidate { .. } => "hidden_candidate",
-            Self::IneligibleCandidate { .. } => "ineligible_candidate",
-            Self::NameUnusableCandidate { .. } => "name_unusable_candidate",
-            Self::AlreadyAnOrder { .. } => "already_an_order",
-            Self::ConflictingReservedState { .. } => "conflicting_reserved_state",
-            Self::RootNotOrdinaryDirectory => "root_not_ordinary_directory",
-            Self::AlreadyAPackage { .. } => "already_a_package",
-            Self::InvalidConfiguredPath { .. } => "invalid_configured_path",
-            Self::ManagedPathsOverlap { .. } => "managed_paths_overlap",
-            Self::PlannedPathCollision { .. } => "planned_path_collision",
-            Self::DisallowedLink { .. } => "disallowed_link",
-            Self::UnwritableDestination { .. } => "unwritable_destination",
-            Self::OrderReadmeTextUnavailable(..) => "order_readme_text_unavailable",
-            Self::PreconditionsChanged { .. } => "preconditions_changed",
-            Self::PlanEvidenceUnconfirmed { .. } => "plan_evidence_unconfirmed",
-            Self::InvalidGeneratedIdentity { .. } => "invalid_generated_identity",
-            Self::GeneratedIdentityCollision { .. } => "generated_identity_collision",
-            Self::GeneratedVendorIdentityCollision { .. } => "generated_vendor_identity_collision",
-            Self::CommitFailed { .. } => "commit_failed",
-            Self::CommitFailedCleanupIncomplete { .. } => "commit_failed_cleanup_incomplete",
-            Self::IndexReplacementFailed(..) => "index_replacement_failed",
-            Self::UnknownCase { .. } => "unknown_case",
-            Self::UnauthorizedAction { .. } => "unauthorized_action",
-            Self::UnrecognizedArtifact { .. } => "unrecognized_artifact",
-            Self::InvalidCandidate { .. } => "invalid_candidate",
-            Self::CandidateDamagesPackage { .. } => "candidate_damages_package",
-            Self::StagingEvidencePresent { .. } => "staging_evidence_present",
-            Self::EvidenceChanged { .. } => "evidence_changed",
-            Self::RepairResolutionMissing { .. } => "repair_resolution_missing",
-            Self::RepairResolutionUnexpected { .. } => "repair_resolution_unexpected",
-            Self::IndexingDisabled(..) => "indexing_disabled",
-            Self::VolumeNotIndexed(..) => "volume_not_indexed",
-            Self::AccessDenied(..) => "access_denied",
-            Self::QueryRefused(..) => "query_refused",
-            Self::Unsupported(..) => "unsupported",
-        }
-    }
-}
-
 /// One rule a whole draft broke, at the row of its Item or Contact list that broke it, or
 /// at the record's own facts where `row` is `None`. The failure names the field.
 #[derive(Clone, Debug, PartialEq)]
@@ -532,18 +460,4 @@ pub enum Warning {
     /// A merged Order's entries were merged but what remains of it could not be removed;
     /// the detail is the failed removal.
     OrderNotRemoved(Failure),
-}
-
-impl Warning {
-    /// The stable code a caller branches on.
-    pub(crate) fn code(&self) -> &'static str {
-        match self {
-            Self::IndexRefreshFailed(..) => "index_refresh_failed",
-            Self::RefreshUnavailable => "refresh_unavailable",
-            Self::RediagnosisUnavailable => "rediagnosis_unavailable",
-            Self::StagingCleanupFailed(..) => "staging_cleanup_failed",
-            Self::LocatorUpdateFailed(..) => "locator_update_failed",
-            Self::OrderNotRemoved(..) => "order_not_removed",
-        }
-    }
 }

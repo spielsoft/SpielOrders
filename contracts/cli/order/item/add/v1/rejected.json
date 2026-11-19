@@ -6,41 +6,25 @@
     "root": "<PACKAGE_ROOT>/Orders/2026_08_22_Tarnwick_Laser_components_Ada_Lovelace"
   },
   "data": null,
-  "diagnostics": [
-    {
-      "code": "invalid_assignments",
-      "severity": "error",
-      "message": "Invalid assignments: blank required value",
-      "field": "quantity",
-      "reason": "blank_required_value",
-      "position": 4,
-      "path": null,
-      "before": null,
-      "after": null
-    },
-    {
-      "code": "invalid_assignments",
-      "severity": "error",
-      "message": "Invalid assignments: blank required value",
-      "field": "unit_price",
-      "reason": "blank_required_value",
-      "position": 4,
-      "path": null,
-      "before": null,
-      "after": null
-    }
-  ],
+  "diagnostics": [],
   "error": {
     "code": "invalid_assignments",
-    "detail": {
-      "severity": "error",
-      "message": "Invalid assignments: blank required value",
-      "field": "description",
-      "reason": "blank_required_value",
-      "position": 4,
-      "path": null,
-      "before": null,
-      "after": null
-    }
+    "detail": [
+      {
+        "field": "description",
+        "reason": "blank_required_value",
+        "position": 4
+      },
+      {
+        "field": "quantity",
+        "reason": "blank_required_value",
+        "position": 4
+      },
+      {
+        "field": "unit_price",
+        "reason": "blank_required_value",
+        "position": 4
+      }
+    ]
   }
 }

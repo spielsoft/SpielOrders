@@ -5,6 +5,12 @@ public struct OrderRow: Sendable, Identifiable {
     public let id: String
     public let values: [Int32: String]
     public var directoryName: String { values[SPIELORDERS_ORDER_FIELD_DIRECTORY_NAME] ?? "" }
+    /// How an Order is named where its Title is the natural name: the Title, or the
+    /// directory name of an Order without one.
+    public var name: String {
+        let title = values[SPIELORDERS_ORDER_FIELD_TITLE] ?? ""
+        return title.isEmpty ? directoryName : title
+    }
     public let damage: String?
     let path: FileSystemPath
     public var directory: URL { path.url }
@@ -12,7 +18,7 @@ public struct OrderRow: Sendable, Identifiable {
 
 public struct OrderListing: Sendable {
     public let rows: [OrderRow]
-    public let notices: [String]
+    public let notices: [Problem]
 
     public func retainingSelection(_ selected: OrderRow?) -> OrderRow? {
         guard let selected else { return nil }
@@ -25,7 +31,8 @@ public struct OrderListing: Sendable {
 public struct OrderDetails: Sendable {
     public let readmeText: String
     public let readmeState: Int32
-    public let notices: [String]
+    /// The findings located in the Order.
+    public let notices: [Problem]
     /// Whether the directory name differs from the name the Order's facts project, so that
     /// Align Directory Name would rename it.
     public let drifted: Bool
@@ -33,7 +40,8 @@ public struct OrderDetails: Sendable {
 
 public enum OrderInspection: Sendable {
     case healthy(OrderDetails)
-    case damaged([String])
+    /// A damaged Order's diagnosis: what its read refused with, then what it found.
+    case damaged([Problem])
 }
 
 extension PackageSession {
@@ -41,9 +49,10 @@ extension PackageSession {
         package.map { spielorders_package_state($0.pointer) == SPIELORDERS_PACKAGE_STATE_DAMAGED } ?? false
     }
 
-    public var findings: [String] {
+    /// What opening the Package found, each located in its Order Directory or the Package.
+    public var findings: [Problem] {
         guard let package else { return [] }
-        return consumeEntries(spielorders_package_findings(package.pointer)).map(\.presentation)
+        return problems(consumeEntries(spielorders_package_findings(package.pointer)), in: package)
     }
 
     /// The facts an Order search can be confined to, in the order a menu offers them.
@@ -56,7 +65,7 @@ extension PackageSession {
                        cancellation: LibraryCancellation) throws -> OrderListing {
         guard let package else { throw SessionAccessError.reopenRequired }
         let flags = caseSensitive ? UInt32(SPIELORDERS_LIST_CASE_SENSITIVE) : 0
-        return try listOrders { list, outcome in
+        return try listOrders(in: package) { list, outcome in
             try withInterfaceText(query) {
                 spielorders_package_search_orders(package.pointer, $0, field ?? -1, flags, sortField,
                                                   descending ? 1 : 0, cancellation.token, list, outcome)
@@ -70,7 +79,7 @@ extension PackageSession {
                                descending: Bool, cancellation: LibraryCancellation) throws -> OrderListing {
         guard let package else { throw SessionAccessError.reopenRequired }
         let flags = caseSensitive ? UInt32(SPIELORDERS_LIST_CASE_SENSITIVE) : 0
-        return try listOrders { list, outcome in
+        return try listOrders(in: package) { list, outcome in
             try withInterfaceText(query) {
                 spielorders_package_search_contents(package.pointer, $0, flags, material?.search.pointer, sortField,
                                                     descending ? 1 : 0, cancellation.token, list, outcome)
@@ -78,11 +87,12 @@ extension PackageSession {
         }
     }
 
-    private func listOrders(_ search: (ListOut, EntriesOut) throws -> Int32) throws -> OrderListing {
+    private func listOrders(in package: LibraryHandle<SpielordersPackage>,
+                            _ search: (ListOut, EntriesOut) throws -> Int32) throws -> OrderListing {
         var list: UnsafeMutablePointer<SpielordersList>?
         var outcome: UnsafeMutablePointer<SpielordersEntries>?
         let result = try search(&list, &outcome)
-        let notices = try checked(result, outcome).map(\.presentation)
+        let notices = problems(try checked(result, outcome), in: package)
         defer { spielorders_list_free(list) }
         guard let list else { throw LibraryFailure(result: SPIELORDERS_RESULT_INTERNAL, entries: []) }
         return OrderListing(rows: orderRows(list), notices: notices)
@@ -96,17 +106,17 @@ extension PackageSession {
             let result = row.path.withUnsafeFileSystemRepresentation {
                 spielorders_package_diagnose_order(package.pointer, $0, cancellation.token, &diagnosis, &outcome)
             }
-            let notices = try checked(result, outcome).map(\.presentation)
+            let notices = try checked(result, outcome)
             defer { spielorders_diagnosis_free(diagnosis) }
             guard let diagnosis else { throw LibraryFailure(result: SPIELORDERS_RESULT_INTERNAL, entries: []) }
             guard spielorders_diagnosis_is_valid(diagnosis) == 0 else { throw SessionAccessError.selectionChanged }
-            let findings = consumeEntries(spielorders_diagnosis_findings(diagnosis)).map(\.presentation)
-            return .damaged(notices + findings)
+            let findings = consumeEntries(spielorders_diagnosis_findings(diagnosis))
+            return .damaged((notices + findings).map { Problem($0, order: row.directory) })
         }
         let (owner, entries) = try readOrder(row, token: cancellation.token)
         defer { withExtendedLifetime(owner) {} }
         let order = owner.pointer
-        let notices = entries.map(\.presentation)
+        let notices = entries.map { Problem($0, order: row.directory) }
         guard let readme = spielorders_order_readme(order) else {
             throw LibraryFailure(result: SPIELORDERS_RESULT_INTERNAL, entries: [])
         }

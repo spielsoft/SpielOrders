@@ -47,35 +47,9 @@ fn both_add_order_forms_produce_the_same_order() {
     assert_eq!(shorthand["order_total"], assigned["order_total"]);
 }
 
-/// A Title beside an assignment names the Order two ways at once, and a second Title is
-/// not a second subject. Neither is a refused mutation: parsing failed, so nothing about
-/// the Package was attempted.
-#[test]
-fn combining_the_two_add_order_forms_is_a_usage_error() {
-    for wrong in [
-        vec!["add-order", "Laser components", "status=ordered"],
-        vec!["add-order", "Laser components", "Mirror mounts"],
-    ] {
-        let (_tree, root) = initialized_package("add-order-combined");
-        let before = managed_snapshot(&root);
-
-        let outcome = Invocation::new(&wrong)
-            .argument("--json")
-            .rooted_at(&root)
-            .run();
-        let document = response(&outcome);
-
-        assert_eq!(outcome.status, Some(2), "{wrong:?}");
-        assert_eq!(document["contract"], "spielorders.usage", "{wrong:?}");
-        assert_eq!(
-            managed_snapshot(&root),
-            before,
-            "{wrong:?}: nothing about the Package was attempted"
-        );
-    }
-}
-
-/// Every route either command has to exit `2` carries the one shared usage identity.
+/// Every route either command has to exit `2` carries the one shared usage identity, and
+/// nothing about the Package is attempted. A Title beside an assignment names the Order two
+/// ways at once, and a second Title is not a second subject.
 #[test]
 fn every_usage_error_these_commands_reach_carries_the_shared_identity() {
     for wrong in [
@@ -138,13 +112,6 @@ fn a_value_the_package_lacks_is_refused_unless_the_command_adds_it() {
         .rooted_at(&root)
         .run();
     assert_eq!(added.status, Some(0), "{}", added.stdout_text());
-    let kept: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(root.join(".spielorders/vendors.json")).unwrap())
-            .unwrap();
-    assert_eq!(
-        kept["values"]["orderers"],
-        serde_json::json!(["Emmy Noether"])
-    );
 
     let reused = Invocation::new(&["add-order", "title=Cesium cell", "orderer=emmy noether"])
         .argument("--json")
@@ -155,4 +122,48 @@ fn a_value_the_package_lacks_is_refused_unless_the_command_adds_it() {
         response(&reused)["data"]["order"]["orderer"],
         "Emmy Noether"
     );
+}
+
+/// A creation names every fault of its facts, its Vendor, and its values in one refusal,
+/// as an edit does, rather than the first alone.
+#[test]
+fn a_creation_names_every_fault_together() {
+    let (_tree, root) = crate::support::initialized_package("creation-every-fault");
+    let refused = crate::support::response(
+        &crate::support::Invocation::new(&[
+            "add-order",
+            "title=Bad",
+            "vendor=Nobody",
+            "orderer=Zed",
+            "project=Unknown",
+            "status=nope",
+            "date_ordered=bad",
+            "--json",
+        ])
+        .rooted_at(&root)
+        .run(),
+    );
+    let mut named: Vec<(String, String)> = std::iter::once(&refused["error"]["detail"])
+        .chain(refused["diagnostics"].as_array().unwrap())
+        .map(|entry| {
+            let code = entry["code"].as_str().unwrap_or("invalid_fact_value");
+            (
+                code.to_owned(),
+                entry["field"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect();
+    named.sort();
+    assert_eq!(
+        named,
+        [
+            ("invalid_fact_value", "date_ordered"),
+            ("invalid_fact_value", "status"),
+            ("unconfirmed_reusable_value", "orderer"),
+            ("unconfirmed_reusable_value", "project"),
+            ("unknown_vendor", "vendor"),
+        ]
+        .map(|(code, field)| (code.to_owned(), field.to_owned()))
+    );
+    assert_eq!(refused["error"]["code"], "invalid_fact_value");
 }

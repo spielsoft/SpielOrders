@@ -14,7 +14,7 @@ import SpielOrdersKit
     private(set) var draft: ReadmeDraft
     /// Whether the library can write the README as it was last read or saved.
     private(set) var writable: Bool
-    /// Why the last save wrote nothing; its text stays, Not Saved.
+    /// Why the last save was refused; its text stays, Not Saved.
     private(set) var failure: Notice?
     /// What the last save warned about, though it wrote the text.
     private(set) var warning: Notice?

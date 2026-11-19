@@ -11,10 +11,7 @@
 
 use crate::Failure;
 use crate::Report;
-use crate::tests::support::assert_reported_beside;
-use crate::tests::support::{
-    Operation, ScriptedFileSystem, effects, minimal_package, opened, rebuild_index,
-};
+use crate::tests::support::{ScriptedFileSystem, effects, minimal_package, opened, rebuild_index};
 use crate::{
     canonical::PackageIndexMalformedReason, canonical::PackageIndexStaleReason,
     canonical::PackageIndexState, ports::FileSystemEntryKind, readme::DiagnosticCode,
@@ -112,7 +109,8 @@ fn a_stale_index_is_not_reported_as_damage_to_canonical_metadata() {
 }
 
 /// A deliberate rebuild replaces the derived index from the canonical records, writes
-/// nothing else, and rebuilds the same Package to identical bytes.
+/// nothing else, needs nothing from Supporting Material, and rebuilds the same Package to
+/// identical bytes.
 ///
 /// **Not fused to a load.** A caller can replace the index on purpose without
 /// performing a canonical mutation to get one.
@@ -122,7 +120,9 @@ fn a_deliberate_rebuild_replaces_the_index_from_canonical_records_deterministica
     add_order(&filesystem);
     let index = "/package/.spielorders/index.json";
     let stale_bytes = filesystem.bytes(index).expect("the stale index is stored");
-
+    let record = "/package/Orders/Order/.spielorders/order.json";
+    let canonical =
+        [record, "/package/.spielorders/vendors.json"].map(|path| filesystem.bytes(path));
     let plan = crate::plan(
         &rebuild_index(PathBuf::from(Path::new("/package"))),
         &effects(&filesystem),
@@ -146,14 +146,19 @@ fn a_deliberate_rebuild_replaces_the_index_from_canonical_records_deterministica
         rebuilt, stale_bytes,
         "the stale index is not the rebuilt one"
     );
-    // Nothing canonical was replaced, and the Supporting Material was not so much as
-    // observed.
+    assert_eq!(
+        [record, "/package/.spielorders/vendors.json"].map(|path| filesystem.bytes(path)),
+        canonical,
+        "a rebuild replaces only the derived index"
+    );
+    assert_eq!(
+        filesystem.bytes(SUPPORTING_MATERIAL).as_deref(),
+        Some(SUPPORTING_BYTES)
+    );
+    let inspected = filesystem.naming(|path| path.starts_with(SUPPORTING_DIRECTORY));
     assert!(
-        filesystem.calls().iter().all(|call| match call.operation {
-            Operation::ReplaceFile => call.path == Path::new(index),
-            _ => call.path != Path::new(SUPPORTING_MATERIAL),
-        }),
-        "a rebuild replaces only the derived index and reads no Supporting Material"
+        inspected.is_empty(),
+        "index work never inspects Supporting Material: {inspected:?}"
     );
 
     // The second run rebuilds the same Package to the same bytes, so the deterministic
@@ -169,30 +174,6 @@ fn a_deliberate_rebuild_replaces_the_index_from_canonical_records_deterministica
         Ok(Report::Committed { .. })
     ));
     assert_eq!(filesystem.bytes(index), Some(rebuilt));
-}
-
-/// A rebuild whose replacement fails leaves the stored index exactly as it was and
-/// reports the failure.
-#[test]
-fn a_rebuild_whose_replacement_fails_preserves_the_existing_index() {
-    let filesystem = fresh_index_filesystem();
-    add_order(&filesystem);
-    let index = "/package/.spielorders/index.json";
-    let stored = filesystem.bytes(index).expect("the stale index is stored");
-    let plan = crate::plan(
-        &rebuild_index(PathBuf::from(Path::new("/package"))),
-        &effects(&filesystem),
-    )
-    .result
-    .expect("the plan is made");
-    filesystem.on(Operation::ReplaceFile).fails();
-
-    let Err(rejection) = crate::commit(plan, &effects(&filesystem)).result else {
-        panic!("a failed replacement rejects the rebuild")
-    };
-
-    assert_reported_beside(&rejection);
-    assert_eq!(filesystem.bytes(index), Some(stored));
 }
 
 /// An Order README that exists and could not be read leaves the version-1 projection with
@@ -257,7 +238,7 @@ fn fresh_index_filesystem() -> ScriptedFileSystem {
 
 /// One healthy Order the stored index does not carry, with Supporting Material under it.
 ///
-/// The opaque file is what makes "neither index command inspects Supporting Material" a
+/// The opaque file is what makes "a rebuild needs nothing from Supporting Material" a
 /// claim about a real entry rather than about an empty directory.
 fn add_order(filesystem: &ScriptedFileSystem) {
     filesystem.put_entry("/package/Orders/Order", FileSystemEntryKind::Directory);
@@ -269,9 +250,11 @@ fn add_order(filesystem: &ScriptedFileSystem) {
         "/package/Orders/Order/.spielorders/order.json",
         MINIMAL_ORDER,
     );
-    filesystem.put_file(SUPPORTING_MATERIAL, b"Quote, 3 metres of fiber.\n");
+    filesystem.put_file(SUPPORTING_MATERIAL, SUPPORTING_BYTES);
     filesystem.put_change_evidence("/package/Orders/Order/.spielorders/order.json", 1, 10);
 }
 
 /// One opaque user file under an Order Directory.
+const SUPPORTING_DIRECTORY: &str = "/package/Orders/Order/Quotes";
 const SUPPORTING_MATERIAL: &str = "/package/Orders/Order/Quotes/quote.txt";
+const SUPPORTING_BYTES: &[u8] = b"Quote, 3 metres of fiber.\n";

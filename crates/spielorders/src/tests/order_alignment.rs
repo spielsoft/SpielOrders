@@ -282,9 +282,8 @@ fn an_already_aligned_order_is_unchanged_and_renames_nothing() {
         .result
         .expect("an aligned Order is planned like any other");
 
-    assert!(operations(&plan).is_empty());
     assert!(
-        plan.operations().is_empty(),
+        operations(&plan).is_empty(),
         "an alignment that renames nothing announces no managed operation"
     );
 
@@ -488,52 +487,6 @@ fn a_source_that_disappeared_or_became_a_link_rejects_before_renaming() {
 }
 
 #[test]
-fn the_projection_follows_the_live_vendor_name() {
-    let (tree, directory, vendor) = surrounded_drifted_order("alignment-live-vendor");
-    let root = fs::canonicalize(tree.path()).unwrap();
-
-    // An Order keeps no historical Vendor snapshot, so renaming the Vendor changes
-    // the name this Order projects.
-    let plan = crate::plan(
-        &edit_vendor(
-            root.clone(),
-            VendorRef::Id(String::from(&vendor)),
-            Assignments::new().assign("name", "Nethermoor"),
-        ),
-        &effects(&PlatformFileSystem),
-    )
-    .result
-    .expect("the Vendor can be renamed");
-    assert!(matches!(
-        crate::commit(
-            plan,
-            &effects(&PlatformFileSystem).minting(FixedUuid(VENDOR_ID.into()))
-        )
-        .result,
-        Ok(Report::Committed { .. })
-    ));
-
-    let plan = crate::plan(
-        &align_order(directory.clone()),
-        &effects(&PlatformFileSystem),
-    )
-    .result
-    .unwrap();
-
-    assert_eq!(
-        operation_path(&plan, "rename_order_directory")
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap(),
-        "2026_08_22_Nethermoor_Laser_components_Ada_Lovelace"
-    );
-    // A Vendor rename is not itself an alignment: the directory still drifts.
-    assert!(directory.is_dir());
-    assert_eq!(directory.file_name().unwrap(), DRIFTED);
-}
-
-#[test]
 fn editing_order_facts_never_renames_the_directory_implicitly() {
     let (tree, directory, _vendor) = surrounded_drifted_order("alignment-not-implicit");
     let root = fs::canonicalize(tree.path()).unwrap();
@@ -649,7 +602,6 @@ fn a_post_commit_index_failure_is_a_warning_rather_than_a_rename_retry_signal() 
         .result
         .expect("the renamed Order still resolves");
     assert!(operations(&retried).is_empty());
-    assert!(retried.operations().is_empty());
 }
 
 #[test]

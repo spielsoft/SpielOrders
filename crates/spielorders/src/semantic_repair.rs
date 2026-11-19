@@ -10,11 +10,12 @@
 use crate::{
     Failure,
     canonical::load_every_record,
-    filesystem::{FileReplacement, replace_validated_files},
+    change::PlannedAct,
+    integrity::{Aggregate, Records},
+    journal::{Expect, Journal, Subject},
     metadata::{OrderDocument, Vendor, VendorsDocument},
-    mutation::{OperationKind, PlannedOperation},
+    mutation::{CommitFailure, OperationKind},
     operations::FailedOperation,
-    package::vendor_aggregate_is_package_valid,
     ports::FileSystem,
     readme::{Location, located_in_package, rooted_at},
     vendors::{vendor_by_name, vendor_names_match},
@@ -43,7 +44,7 @@ pub struct SemanticRepairPlan {
     repaired_order: OrderDocument,
     created_vendor: Option<String>,
     generates_order_id: bool,
-    pub(crate) operations: Vec<PlannedOperation>,
+    pub(crate) journal: Journal,
 }
 
 impl SemanticRepairPlan {
@@ -93,10 +94,6 @@ pub(crate) fn plan<F: FileSystem>(
     let mut repaired = prior_order.clone();
     let mut created_vendor = None;
     let mut generates_order_id = false;
-    let mut operations = vec![PlannedOperation::new(
-        OperationKind::ReplaceOrderRecord,
-        located_in_package(&root, order_path.clone()),
-    )];
 
     match resolution {
         SemanticResolution::AssignExistingVendor(name) => {
@@ -131,10 +128,6 @@ pub(crate) fn plan<F: FileSystem>(
                 });
             }
             created_vendor = Some(trimmed.to_owned());
-            operations.push(PlannedOperation::new(
-                OperationKind::ReplaceVendorRecord,
-                located_in_package(&root, vendors_path.clone()),
-            ));
         }
         SemanticResolution::ClearVendorReference => {
             set_vendor(&mut repaired, None).map_err(unshapable)?;
@@ -158,10 +151,19 @@ pub(crate) fn plan<F: FileSystem>(
         }
     }
 
-    operations.push(PlannedOperation::new(
-        OperationKind::RefreshPackageIndex,
-        located_in_package(&root, root.join(".spielorders").join("index.json")),
-    ));
+    // The records as planned; the commit writes them as it finds and mints them.
+    let journal = semantic_journal(
+        &root,
+        &directory,
+        (&order_path, Vec::new(), Expect::Bytes(Vec::new())),
+        created_vendor.is_some().then(|| {
+            (
+                vendors_path.as_path(),
+                Vec::new(),
+                Expect::Bytes(Vec::new()),
+            )
+        }),
+    );
 
     Ok(SemanticRepairPlan {
         directory: located_in_package(&root, directory),
@@ -173,8 +175,42 @@ pub(crate) fn plan<F: FileSystem>(
         repaired_order: repaired,
         created_vendor,
         generates_order_id,
-        operations,
+        journal,
     })
+}
+
+/// The commit replacing the Order record, and the Vendor record where a repair creates a
+/// Vendor, together: a Vendor creation and the Order reassignment that needs it are
+/// written together or not at all.
+fn semantic_journal(
+    root: &Path,
+    directory: &Path,
+    (order_path, order, order_expect): (&Path, Vec<u8>, Expect),
+    vendors: Option<(&Path, Vec<u8>, Expect)>,
+) -> Journal {
+    let managed = PlannedAct::Managed;
+    let mut journal = Journal::new(root);
+    journal.replace(
+        order_path.to_path_buf(),
+        order,
+        order_expect,
+        managed(OperationKind::ReplaceOrderRecord),
+        Subject::Order(directory.to_path_buf()),
+    );
+    if let Some((path, bytes, expect)) = vendors {
+        journal.replace(
+            path.to_path_buf(),
+            bytes,
+            expect,
+            managed(OperationKind::ReplaceVendorRecord),
+            Subject::Vendors,
+        );
+    }
+    journal.refreshing(located_in_package(
+        root,
+        root.join(".spielorders").join("index.json"),
+    ));
+    journal
 }
 
 fn read_document<T: serde::de::DeserializeOwned, F: FileSystem>(
@@ -329,7 +365,7 @@ pub(crate) fn write<F: FileSystem>(
         // The caller's own aggregate is what goes on to be written, not a normalized
         // copy: a created Vendor carries a Name already trimmed while planning and no
         // other field, which is all Vendor normalization touches.
-        if !vendor_aggregate_is_package_valid(&vendors) {
+        if Aggregate::judge(&vendors).is_err() {
             return Err(Failure::GeneratedVendorIdentityCollision { vendor_id });
         }
         creates_vendor = true;
@@ -342,70 +378,41 @@ pub(crate) fn write<F: FileSystem>(
         return Err(evidence_changed(plan, &plan.vendors_path));
     };
 
-    // One prevalidated plan. A Vendor creation and the Order reassignment that needs
-    // it are written together or not at all, with every restoration failure retained.
-    // Each replacement carries the exact bytes this commit revalidated above, so a
-    // writer landing between that revalidation and the write is refused rather than
-    // overwritten.
-    let mut replacements = vec![FileReplacement::observed(
-        &plan.order_path,
-        &order_bytes,
-        &observed_order,
-    )];
-    if creates_vendor {
-        replacements.push(FileReplacement::observed(
-            &plan.vendors_path,
-            &vendor_bytes,
-            &observed_vendors,
+    // This guard can fire, and it is the only thing on this path that validates. A
+    // semantic repair reads its subject with `serde_json::from_slice` alone and rewrites
+    // only a Vendor Reference, the physical locator, or the Order identity — so a Damaged
+    // Order's defect is carried through untouched. Quarantine does not exclude it: an
+    // Order quarantined for an unreal `date_ordered` keeps its Order id, which is what
+    // admits it to duplicate detection and to the `AdoptNewOrderIdentity` repair. Pinned
+    // end to end by `a_damaged_order_with_an_unreal_date_is_refused_at_the_candidate_guard`.
+    //
+    // The locator carries its own outcome rather than failing the record, so a candidate
+    // that would leave one this build cannot follow is refused here: a repair writes a
+    // record valid under the version it declares, and the locator's own repair is what
+    // corrects that damage. The Vendors candidate needs no verdict of its own: these
+    // bytes are the aggregate `Aggregate::judge` accepted above.
+    if repaired.package_root.spelled().is_none() || repaired.validate().is_err() {
+        return Err(Failure::commit(
+            CommitFailure::new(located_in_package(&plan.root, plan.order_path.clone())),
+            Vec::new(),
         ));
     }
-    if let Err(error) =
-        replace_validated_files(&replacements, filesystem, |destination, candidate| {
-            if destination == plan.order_path {
-                // This one can fire, and it is the only thing on this path that
-                // validates. A semantic repair reads its subject with
-                // `serde_json::from_slice` alone and rewrites only a Vendor Reference,
-                // the physical locator, or the Order identity — so a Damaged Order's
-                // defect is carried through untouched. Quarantine does not exclude it:
-                // an Order quarantined for an unreal `date_ordered` keeps its Order id,
-                // which is what admits it to duplicate detection and to the
-                // `AdoptNewOrderIdentity` repair. Pinned end to end by
-                // `a_damaged_order_with_an_unreal_date_is_refused_at_the_candidate_guard`.
-                OrderDocument::from_json_bytes(candidate)
-                    .ok()
-                    // The locator carries its own outcome rather than failing the
-                    // record, so a candidate that would leave one this build cannot
-                    // follow is refused here: a repair writes a record valid under the
-                    // version it declares, and the locator's own repair is what
-                    // corrects that damage.
-                    .filter(|document| document.package_root.spelled().is_some())
-                    .and_then(|document| document.validate().ok())
-                    .map(|_| ())
-                    .ok_or(())
-            } else if destination == plan.vendors_path {
-                // The Vendors candidate gets its own verdict rather than surviving
-                // next to the arm above, and that verdict was already reached: these
-                // bytes are `vendors.to_json_bytes()` of the aggregate
-                // `vendor_aggregate_is_package_valid` accepted above, under the same
-                // Package semantics canonical validation applies. Parsing them again
-                // here would answer a smaller question than the one already answered,
-                // and could only fail on a serializer bug.
-                Ok(())
-            } else {
-                // A repair writes the two destinations named above and no others, so
-                // an unnamed one is not a candidate this commit assembled. It is
-                // refused rather than admitted by an arm that only meant "not the
-                // Order record".
-                Err(())
-            }
-        })
-    {
-        let destinations: Vec<&Path> = replacements
-            .iter()
-            .map(FileReplacement::destination)
-            .collect();
-        return Err(Failure::of_replacements(&plan.root, &destinations, error));
-    }
+
+    // Each replacement carries the exact bytes this commit revalidated above, so a writer
+    // landing between that revalidation and the write is refused rather than overwritten.
+    semantic_journal(
+        &plan.root,
+        &plan.directory.absolute_path,
+        (&plan.order_path, order_bytes, Expect::Bytes(observed_order)),
+        creates_vendor.then(|| {
+            (
+                plan.vendors_path.as_path(),
+                vendor_bytes,
+                Expect::Bytes(observed_vendors),
+            )
+        }),
+    )
+    .run(filesystem)?;
     Ok(())
 }
 
@@ -442,17 +449,7 @@ fn generated_identity_verdict<F: FileSystem>(
     // Every discovered Order counts, not only the healthy ones. Orders sharing an
     // identity are quarantined as damaged precisely because of that conflict, so
     // consulting the healthy set alone would declare the contested identity free.
-    let taken = package
-        .healthy_orders
-        .iter()
-        .any(|order| order.document.order_id.as_str() == order_id)
-        || package.damaged_orders.iter().any(|order| {
-            order
-                .order_id
-                .as_ref()
-                .is_some_and(|existing| existing.as_str() == order_id)
-        });
-    if taken {
+    if Records::of(&package).holder(order_id, None).is_some() {
         GeneratedIdentityVerdict::Taken
     } else {
         GeneratedIdentityVerdict::Free

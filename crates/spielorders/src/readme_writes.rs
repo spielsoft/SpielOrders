@@ -6,9 +6,10 @@
 
 use crate::{
     Answer, Failure,
-    canonical::{CurrentPackageCandidate, Touched, load_package},
-    filesystem::{DestinationExpectation, replace_validated_file_expecting},
-    mutation::{IndexRefresh, MutationReport, Never, OperationKind, PlannedOperation},
+    canonical::{CurrentPackageCandidate, load_package},
+    change::PlannedAct,
+    journal::{Expect, Journal, Subject},
+    mutation::{MutationReport, OperationKind},
     operations::FailedOperation,
     order_edits::resolve_order,
     ports::{FileSystem, FileSystemEntryKind},
@@ -17,14 +18,15 @@ use crate::{
 use std::path::{Path, PathBuf};
 
 /// One complete, validated write of one exact conventional README document.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ReadmeWritePlan {
     root: PathBuf,
     reference: ReadmeReference,
     text: String,
     prior_exists: bool,
     prior_bytes: Vec<u8>,
-    pub(crate) operations: Vec<PlannedOperation>,
+    index: crate::readme::Location,
+    pub(crate) journal: Journal,
 }
 
 impl ReadmeWritePlan {
@@ -140,29 +142,61 @@ fn readme_write_plan<F: FileSystem>(
         });
     }
 
-    let mut operations = Vec::new();
-    if !prior_exists || prior_bytes != text.as_bytes() {
-        operations.push(PlannedOperation::new(
-            OperationKind::ReplaceReadmeDocument,
-            reference.location.clone(),
-        ));
-        // Only the Order README is projected into the derived index.
-        if reference.kind == ReadmeKind::OrderReadme {
-            operations.push(PlannedOperation::new(
-                OperationKind::RefreshPackageIndex,
-                package.context.index.clone(),
-            ));
-        }
-    }
-
-    Ok(ReadmeWritePlan {
+    let mut plan = ReadmeWritePlan {
         root: package.context.root.absolute_path.clone(),
+        journal: Journal::new(&package.context.root.absolute_path),
         reference,
         text: text.to_owned(),
         prior_exists,
         prior_bytes,
-        operations,
-    })
+        index: package.context.index.clone(),
+    };
+    if plan.changes_document() {
+        let expect = plan.expectation(plan.prior_bytes.clone());
+        plan.journal = plan.readme_journal(expect);
+    }
+    Ok(plan)
+}
+
+impl ReadmeWritePlan {
+    /// What the write expects at the document: exactly `current` where one existed, and
+    /// nothing where none did. Observing nothing is one of the two observations: a
+    /// document observed absent carries no bytes to compare, but a README appearing at the
+    /// path afterwards is a changed destination like any other, and it is user-authored
+    /// text.
+    fn expectation(&self, current: Vec<u8>) -> Expect {
+        if self.prior_exists {
+            Expect::Bytes(current)
+        } else {
+            Expect::Absent
+        }
+    }
+
+    /// The commit writing the caller's exact bytes to the document, expected to hold
+    /// `expect`. A README is exact user bytes with no schema, so there is nothing to
+    /// validate; it is written as given. Only the Order README is projected into the
+    /// derived index, so only its write refreshes it, reading its Order again.
+    fn readme_journal(&self, expect: Expect) -> Journal {
+        let path = self.reference.location.absolute_path.clone();
+        let mut journal = Journal::new(&self.root);
+        let subject = match self.reference.kind {
+            ReadmeKind::OrderReadme => path.parent().map_or(Subject::Other, |directory| {
+                Subject::Order(directory.to_path_buf())
+            }),
+            ReadmeKind::PackageReadme => Subject::Other,
+        };
+        journal.replace(
+            path,
+            self.text.as_bytes().to_vec(),
+            expect,
+            PlannedAct::Managed(OperationKind::ReplaceReadmeDocument),
+            subject,
+        );
+        if self.reference.kind == ReadmeKind::OrderReadme {
+            journal.refreshing(self.index.clone());
+        }
+        journal
+    }
 }
 
 pub(crate) type ReadmeWriteReport = MutationReport<()>;
@@ -208,49 +242,18 @@ pub(crate) fn commit_readme_write<F: FileSystem>(
             return Ok(MutationReport::Unchanged { result: () });
         }
 
-        let candidate = plan.text.as_bytes().to_vec();
         // What the revalidation above observed is what this write is authorized against,
         // so a writer landing between that observation and the rename is refused rather
-        // than overwritten. Observing nothing is one of the two observations: a document
-        // observed absent carries no bytes to compare, but a README appearing at the path
-        // afterwards is a changed destination like any other, and it is user-authored text.
-        let expectation = if plan.prior_exists {
-            DestinationExpectation::Exactly(&current_bytes)
-        } else {
-            DestinationExpectation::Absent
-        };
-        if let Err(error) = replace_validated_file_expecting(
-            &path,
-            &candidate,
-            expectation,
-            filesystem,
-            // A README is exact user bytes with no schema, so there is nothing to
-            // validate. It is written as given.
-            |_| Ok::<(), Never>(()),
-        ) {
-            return Err(Failure::of_replacement(&plan.root, &path, error));
-        }
-
-        // Only the Order README is projected into the derived index, so a Package README
-        // write is complete without touching it.
+        // than overwritten.
+        let committed = plan
+            .readme_journal(plan.expectation(current_bytes))
+            .run(filesystem)?;
+        // A Package README is no part of the index, so its write is complete without it.
         if plan.reference.kind == ReadmeKind::PackageReadme {
-            return Ok(MutationReport::Committed { result: () });
+            return Ok(committed.report(()));
         }
-
-        // A Package README is no part of the index; an Order README is part of its Order's
-        // entry.
-        let touched = match plan.reference.kind {
-            ReadmeKind::OrderReadme => Touched::orders(
-                plan.reference
-                    .location
-                    .absolute_path
-                    .parent()
-                    .map(Path::to_path_buf),
-            ),
-            ReadmeKind::PackageReadme => Touched::default(),
-        };
-        let refresh = IndexRefresh::after_commit(&plan.root, &touched, filesystem);
-        Ok(refresh.report(()))
+        let refresh = committed.refresh(&plan.root, filesystem);
+        Ok(MutationReport::committed((), committed.warnings(refresh)))
     })
 }
 

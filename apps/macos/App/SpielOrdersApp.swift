@@ -55,6 +55,17 @@ private struct ApplicationCommands: Commands {
                 .keyboardShortcut("n", modifiers: .command)
                 .disabled(!model.canStartNew)
                 .accessibilityIdentifier("file.new")
+            Button(createTitle) {
+                NSApp.keyWindow?.makeFirstResponder(nil)
+                if model.vendorSheet != nil {
+                    model.saveVendorSheet()
+                } else {
+                    model.createRecord()
+                }
+            }
+            .keyboardShortcut(.return, modifiers: .command)
+            .disabled(!model.canCreateRecord)
+            .accessibilityIdentifier("file.create")
             Button("New Package…") { application.inWindow { $0.chooseInitialization() } }
                 .disabled(packageNavigationBlocked)
                 .accessibilityIdentifier("file.initializePackage")
@@ -95,25 +106,13 @@ private struct ApplicationCommands: Commands {
             .disabled(!application.model.canSave)
             .accessibilityIdentifier("file.save")
         }
-        CommandGroup(after: .undoRedo) {
-            Button(createTitle) {
-                NSApp.keyWindow?.makeFirstResponder(nil)
-                if application.model.vendorSheet != nil {
-                    application.model.saveVendorSheet()
-                } else {
-                    application.model.createRecord()
-                }
+        CommandGroup(replacing: .textEditing) {
+            Menu("Find") {
+                Button("Find…", action: application.findInDestination)
+                    .keyboardShortcut("f", modifiers: .command)
+                    .disabled(!model.canFind)
+                    .accessibilityIdentifier("edit.find")
             }
-            .keyboardShortcut(.return, modifiers: .command)
-            .disabled(!application.model.canCreateRecord)
-            .accessibilityIdentifier("edit.create")
-        }
-        CommandGroup(after: .pasteboard) {
-            Divider()
-            Button("Find", action: application.findInDestination)
-                .keyboardShortcut("f", modifiers: .command)
-                .disabled(!model.canFind)
-                .accessibilityIdentifier("edit.find")
         }
         CommandMenu("Package") {
             Button("Diagnose Package") { application.inWindow { $0.showDiagnosis(directory: nil) } }
@@ -123,7 +122,7 @@ private struct ApplicationCommands: Commands {
                 .disabled((application.model.busy && !application.model.committing) || application.model.root == nil)
                 .accessibilityIdentifier("package.reveal")
         }
-        OrderCommands(model: application.model)
+        RecordCommands(model: model, deleteKeyRemoves: application.deleteKeyRemoves)
         CommandGroup(replacing: .sidebar) {
             Button(application.model.sidebarVisible ? "Hide Sidebar" : "Show Sidebar") {
                 application.inWindow { $0.sidebarVisible.toggle() }
@@ -139,13 +138,6 @@ private struct ApplicationCommands: Commands {
                     .disabled((application.model.busy && !application.model.committing) || !application.model.canBrowseRecords)
                     .accessibilityIdentifier("view.\(destination.title)")
             }
-            Divider()
-            Toggle("Include Hidden Vendors", isOn: Binding(get: { application.model.includeHiddenVendors }, set: { value in
-                application.inWindow { $0.setIncludeHiddenVendors(value) }
-            }))
-            .disabled(application.model.busy || application.model.destination != .vendors
-                      || !application.model.canBrowseRecords)
-            .accessibilityIdentifier("view.includeHiddenVendors")
         }
     }
 }
@@ -162,6 +154,7 @@ private struct ApplicationCommands: Commands {
     @Published private(set) var canRedo = false
     @Published private(set) var undoTitle = "Undo"
     @Published private(set) var redoTitle = "Redo"
+    @Published private(set) var deleteKeyRemoves = false
     private var editingObservers: [NSObjectProtocol] = []
     private var editingUpdatePending = false
     // Choice: a path-free receipt makes real lifecycle races diagnosable.
@@ -169,6 +162,8 @@ private struct ApplicationCommands: Commands {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSWindow.allowsAutomaticWindowTabbing = false
+        // Restoring first lets the window open at its welcome size when nothing is remembered.
+        if !receivedDocument { model.restore() }
         showWindow()
         observeTitle()
         let changes: [Notification.Name] = [.NSUndoManagerCheckpoint, .NSUndoManagerDidUndoChange,
@@ -180,7 +175,6 @@ private struct ApplicationCommands: Commands {
             }
         }
         observeEditing()
-        if !receivedDocument { model.restore() }
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -215,6 +209,7 @@ private struct ApplicationCommands: Commands {
     }
 
     /// Room for the destinations, the default Orders columns, and the detail, within the screen.
+    /// The welcome view compacts the window while no Package is open.
     private static var initialSize: NSSize {
         let screen = NSScreen.main?.visibleFrame.size ?? NSSize(width: 1680, height: 900)
         return NSSize(width: min(1680, screen.width), height: min(900, screen.height))
@@ -225,7 +220,7 @@ private struct ApplicationCommands: Commands {
         action(model)
     }
 
-    /// Edit → Find: the cursor goes to the destination's search field, its text selected.
+    /// Find…: the cursor goes to the destination's search field, its text selected.
     func findInDestination() {
         showWindow()
         guard let window, let field = window.contentView?.searchField(RecordSearch.field) else { return }
@@ -241,27 +236,16 @@ private struct ApplicationCommands: Commands {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
-    /// The title names what the window shows and the subtitle names the Package, whose folder
-    /// the proxy icon and path menu represent.
+    /// The title is the open Package's name as Finder shows it, as a document window's is; the
+    /// proxy icon and path menu represent its folder.
     private func observeTitle() {
         withObservationTracking {
             window?.representedURL = model.root
-            window?.title = windowTitle
-            window?.subtitle = model.root?.packageName ?? ""
+            window?.title = model.root.map { FileManager.default.displayName(atPath: $0.path) } ?? "SpielOrders"
             window?.isDocumentEdited = model.dirty
         } onChange: { [weak self] in
             Task { @MainActor in self?.observeTitle() }
         }
-    }
-
-    private var windowTitle: String {
-        if model.root == nil {
-            return "SpielOrders"
-        }
-        if model.diagnosticWorkspace {
-            return "Diagnostics"
-        }
-        return model.destination.title
     }
 
     func applicationWillUpdate(_ notification: Notification) {
@@ -272,10 +256,17 @@ private struct ApplicationCommands: Commands {
         }
         let close = NSApp.keyWindow?.standardWindowButton(.closeButton)?.isEnabled == true
         if canClose != close { canClose = close }
+        let delete = deleteKeyReachesMenu
+        if deleteKeyRemoves != delete { deleteKeyRemoves = delete }
     }
 
-    private var undoManager: UndoManager? {
-        NSApp.keyWindow?.firstResponder?.undoManager ?? NSApp.keyWindow?.undoManager
+    /// Whether the Delete key reaches the record menu's Remove Order: the keyboard is in the
+    /// Orders list, or in text, which takes the key before the menu does. Anywhere else the key
+    /// is not the menu's: a control keeps it, such as the Items table removing its rows, and
+    /// with the keyboard nowhere, as after − or Create, it removes nothing.
+    private var deleteKeyReachesMenu: Bool {
+        guard let window, window.isKeyWindow, let responder = window.firstResponder else { return false }
+        return responder is OrdersTableView || responder is NSText
     }
 
     private func observeEditing() {
@@ -298,11 +289,12 @@ private struct ApplicationCommands: Commands {
     }
 
     private func refreshEditing() {
-        let manager = undoManager
-        let undo = historyAvailable && manager?.canUndo == true
-        let redo = historyAvailable && manager?.canRedo == true
-        let undoName = manager?.undoMenuItemTitle ?? "Undo"
-        let redoName = manager?.redoMenuItemTitle ?? "Redo"
+        let undoHistory = model.editHistory(in: NSApp.keyWindow, redo: false)
+        let redoHistory = model.editHistory(in: NSApp.keyWindow, redo: true)
+        let undo = available(undoHistory) && undoHistory?.canUndo == true
+        let redo = available(redoHistory) && redoHistory?.canRedo == true
+        let undoName = undoHistory?.undoMenuItemTitle ?? "Undo"
+        let redoName = redoHistory?.redoMenuItemTitle ?? "Redo"
         if canUndo != undo { canUndo = undo }
         if canRedo != redo { canRedo = redo }
         if undoTitle != undoName { undoTitle = undoName }
@@ -310,21 +302,19 @@ private struct ApplicationCommands: Commands {
     }
 
     func performUndo() {
-        guard historyAvailable else { return }
-        let native = { _ = NSApp.sendAction(Selector(("undo:")), to: nil, from: nil) }
-        if undoManager === model.undoManager { model.undo(native) } else { native() }
+        guard let window = NSApp.keyWindow, available(model.editHistory(in: window, redo: false)) else { return }
+        model.undo(in: window)
     }
 
     func performRedo() {
-        guard historyAvailable else { return }
-        let native = { _ = NSApp.sendAction(Selector(("redo:")), to: nil, from: nil) }
-        if undoManager === model.undoManager { model.redo(native) } else { native() }
+        guard let window = NSApp.keyWindow, available(model.editHistory(in: window, redo: true)) else { return }
+        model.redo(in: window)
     }
 
     /// Nothing is undone while work is under way. The window's history applies its actions
     /// through the library, so it also waits until the Package can be browsed.
-    private var historyAvailable: Bool {
-        !model.busy && (undoManager !== model.undoManager || model.canBrowseRecords)
+    private func available(_ history: UndoManager?) -> Bool {
+        !model.busy && (history !== model.undoManager || model.canBrowseRecords)
     }
 
     /// The Package window's Undo history is the model's, so it survives selection changes.

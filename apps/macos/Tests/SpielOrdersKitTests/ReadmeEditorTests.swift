@@ -101,36 +101,31 @@ import Testing
     #expect(native.string.utf8.elementsEqual(text.utf8))
 }
 
-@Test(arguments: ["Package README", "Order README"]) @MainActor
-func markdownInput(label: String) throws {
+@Test @MainActor func markdownHighlighting() throws {
     var text = ""
-    let host = NSHostingView(rootView: editor(Binding(get: { text }, set: { text = $0 }), label: label,
-                                              identifier: "markdown.editor"))
+    let host = NSHostingView(rootView: editor(Binding(get: { text }, set: { text = $0 })))
     let window = hostingWindow(host)
     defer { window.close() }
     let native = try #require(nativeTextView(in: host))
     window.makeFirstResponder(native)
-    let markdown = "# Heading\n**Bold** and `code` [link](https://example.invalid)\n"
+    let markdown = "# Héading\n\nPlain, ***both***, and `code`.\n\n```\n**fenced**\n```\n[link](https://example.invalid)\n"
     native.insertText(markdown, replacementRange: NSRange(location: 0, length: 0))
     #expect(text == markdown)
     #expect(native.string == markdown)
-}
-
-@Test @MainActor func documentText() throws {
-    var text = ""
-    let binding = Binding(get: { text }, set: { text = $0 })
-    let first = NSHostingView(rootView: editor(binding, label: "Order README", identifier: "order.readme.editor"))
-    let window = hostingWindow(first)
-    defer { window.close() }
-    let previous = try #require(nativeTextView(in: first))
-    window.makeFirstResponder(previous)
-    previous.insertText("Saved notes", replacementRange: NSRange(location: 0, length: 0))
-    #expect(text == "Saved notes")
-    text = ""
-    let next = NSHostingView(rootView: editor(binding, label: "Order README", identifier: "order.readme.editor"))
-    window.contentView = next
-    next.layoutSubtreeIfNeeded()
-    let current = try #require(nativeTextView(in: next))
-    window.makeFirstResponder(current)
-    #expect(current.string == "")
+    let storage = try #require(native.textStorage)
+    func traits(_ word: String) -> NSFontDescriptor.SymbolicTraits {
+        let font = storage.attribute(.font, at: (markdown as NSString).range(of: word).location,
+                                     effectiveRange: nil) as? NSFont
+        return font?.fontDescriptor.symbolicTraits ?? []
+    }
+    func color(_ word: String) -> NSColor? {
+        storage.attribute(.foregroundColor, at: (markdown as NSString).range(of: word).location,
+                          effectiveRange: nil) as? NSColor
+    }
+    #expect(traits("ading").contains(.bold))
+    #expect(!traits("Plain").contains(.bold))
+    #expect(traits("both").isSuperset(of: [.bold, .italic]))
+    #expect(color("fenced") == color("code"))
+    #expect(color("fenced") != color("Plain"))
+    #expect(!traits("fenced").contains(.bold))
 }

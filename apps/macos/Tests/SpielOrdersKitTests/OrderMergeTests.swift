@@ -80,7 +80,7 @@ private struct ThreeOrders {
     #expect(!committed.requiresReopen)
     let rows = try await listedOrders(orders.session)
     #expect(rows.map(\.id) == [orders.bench.id])
-    let kept = try #require(committed.keptDirectory)
+    let kept = try #require(rows.first).directory
     func text(_ path: String) throws -> String {
         try String(contentsOf: kept.appendingPathComponent(path), encoding: .utf8)
     }
@@ -105,4 +105,58 @@ private struct ThreeOrders {
     let rows = try await listedOrders(try await openedSession(orders.root))
     #expect(Set(rows.map(\.id)) == [orders.bench.id, orders.diode.id, orders.mounts.id])
     #expect(!FileManager.default.fileExists(atPath: orders.bench.directory.appendingPathComponent("quotes").path))
+}
+
+@Test func mergeRefusesAsChangedWhenAMergedOrderIsGoneOrDamaged() async throws {
+    let orders = try await ThreeOrders()
+    defer { try? FileManager.default.removeItem(at: orders.root) }
+    let removal = try await orders.session.planDirectoryChange(orders.diode, action: .remove,
+                                                               cancellation: LibraryCancellation())
+    _ = try await orders.session.commit(removal)
+    try write("{", to: ".spielorders/order.json", in: orders.mounts.directory)
+
+    for merged in [orders.diode, orders.mounts] {
+        let refusal = await #expect(throws: OrderMergeRefusal.self) {
+            try await orders.session.planMergingOrders([orders.bench, merged], cancellation: LibraryCancellation())
+        }
+        #expect(refusal?.summary
+            == "The Orders changed after the merge was shown. Nothing was merged; review the merge again.")
+    }
+}
+
+@Test(arguments: [true, false], [("date_ordered", "2026-02-30"), ("package_root", "not-a-locator"),
+                               ("package_root", "../../..")])
+func mergeRefusesAsChangedWhenAnOrderLosesItsMeaning(kept: Bool, fact: (String, String)) async throws {
+    let orders = try await ThreeOrders()
+    defer { try? FileManager.default.removeItem(at: orders.root) }
+    let changed = kept ? orders.bench : orders.diode
+    let record = changed.directory.appendingPathComponent(".spielorders/order.json")
+    var document = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: record)) as? [String: Any])
+    document[fact.0] = fact.1
+    try JSONSerialization.data(withJSONObject: document, options: .sortedKeys).write(to: record)
+
+    let refusal = await #expect(throws: OrderMergeRefusal.self) {
+        try await orders.session.planMergingOrders([orders.bench, orders.diode], cancellation: LibraryCancellation())
+    }
+
+    #expect(refusal?.summary
+        == "The Orders changed after the merge was shown. Nothing was merged; review the merge again.")
+}
+
+@Test func mergeRefusalNamesAnOrderPricedInAnotherCurrency() async throws {
+    let root = try initializedPackage()
+    defer { try? FileManager.default.removeItem(at: root) }
+    _ = try createOrder(in: root, title: "Bench", itemPrice: "10.00", currency: "EUR")
+    _ = try createOrder(in: root, title: "Diode", itemPrice: "12.00", currency: "USD")
+    let session = try await openedSession(root)
+    let rows = try await listedOrders(session)
+    let bench = try #require(rows.first { $0.name == "Bench" })
+    let diode = try #require(rows.first { $0.name == "Diode" })
+
+    let refusal = await #expect(throws: OrderMergeRefusal.self) {
+        try await session.planMergingOrders([bench, diode], cancellation: LibraryCancellation())
+    }
+
+    #expect(refusal?.summary == "“Diode” prices its Items in another currency, so it can’t be merged into “Bench”.")
+    #expect(refusal?.localizedDescription.contains("currency_differs") == true)
 }

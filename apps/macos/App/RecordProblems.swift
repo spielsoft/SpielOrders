@@ -6,7 +6,7 @@ struct RecordStateBadge: View {
     @Bindable var model: DesktopModel
     let editor: RecordEditor
     /// The library's notices about the record as it was read.
-    var notices: [String] = []
+    var notices: [Notice] = []
 
     var body: some View {
         if let failure = editor.failure {
@@ -17,18 +17,18 @@ struct RecordStateBadge: View {
                          actions: model.repairs(for: editor), identifier: "editor.reloadRequired")
         }
         if !editor.warnings.isEmpty {
-            let warnings = editor.warnings + Notice.list(notices)
+            let warnings = editor.warnings + notices
             ProblemBadge(level: .warning, title: "Saved with Warnings", lines: warnings.map(\.summary),
                          actions: [model.detailsAction(warnings, prefix: "editor.warnings")],
                          identifier: "editor.savedWarnings")
         } else if !notices.isEmpty {
-            ProblemBadge(level: .warning, title: "Notices", lines: notices,
+            ProblemBadge(level: .warning, title: "Notices", lines: notices.map(\.summary),
                          actions: [model.detailsAction(notices, prefix: "editor")], identifier: "editor.notices")
         }
     }
 
     private var reloadReason: String {
-        model.reloadReason?.summary ?? "Reload the Package before editing."
+        model.reloadReason?.summary ?? "Reload the Package to keep editing."
     }
 
     /// Every problem the refused save located, in plain words, with the row it is in; each
@@ -62,7 +62,7 @@ struct ReloadBadge: View {
     private var actions: [NoticeAction] {
         var actions: [NoticeAction] = []
         if reasons.contains(where: { !$0.details.isEmpty }) {
-            actions.append(NoticeAction("Details…", identifier: "\(identifier).details") { [model] in
+            actions.append(NoticeAction("Details", identifier: "\(identifier).details") { [model] in
                 model.showDetails(reasons)
             })
         }
@@ -86,7 +86,7 @@ struct ReloadRequired: View {
             Button("Reload Package", action: model.reloadPackage)
                 .accessibilityIdentifier("package.reload")
             if !reason.details.isEmpty {
-                Button("Details…") { model.showDetails([reason]) }
+                Button("Details") { model.showDetails([reason]) }
                     .accessibilityIdentifier("package.reload.details")
             }
         }
@@ -115,7 +115,7 @@ extension DesktopModel {
         var actions: [NoticeAction] = []
         let details = [notice, canBrowseRecords ? nil : reloadReason].compactMap { $0 }
         if details.contains(where: { !$0.details.isEmpty }) {
-            actions.append(NoticeAction("Details…", identifier: "\(prefix).details") { [self] in
+            actions.append(NoticeAction("Details", identifier: "\(prefix).details") { [self] in
                 showDetails(details)
             })
         }
@@ -125,13 +125,8 @@ extension DesktopModel {
         return actions
     }
 
-    /// Details of the library's own lines.
-    func detailsAction(_ lines: [String], prefix: String) -> NoticeAction {
-        detailsAction(Notice.list(lines), prefix: prefix)
-    }
-
     func detailsAction(_ notices: [Notice], prefix: String) -> NoticeAction {
-        NoticeAction("Details…", identifier: "\(prefix).details") { [self] in
+        NoticeAction("Details", identifier: "\(prefix).details") { [self] in
             showDetails(notices)
         }
     }

@@ -23,7 +23,7 @@ use crate::{
     ports::{FileSystem, FileSystemEntryKind},
     readme::{Diagnostic, ReadmeRead, read_document},
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// One Order's complete current read, together with the diagnostics local to it.
 ///
@@ -69,129 +69,158 @@ pub(crate) fn read_order<F: FileSystem>(
     filesystem: &F,
 ) -> Answer<OrderRead> {
     Answer::of(|| {
-        refuse_linked_root(order_directory, filesystem)?;
-        // The selected path's own kind first. Joining the record's name onto a file yields a
-        // path that cannot exist, and a filesystem asked about one answers that the operation
-        // failed, which would report a wrong-kind root as a Package this read could not read.
-        match filesystem.symlink_metadata(order_directory) {
-            Ok(Some(FileSystemEntryKind::Directory)) => {}
-            Ok(found) => {
-                return Err(Failure::NotAnOrderDirectory {
-                    directory: as_given(order_directory),
-                    found,
-                });
-            }
-            Err(error) => {
-                return Err(operation(order_directory, &error, filesystem));
-            }
+        let located = locate_order(order_directory, filesystem)?;
+        let package = located.package(load_package(&located.root, filesystem))?;
+        // The locator resolved to a Package this Order is not in, which is the stale or
+        // mismatched case: the Order Directory was moved by hand, or its Orders Directory
+        // was reconfigured to a different depth, and the stored locator now leads
+        // somewhere else.
+        found_at(&package, &located.directory, filesystem)
+            .unwrap_or_else(|| Err(located.not_held()))
+    })
+}
+
+/// Where an Order Directory's own locator leads: the directory itself, resolved, and the
+/// SpielOrders Root its locator names.
+pub(crate) struct LocatedOrder {
+    pub(crate) directory: PathBuf,
+    pub(crate) root: PathBuf,
+    locator: String,
+}
+
+impl LocatedOrder {
+    /// The Package the locator leads to, as `loaded` answered it. A locator that names
+    /// something which is not a SpielOrders Root at all does not reach this Order's
+    /// Package, which is the answer a caller can act on: nothing about the directory it
+    /// named is a Package problem.
+    pub(crate) fn package(
+        &self,
+        loaded: Result<CurrentPackageCandidate, Failure>,
+    ) -> Result<CurrentPackageCandidate, Failure> {
+        match loaded {
+            Err(Failure::UnmanagedPackage(_)) => Err(self.not_held()),
+            loaded => loaded,
         }
-        // A record reached through a linked metadata directory is not this Order's own;
-        // asking about the record alone would follow the link.
-        let metadata = order_directory.join(".spielorders");
-        if let Ok(Some(kind)) = filesystem.symlink_metadata(&metadata)
-            && kind != FileSystemEntryKind::Directory
-        {
+    }
+
+    /// The Package the locator leads to holds no Order at this directory.
+    pub(crate) fn not_held(&self) -> Failure {
+        Failure::LocatorReachesNoPackageHoldingThisOrder {
+            directory: FailedPath::of(&self.directory),
+            package_root: self.locator.clone(),
+        }
+    }
+}
+
+/// Resolves `order_directory` through its own record's locator, or answers why it cannot:
+/// the one classification every Order capability applies to the directory it is given.
+pub(crate) fn locate_order<F: FileSystem>(
+    order_directory: &Path,
+    filesystem: &F,
+) -> Result<LocatedOrder, Failure> {
+    refuse_linked_root(order_directory, filesystem)?;
+    // The selected path's own kind first. Joining the record's name onto a file yields a
+    // path that cannot exist, and a filesystem asked about one answers that the operation
+    // failed, which would report a wrong-kind root as a Package this read could not read.
+    match filesystem.symlink_metadata(order_directory) {
+        Ok(Some(FileSystemEntryKind::Directory)) => {}
+        Ok(found) => {
+            return Err(Failure::NotAnOrderDirectory {
+                directory: as_given(order_directory),
+                found,
+            });
+        }
+        Err(error) => {
+            return Err(operation(order_directory, &error, filesystem));
+        }
+    }
+    // A record reached through a linked metadata directory is not this Order's own;
+    // asking about the record alone would follow the link.
+    let metadata = order_directory.join(".spielorders");
+    if let Ok(Some(kind)) = filesystem.symlink_metadata(&metadata)
+        && kind != FileSystemEntryKind::Directory
+    {
+        return Err(Failure::DamagedRecord {
+            directory: as_given(order_directory),
+            field: None,
+        });
+    }
+    let record = metadata.join("order.json");
+    match filesystem.symlink_metadata(&record) {
+        Ok(Some(FileSystemEntryKind::File)) => {}
+        // Nothing stands where an Order Directory keeps its record, so this directory is
+        // not one. A directory or a link *does* stand there in the other arm, which is a
+        // record this read cannot use rather than an absent one.
+        Ok(None) => {
+            return Err(Failure::NotAnOrderDirectory {
+                directory: as_given(order_directory),
+                found: Some(FileSystemEntryKind::Directory),
+            });
+        }
+        Ok(Some(_)) => {
             return Err(Failure::DamagedRecord {
                 directory: as_given(order_directory),
                 field: None,
             });
         }
-        let record = metadata.join("order.json");
-        match filesystem.symlink_metadata(&record) {
-            Ok(Some(FileSystemEntryKind::File)) => {}
-            // Nothing stands where an Order Directory keeps its record, so this directory is
-            // not one. A directory or a link *does* stand there in the other arm, which is a
-            // record this read cannot use rather than an absent one.
-            Ok(None) => {
-                return Err(Failure::NotAnOrderDirectory {
-                    directory: as_given(order_directory),
-                    found: Some(FileSystemEntryKind::Directory),
-                });
-            }
-            Ok(Some(_)) => {
-                return Err(Failure::DamagedRecord {
-                    directory: as_given(order_directory),
-                    field: None,
-                });
-            }
-            Err(error) => {
-                return Err(operation(&record, &error, filesystem));
-            }
+        Err(error) => {
+            return Err(operation(&record, &error, filesystem));
         }
-        // A record the filesystem would not let this read is not evidence of a damaged one.
-        let bytes = match filesystem.read(&record) {
-            Ok(bytes) => bytes,
-            Err(error) if filesystem.is_access_denied(&error) => {
-                return Err(operation(&record, &error, filesystem));
-            }
-            Err(_) => {
-                return Err(Failure::DamagedRecord {
-                    directory: as_given(order_directory),
-                    field: None,
-                });
-            }
-        };
-        let document = match OrderDocument::from_json_bytes(&bytes) {
-            Ok(document) => document,
-            Err(_) => {
-                return Err(Failure::DamagedRecord {
-                    directory: as_given(order_directory),
-                    field: order_shape_field(&bytes),
-                });
-            }
-        };
-        // The locator is this read's only route to a Package, so a record carrying none this
-        // build can follow is a failure *about the locator* rather than one more damaged
-        // record. The record itself parses — the locator carries its own outcome — so this is
-        // the field's own verdict rather than a guess at which field failed the record.
-        let Some(locator) = document.package_root.spelled().map(PackageRoot::as_str) else {
-            return Err(Failure::LocatorUnusable {
+    }
+    // A record the filesystem would not let this read is not evidence of a damaged one.
+    let bytes = match filesystem.read(&record) {
+        Ok(bytes) => bytes,
+        Err(error) if filesystem.is_access_denied(&error) => {
+            return Err(operation(&record, &error, filesystem));
+        }
+        Err(_) => {
+            return Err(Failure::DamagedRecord {
                 directory: as_given(order_directory),
+                field: None,
             });
-        };
-        let locator = locator.to_owned();
-
-        let directory = filesystem
-            .canonicalize(order_directory)
-            .map_err(|error| operation(order_directory, &error, filesystem))?;
-        // The locator is a normalized relative path of parent-only segments, so the Root is
-        // this many ancestors up and nothing searches for it. `nth` yields `None` where the
-        // locator reaches past the filesystem root, which is a locator that leads nowhere.
-        let Some(root) = directory
-            .ancestors()
-            .nth(locator.split('/').count())
-            .map(Path::to_path_buf)
-        else {
-            return Err(Failure::LocatorReachesNoPackageHoldingThisOrder {
-                directory: FailedPath::of(&directory),
-                package_root: locator,
-            });
-        };
-
-        let package = match load_package(&root, filesystem) {
-            Ok(package) => package,
-            // A locator that names something which is not a SpielOrders Root at all is a
-            // locator that does not reach this Order's Package, which is the answer a caller
-            // can act on: nothing about the directory it named is a Package problem.
-            Err(Failure::UnmanagedPackage(_)) => {
-                return Err(Failure::LocatorReachesNoPackageHoldingThisOrder {
-                    directory: FailedPath::of(&directory),
-                    package_root: locator,
-                });
-            }
-            Err(unusable) => return Err(unusable),
-        };
-        match found_at(&package, &directory, filesystem) {
-            Some(found) => found,
-            // The locator resolved to a Package this Order is not in, which is the stale or
-            // mismatched case: the Order Directory was moved by hand, or its Orders Directory
-            // was reconfigured to a different depth, and the stored locator now leads
-            // somewhere else.
-            None => Err(Failure::LocatorReachesNoPackageHoldingThisOrder {
-                directory: FailedPath::of(&directory),
-                package_root: locator,
-            }),
         }
+    };
+    let document = match OrderDocument::from_json_bytes(&bytes) {
+        Ok(document) => document,
+        Err(_) => {
+            return Err(Failure::DamagedRecord {
+                directory: as_given(order_directory),
+                field: order_shape_field(&bytes),
+            });
+        }
+    };
+    // The locator is this read's only route to a Package, so a record carrying none this
+    // build can follow is a failure *about the locator* rather than one more damaged
+    // record. The record itself parses — the locator carries its own outcome — so this is
+    // the field's own verdict rather than a guess at which field failed the record.
+    let Some(locator) = document.package_root.spelled().map(PackageRoot::as_str) else {
+        return Err(Failure::LocatorUnusable {
+            directory: as_given(order_directory),
+        });
+    };
+    let locator = locator.to_owned();
+
+    let directory = filesystem
+        .canonicalize(order_directory)
+        .map_err(|error| operation(order_directory, &error, filesystem))?;
+    // The locator is a normalized relative path of parent-only segments, so the Root is
+    // this many ancestors up and nothing searches for it. `nth` yields `None` where the
+    // locator reaches past the filesystem root, which is a locator that leads nowhere.
+    let Some(root) = directory
+        .ancestors()
+        .nth(locator.split('/').count())
+        .map(Path::to_path_buf)
+    else {
+        return Err(Failure::LocatorReachesNoPackageHoldingThisOrder {
+            directory: FailedPath::of(&directory),
+            package_root: locator,
+        });
+    };
+
+    Ok(LocatedOrder {
+        directory,
+        root,
+        locator,
     })
 }
 

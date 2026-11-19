@@ -16,7 +16,6 @@
 //! spellings really are two directories and the configuration is legitimate, which
 //! one test measures and asserts directly.
 
-use crate::Coded;
 use crate::Failure;
 use crate::tests::support::{
     FailedCommit, PlatformFileSystem, ScriptedFileSystem, TemporaryTree, adopted_order, effects,
@@ -339,17 +338,5 @@ fn initialization_refuses_two_paths_that_would_name_one_directory_once_created()
             .count(),
         0,
         "a refused initialization leaves nothing behind"
-    );
-}
-
-#[test]
-fn the_configured_orders_directory_name_code_keeps_its_wire_spelling() {
-    // A deliberate interface lock. The closed diagnostic contract makes a code's
-    // spelling a compatibility promise to every adapter and test that reads one, so
-    // this spelling is public and renaming it is an incompatible change.
-    assert_eq!(
-        DiagnosticCode::ConfiguredOrdersDirectoryNameUnusable.code(),
-        "configured_orders_directory_name_unusable",
-        "the code's spelling is a stable contract, not an implementation detail"
     );
 }

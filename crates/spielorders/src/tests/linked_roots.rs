@@ -1,14 +1,14 @@
 //! Decision sources: Define the Rust CLI capability contract; Define integrity,
 //! validation, and repair boundaries.
 //!
-//! A root a caller names that is a link is refused, and nothing behind it is opened.
+//! A root a caller names that is a link is refused, and nothing behind it is used.
 
 use crate::Failure;
 use crate::repair_cases::RepairAction;
 use crate::tests::support::{
-    FixedCalendar, Operation, UNCANCELLED, adoption, align_order, create_order, create_vendor,
-    edit_order, edit_vendor, effects, failed_path, minimal_package, order_scope, package_scope,
-    rebuild_index, remove_order, repair, save_order, save_vendor, set_vendor_hidden, write_readme,
+    FixedCalendar, UNCANCELLED, adoption, align_order, create_order, create_vendor, edit_order,
+    edit_vendor, effects, failed_path, minimal_package, order_scope, package_scope, rebuild_index,
+    remove_order, repair, save_order, save_vendor, set_vendor_hidden, write_readme,
 };
 use crate::{Assignments, Change, OrderRef, Scope, VendorRef};
 use std::path::PathBuf;
@@ -22,9 +22,9 @@ use std::path::Path;
 /// before it opens anything behind it.
 ///
 /// The link leads to a healthy Package, so a capability that followed it would find one
-/// there and answer: refusing is the only way to fail, and observing the link itself is
-/// the only call a refusal may make. Every change also carries input the core would
-/// refuse on its own, so the link is refused before the change's input is judged.
+/// there and answer: refusing the root as a link is the only way to pass. Every change
+/// also carries input the core would refuse on its own, so the link is refused before the
+/// change's input is judged.
 #[test]
 fn every_capability_refuses_a_linked_root_before_opening_anything_behind_it() {
     let filesystem = minimal_package().with_link("/linked", "/package");
@@ -286,10 +286,5 @@ fn every_capability_refuses_a_linked_root_before_opening_anything_behind_it() {
             "{capability} refuses the linked root as one: {refusal:?}"
         );
     }
-    let behind = filesystem
-        .calls()
-        .into_iter()
-        .filter(|call| call.operation != Operation::SymlinkMetadata || call.path != linked)
-        .collect::<Vec<_>>();
-    assert_eq!(behind, [], "nothing but the link itself was observed");
+    assert_eq!(filesystem.effects(), [], "nothing is written");
 }

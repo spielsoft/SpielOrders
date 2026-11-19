@@ -40,13 +40,13 @@ extension DesktopModel {
                 } onCancel: { cancellation.request() }
                 // A cancellation during commit cannot undo its completed writes.
                 // Present the actual report without checking cancellation again.
-                await agentNotice("“\(selected.lastPathComponent)” is ready for agents.", "",
+                await agentNotice("“\(selected.lastPathComponent)” is ready for agents", "",
                                   diagnostic: notices.isEmpty ? nil : diagnosticText(notices))
             } catch {
                 if error is CancellationError {
                     await agentNotice("Agent guidance cancelled", "No guidance was written.")
                 } else {
-                    let explanation = "Guidance did not complete in “\(selected.lastPathComponent)”. "
+                    let explanation = "Guidance didn’t complete in “\(selected.lastPathComponent)”. "
                         + "AGENTS.md and your other files are untouched. Read Details for what was written."
                     await agentNotice("Agent guidance incomplete", explanation, diagnostic: error.localizedDescription)
                 }
