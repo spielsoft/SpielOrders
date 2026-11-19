@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "vendors": [
+    {
+      "vendor_id": "c84d0bd3-acd9-4ee3-a9c7-4f1410310e3f",
+      "name": "Vellune Demo Supply",
+      "email": "orders@vellune.example",
+      "website": "https://vellune.example",
+      "address": "14 Imaginary Lane\nFable Quarter\nDemo Territory",
+      "contacts": [
+        {
+          "name": "Sela Vennit",
+          "role": "Quotes and ordering",
+          "email": "desk@vellune.example"
+        },
+        {
+          "name": "Pavo Rellin",
+          "role": "Dispatch",
+          "email": "dispatch@vellune.example"
+        }
+      ],
+      "purchasing_notes": "Fictional demonstration Vendor. Petal modules and glowleaf supplies.\nAll quotes and delivery promises are invented."
+    },
+    {
+      "vendor_id": "9d2bc669-c823-466b-9e10-da3be7fd9f0a",
+      "name": "Nimblequill Demo Works",
+      "email": "orders@nimblequill.example",
+      "website": "https://nimblequill.example",
+      "address": "14 Imaginary Lane\nFable Quarter\nDemo Territory",
+      "contacts": [
+        {
+          "name": "Ovi Tallen",
+          "role": "Product questions",
+          "email": "desk@nimblequill.example"
+        }
+      ],
+      "purchasing_notes": "Fictional demonstration Vendor. Cloud-thread cartridges and loom accessories.\nAll quotes and delivery promises are invented."
+    },
+    {
+      "vendor_id": "a7c66229-8db9-4e1d-a386-4ccb54e3f285",
+      "name": "Pellora Demo Studio",
+      "email": "orders@pellora.example",
+      "website": "https://pellora.example",
+      "address": "14 Imaginary Lane\nFable Quarter\nDemo Territory",
+      "contacts": [
+        {
+          "name": "Neri Quist",
+          "role": "Order desk",
+          "email": "desk@pellora.example"
+        }
+      ],
+      "purchasing_notes": "Fictional demonstration Vendor. Prismseed capsules and display materials.\nAll quotes and delivery promises are invented."
+    },
+    {
+      "vendor_id": "16e9ec46-5003-4378-96e8-e3f45d987a5e",
+      "name": "Thistlemote Demo Depot",
+      "email": "orders@thistlemote.example",
+      "website": "https://thistlemote.example",
+      "address": "14 Imaginary Lane\nFable Quarter\nDemo Territory",
+      "contacts": [
+        {
+          "name": "Ilo Marnet",
+          "role": "Accounts",
+          "email": "desk@thistlemote.example"
+        }
+      ],
+      "purchasing_notes": "Fictional demonstration Vendor. Earlier prototype supplies; retained for completed Orders.\nAll quotes and delivery promises are invented.",
+      "hidden": true
+    }
+  ],
+  "values": {
+    "ordering_institutions": [
+      "Fablelight Demo Workshop"
+    ],
+    "orderers": [
+      "Ena Vossel",
+      "Rumi Pell",
+      "Tavi Noll"
+    ],
+    "projects": [
+      {
+        "name": "Cloud Loom",
+        "order_groups": [
+          "Prototype"
+        ]
+      },
+      {
+        "name": "Lantern Grove",
+        "order_groups": [
+          "Canopy",
+          "Prototype"
+        ]
+      },
+      {
+        "name": "Prism Meadow",
+        "order_groups": [
+          "Display",
+          "Pathway"
+        ]
+      }
+    ],
+    "order_groups": []
+  }
+}

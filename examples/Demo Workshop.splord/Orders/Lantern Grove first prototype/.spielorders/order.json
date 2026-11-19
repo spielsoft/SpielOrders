@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "package_root": "../..",
+  "order_id": "58c70537-41bb-48d5-b120-f70fc1a4e11b",
+  "title": "Lantern Grove first prototype",
+  "date_ordered": "2026-09-22",
+  "status": "complete",
+  "vendor_id": "16e9ec46-5003-4378-96e8-e3f45d987a5e",
+  "orderer": "Tavi Noll",
+  "ordering_institution": "Fablelight Demo Workshop",
+  "currency": "USD",
+  "project": "Lantern Grove",
+  "order_group": "Prototype",
+  "items": [
+    {
+      "description": "Dawnpetal mockup cluster",
+      "quantity": 2.0,
+      "unit_price": 64.0,
+      "catalog_number": "DEMO-DMC-02",
+      "notes": "Retained as a visual reference for the canopy."
+    }
+  ]
+}

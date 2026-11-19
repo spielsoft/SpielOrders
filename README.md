@@ -6,6 +6,7 @@ directly. The [implementation roadmap](issues/roadmaps/spielorders-implementatio
 defines the remaining work.
 
 The [domain glossary](CONTEXT.md) defines the product vocabulary.
+The [demo Package](examples/README.md) provides fictional content for trying the app.
 The [product decisions](issues/wayfinder/spielorders-product-architecture/MAP.md)
 constrain future work. [Effect and adapter boundaries](docs/architecture/boundaries.md)
 define ownership across Rust and the desktop.

@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "package_root": "../..",
+  "order_id": "2dff8578-701d-4d9c-bd46-777575a441a3",
+  "title": "Canopy shimmer sample pack",
+  "date_ordered": "2026-10-28",
+  "status": "hold",
+  "vendor_id": "c84d0bd3-acd9-4ee3-a9c7-4f1410310e3f",
+  "orderer": "Tavi Noll",
+  "ordering_institution": "Fablelight Demo Workshop",
+  "currency": "USD",
+  "project": "Lantern Grove",
+  "order_group": "Canopy",
+  "items": [
+    {
+      "description": "Shimmer pattern sample pack",
+      "quantity": 1.0,
+      "unit_price": 45.0,
+      "catalog_number": "DEMO-SPS-01",
+      "notes": "Compare ripple and dapple in the canopy mockup."
+    }
+  ]
+}

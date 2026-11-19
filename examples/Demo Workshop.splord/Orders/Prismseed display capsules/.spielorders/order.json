@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "package_root": "../..",
+  "order_id": "e70f56f1-3302-410c-bf48-6739d0b6a9ed",
+  "title": "Prismseed display capsules",
+  "date_ordered": "2026-11-05",
+  "status": "in_preparation",
+  "vendor_id": "a7c66229-8db9-4e1d-a386-4ccb54e3f285",
+  "orderer": "Rumi Pell",
+  "ordering_institution": "Fablelight Demo Workshop",
+  "currency": "EUR",
+  "project": "Prism Meadow",
+  "order_group": "Display",
+  "items": [
+    {
+      "description": "Prismseed display capsule",
+      "quantity": 8.0,
+      "unit_price": 19.8,
+      "catalog_number": "DEMO-PDC-08",
+      "notes": "Choose the rounded shell after the sample review."
+    },
+    {
+      "description": "Meadow glow cradle",
+      "quantity": 4.0,
+      "unit_price": 23.4,
+      "catalog_number": "DEMO-MGC-04"
+    }
+  ]
+}

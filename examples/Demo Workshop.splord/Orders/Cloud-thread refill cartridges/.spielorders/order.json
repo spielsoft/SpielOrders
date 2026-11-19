@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "package_root": "../..",
+  "order_id": "9081cbd9-e0ab-4a33-8801-e3a578cd4e91",
+  "title": "Cloud-thread refill cartridges",
+  "date_ordered": "2026-11-09",
+  "status": "received",
+  "vendor_id": "9d2bc669-c823-466b-9e10-da3be7fd9f0a",
+  "orderer": "Ena Vossel",
+  "ordering_institution": "Fablelight Demo Workshop",
+  "currency": "USD",
+  "project": "Cloud Loom",
+  "order_group": "Prototype",
+  "items": [
+    {
+      "description": "Cloud-thread cartridge",
+      "quantity": 6.0,
+      "unit_price": 27.75,
+      "catalog_number": "DEMO-CTC-06",
+      "notes": "Silver-blue demonstration thread."
+    },
+    {
+      "description": "Thread mist sleeve",
+      "quantity": 6.0,
+      "unit_price": 4.5,
+      "catalog_number": "DEMO-TMS-06"
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "package_root": "../..",
+  "order_id": "2d66a5ec-d946-4213-aba4-5616607b90a8",
+  "title": "Glowleaf canopy modules",
+  "date_ordered": "2026-11-12",
+  "status": "ordered",
+  "vendor_id": "c84d0bd3-acd9-4ee3-a9c7-4f1410310e3f",
+  "orderer": "Tavi Noll",
+  "ordering_institution": "Fablelight Demo Workshop",
+  "currency": "USD",
+  "project": "Lantern Grove",
+  "order_group": "Canopy",
+  "items": [
+    {
+      "description": "Glowleaf petal module",
+      "quantity": 12.0,
+      "unit_price": 38.5,
+      "catalog_number": "DEMO-GLP-12",
+      "notes": "Warm amber finish; match the demonstration swatch."
+    },
+    {
+      "description": "Petal joining ribbon",
+      "quantity": 3.0,
+      "unit_price": 14.25,
+      "catalog_number": "DEMO-PJR-03",
+      "notes": "One continuous ribbon per canopy section."
+    },
+    {
+      "description": "Demo delivery",
+      "quantity": 1.0,
+      "unit_price": 18.0,
+      "notes": "Invented delivery charge."
+    }
+  ]
+}

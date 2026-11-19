@@ -3,3 +3,4 @@
 .DS_Store
 /apps/macos/.build/
 /apps/macos/.swiftpm/
+/examples/*.splord/.spielorders/index.json

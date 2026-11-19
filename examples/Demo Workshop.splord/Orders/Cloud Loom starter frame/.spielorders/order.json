@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "package_root": "../..",
+  "order_id": "836fea76-6e7d-4e69-97cb-644fc8bb8273",
+  "title": "Cloud Loom starter frame",
+  "date_ordered": "2026-10-16",
+  "status": "complete",
+  "vendor_id": "9d2bc669-c823-466b-9e10-da3be7fd9f0a",
+  "orderer": "Ena Vossel",
+  "ordering_institution": "Fablelight Demo Workshop",
+  "currency": "USD",
+  "project": "Cloud Loom",
+  "order_group": "Prototype",
+  "items": [
+    {
+      "description": "Cloud Loom starter frame",
+      "quantity": 1.0,
+      "unit_price": 286.0,
+      "catalog_number": "DEMO-CLS-01",
+      "notes": "Matte lilac demonstration finish."
+    },
+    {
+      "description": "Whisper spool nest",
+      "quantity": 2.0,
+      "unit_price": 32.0,
+      "catalog_number": "DEMO-WSN-02"
+    },
+    {
+      "description": "Assembly credit",
+      "quantity": 1.0,
+      "unit_price": -16.0,
+      "notes": "Invented discount for the demo frame."
+    }
+  ]
+}
