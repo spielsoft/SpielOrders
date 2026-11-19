@@ -991,7 +991,9 @@ fn mutation_command(contract: ResponseContract, cell: MutationCell) -> Vec<&'sta
         (ResponseContract::VendorMerge, MutationCell::Rejected) => {
             vec!["vendor", "merge", "Tarnwick", "Nonesuch"]
         }
-        (ResponseContract::VendorMerge, _) => vec!["vendor", "merge", "Tarnwick", "Elderglass Optics"],
+        (ResponseContract::VendorMerge, _) => {
+            vec!["vendor", "merge", "Tarnwick", "Elderglass Optics"]
+        }
         // A Project the Package lacks, named as the home of a new group.
         (ResponseContract::ValueAdd, MutationCell::Rejected) => {
             vec![
@@ -1007,23 +1009,15 @@ fn mutation_command(contract: ResponseContract, cell: MutationCell) -> Vec<&'sta
         (ResponseContract::ValueRename, MutationCell::Rejected) => {
             vec!["value", "rename", "orderer", "Nobody", "Somebody"]
         }
-        (ResponseContract::ValueRename, _) => vec![
-            "value",
-            "rename",
-            "project",
-            "Telescope",
-            "Telescope array",
-        ],
+        (ResponseContract::ValueRename, _) => {
+            vec!["value", "rename", "project", "Telescope", "Telescope array"]
+        }
         (ResponseContract::ValueMerge, MutationCell::Rejected) => {
             vec!["value", "merge", "orderer", "Ada Lovelace", "Nobody"]
         }
-        (ResponseContract::ValueMerge, _) => vec![
-            "value",
-            "merge",
-            "project",
-            "TeleScope",
-            "Telescope",
-        ],
+        (ResponseContract::ValueMerge, _) => {
+            vec!["value", "merge", "project", "TeleScope", "Telescope"]
+        }
         // A value its Orders still use, named without a replacement: the refusal that
         // lists them.
         (ResponseContract::ValueDelete, MutationCell::Rejected) => {

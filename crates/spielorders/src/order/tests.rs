@@ -49,7 +49,10 @@ fn validation_normalizes_order_single_line_facts() {
     assert_eq!(normalized.ordering_institution, None);
     assert_eq!(normalized.project.as_deref(), Some("Telescope"));
     assert_eq!(normalized.items[0].description.as_str(), "Mirror mount");
-    assert_eq!(normalized.items[0].catalog_number.as_deref(), Some("TM-100"));
+    assert_eq!(
+        normalized.items[0].catalog_number.as_deref(),
+        Some("TM-100")
+    );
 }
 
 #[test]

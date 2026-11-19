@@ -198,10 +198,7 @@ fn healthy_order_projection_contains_complete_facts_totals_readme_vendor_and_reu
         package.contents.projections.orderers[0].value,
         "Ada Lovelace"
     );
-    assert_eq!(
-        package.contents.projections.projects[0].value,
-        "Telescope"
-    );
+    assert_eq!(package.contents.projections.projects[0].value, "Telescope");
     assert_eq!(
         package.contents.projections.order_groups[0].value,
         "Summer build"

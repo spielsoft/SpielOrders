@@ -1213,11 +1213,7 @@ fn vendors_are_created_edited_with_contacts_and_hidden_through_drafts() {
         SPIELORDERS_CONTACT_FIELD_NAME,
         "Grace Hopper",
     );
-    set(
-        &mut draft,
-        SPIELORDERS_VENDOR_FIELD_PHONE,
-        "+1 555 0123",
-    );
+    set(&mut draft, SPIELORDERS_VENDOR_FIELD_PHONE, "+1 555 0123");
     commit(&plan_draft(&draft).unwrap());
 
     let package = open(&root.0);
@@ -2412,7 +2408,7 @@ fn a_search_confined_to_one_fact_matches_only_in_that_fact() {
             .is_empty()
     );
     assert_eq!(
-        search_orders(&package, "thor", SPIELORDERS_ORDER_FIELD_VENDOR, 0).unwrap(),
+        search_orders(&package, "tarn", SPIELORDERS_ORDER_FIELD_VENDOR, 0).unwrap(),
         ["Laser components"],
         "the Vendor fact is the referenced Vendor's Name"
     );
@@ -2686,7 +2682,11 @@ fn an_order_group_belongs_to_the_project_of_the_orders_that_use_it() {
     // Moving an Order to a Project without its group clears the group; a Project that
     // already has a group of that name keeps it.
     let mut moved = order_draft(&read_order(&package, &rebuild));
-    set(&mut moved, SPIELORDERS_ORDER_FIELD_PROJECT, "Weather station");
+    set(
+        &mut moved,
+        SPIELORDERS_ORDER_FIELD_PROJECT,
+        "Weather station",
+    );
     commit(&plan_draft(&moved).unwrap());
     let package = open(&root.0);
     let order = read_order(&package, &rebuild);
@@ -2724,7 +2724,11 @@ fn an_order_group_belongs_to_the_project_of_the_orders_that_use_it() {
     // A group named in the edit is judged in the new Project, and a new one there needs
     // confirming as any new value does.
     let mut named = order_draft(&read_order(&package, &shared));
-    set(&mut named, SPIELORDERS_ORDER_FIELD_PROJECT, "Weather station");
+    set(
+        &mut named,
+        SPIELORDERS_ORDER_FIELD_PROJECT,
+        "Weather station",
+    );
     set(&mut named, SPIELORDERS_ORDER_FIELD_ORDER_GROUP, "Optics");
     let Err(refused) = plan_draft(&named) else {
         panic!("a new group in the new Project needs confirming");

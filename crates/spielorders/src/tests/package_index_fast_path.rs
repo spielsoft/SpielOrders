@@ -101,10 +101,7 @@ fn a_current_index_projects_every_fact_of_the_package() {
         package.contents.projections.ordering_institutions[0].value,
         "Example Institute"
     );
-    assert_eq!(
-        package.contents.projections.projects[0].value,
-        "Telescope"
-    );
+    assert_eq!(package.contents.projections.projects[0].value, "Telescope");
     assert_eq!(
         package.contents.projections.order_groups[0].value,
         "Summer build"

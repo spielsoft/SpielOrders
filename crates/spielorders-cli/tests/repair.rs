@@ -390,7 +390,10 @@ fn every_allowed_repair_is_applied_and_leaves_its_scope_valid() {
     // The three explicit corrections of an Unresolved Vendor Reference.
     for (action, resolution) in [
         ("assign_existing_vendor", vec!["vendor=Tarnwick".to_owned()]),
-        ("create_and_assign_vendor", vec!["name=Copperwick".to_owned()]),
+        (
+            "create_and_assign_vendor",
+            vec!["name=Copperwick".to_owned()],
+        ),
         ("clear_vendor_reference", Vec::new()),
     ] {
         let (_tree, _root, unresolved) =
