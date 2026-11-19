@@ -34,6 +34,7 @@ fi
 
 cargo fmt --check
 
+mkdir -p target/lint
 CARGO_TARGET_DIR=target/lint cargo clippy --workspace --all-targets --all-features --locked -- -D warnings &
 clippy=$!
 trap 'kill "$clippy" 2>/dev/null || true' EXIT INT TERM
