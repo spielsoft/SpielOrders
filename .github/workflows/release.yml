@@ -91,6 +91,10 @@ jobs:
             test "$("$scratch/prefix/bin/spielorders" --version)" = "spielorders ${RELEASE_TAG#v}"
           fi
           diff -r crates/spielorders/agent-guidance "$scratch/prefix/share/spielorders/agent-guidance"
+          mkdir "$scratch/package"
+          "$scratch/prefix/bin/spielorders" init --root "$scratch/package"
+          "$scratch/prefix/bin/spielorders" add-order "Demo canopy" --root "$scratch/package"
+          "$scratch/prefix/bin/spielorders" validate --root "$scratch/package"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: spielorders-${{ matrix.platform }}

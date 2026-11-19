@@ -2,7 +2,7 @@
 # Install the SpielOrders command-line tool and its agent guidance.
 #
 #   curl -fsSL https://github.com/spielsoft/SpielOrders/releases/latest/download/install.sh | sh
-#   curl -fsSL https://github.com/spielsoft/SpielOrders/releases/latest/download/install.sh | sh -s -- --version v0.1.0
+#   curl -fsSL https://github.com/spielsoft/SpielOrders/releases/latest/download/install.sh | sh -s -- --prefix /path/to/cli
 #   sh install.sh --archive spielorders-macos-arm64.tar.gz
 #
 # Options:

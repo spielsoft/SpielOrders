@@ -1082,7 +1082,7 @@ checksum = "149309498a5f7334b12ddae0cad8aba81ce785fe91755068867e017cf98fee46"
 
 [[package]]
 name = "spielorders"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "focaccia",
  "icu_casemap",
@@ -1099,7 +1099,7 @@ dependencies = [
 
 [[package]]
 name = "spielorders-checks"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cbindgen",
  "jsonschema",
@@ -1109,7 +1109,7 @@ dependencies = [
 
 [[package]]
 name = "spielorders-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap",
  "jiff",

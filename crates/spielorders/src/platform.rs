@@ -310,7 +310,7 @@ fn rename_exclusive(source: &Path, destination: &Path) -> io::Result<()> {
     // `renamex_np` reads them without retaining either pointer.
     let code =
         unsafe { libc::renamex_np(source.as_ptr(), destination.as_ptr(), libc::RENAME_EXCL) };
-    exclusive_rename_result(code)
+    exclusive_rename_result(code.into())
 }
 
 /// `AT_FDCWD` is correct for both paths because this adapter is only ever given
@@ -322,10 +322,13 @@ fn rename_exclusive(source: &Path, destination: &Path) -> io::Result<()> {
 #[cfg(target_os = "linux")]
 fn rename_exclusive(source: &Path, destination: &Path) -> io::Result<()> {
     let (source, destination) = (nul_terminated(source)?, nul_terminated(destination)?);
-    // SAFETY: both arguments are nul-terminated C strings that outlive the call, and
-    // `renameat2` reads them without retaining either pointer.
+    // musl has no renameat2 wrapper. Invoke the same kernel operation through syscall
+    // so both Linux C libraries retain the no-replace guarantee.
+    // SAFETY: SYS_renameat2 takes these directory descriptors, NUL-terminated paths,
+    // and flags. Both strings outlive the call; neither pointer is retained.
     let code = unsafe {
-        libc::renameat2(
+        libc::syscall(
+            libc::SYS_renameat2,
             libc::AT_FDCWD,
             source.as_ptr(),
             libc::AT_FDCWD,
@@ -376,7 +379,7 @@ const RENAME_UNSUPPORTED_MESSAGE: &str = "this filesystem has no exclusive renam
      invalid — this kernel reports both the same way";
 
 #[cfg(any(target_vendor = "apple", target_os = "linux"))]
-fn exclusive_rename_result(code: std::ffi::c_int) -> io::Result<()> {
+fn exclusive_rename_result(code: libc::c_long) -> io::Result<()> {
     if code == 0 {
         return Ok(());
     }
