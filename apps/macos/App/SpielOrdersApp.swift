@@ -350,6 +350,10 @@ private struct ApplicationCommands: Commands {
         return false
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        model.willQuit()
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let activeWork = model.busy ? 1 : 0
         lifecycle.notice("termination-request active-work=\(activeWork, privacy: .public)")
