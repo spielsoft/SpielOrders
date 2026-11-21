@@ -134,8 +134,20 @@ import SpielOrdersKit
         do { open(try AuthorizedFolder.restore(bookmark), preserveSelection: false) }
         catch {
             starting = false
-            alert("SpielOrders Can No Longer Access This Package", "Open it again with File → Open Package…",
-                  details: error.localizedDescription, identifier: "package.access")
+            let values = URL.resourceValues(forKeys: [.pathKey, .nameKey], fromBookmarkData: bookmark)
+            let name = (values?.path ?? values?.name).map { URL(fileURLWithPath: $0).packageName }
+            let target = name.map { "“\($0)”" } ?? "The Package"
+            let failure = error as NSError
+            if failure.domain == NSCocoaErrorDomain,
+               [NSFileNoSuchFileError, NSFileReadNoSuchFileError].contains(failure.code) {
+                alert("\(target) couldn’t be found",
+                      "The Package folder could not be found. If it was moved or is on a disconnected drive, "
+                        + "make it available and choose File → Open Package…",
+                      identifier: "package.access")
+            } else {
+                alert("\(target) couldn’t be reopened", "Open it again with File → Open Package…",
+                      details: error.localizedDescription, identifier: "package.access")
+            }
         }
     }
 
@@ -877,6 +889,11 @@ import SpielOrdersKit
         await settle()
         dialogs.isTerminating = false
         return await resolveDrafts()
+    }
+
+    /// Remember the welcome view only once Quit is approved, including after a failed restore.
+    func willQuit() {
+        if root == nil { preferences.removeObject(forKey: "packageBookmark") }
     }
 
     /// Release the settled active session and its active restoration bookmark.
